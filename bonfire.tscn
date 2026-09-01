@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://cbfr0bx00001a"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_bf"]
+size = Vector3(0.8, 1.2, 0.8)
+
+[sub_resource type="BoxMesh" id="BoxMesh_bf"]
+size = Vector3(0.8, 1.2, 0.8)
+
+[node name="Bonfire" type="Node3D"]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_bf")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_bf")

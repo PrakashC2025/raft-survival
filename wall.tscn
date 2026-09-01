@@ -1,0 +1,62 @@
+[gd_scene format=3 uid="uid://7x6omwu14ngn"]
+
+[ext_resource type="Script" uid="uid://b73vh4kl4v0mu" path="res://build_socket.gd" id="1_buildsocket"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
+size = Vector3(2, 2.5, 0.2)
+
+[sub_resource type="StandardMaterial3D" id="mat_wall"]
+albedo_color = Color(0.62, 0.43, 0.22, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_ybjjv"]
+material = SubResource("mat_wall")
+size = Vector3(2, 2.5, 0.2)
+
+[node name="Wall" type="AnimatableBody3D" unique_id=1119910712]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=2018731294]
+shape = SubResource("BoxShape3D_ybjjv")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1029192773]
+mesh = SubResource("BoxMesh_ybjjv")
+
+[node name="BuildSockets" type="Node3D" parent="."]
+
+[node name="Socket_Base" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, -1.25, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 2
+accepts = Array[String](["Foundation", "Wall"])
+
+[node name="Socket_Top" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 1.25, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 3
+accepts = Array[String](["Wall", "Foundation", "Roof", "Door", "Window"])
+
+[node name="Socket_North" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0, 0.1)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Wall"])
+
+[node name="Socket_South" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0, -0.1)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Wall"])
+
+[node name="Socket_East" type="Marker3D" parent="BuildSockets"]
+position = Vector3(1, 0, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Wall"])
+
+[node name="Socket_West" type="Marker3D" parent="BuildSockets"]
+position = Vector3(-1, 0, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Wall"])
+
+[node name="SampleMarker" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
