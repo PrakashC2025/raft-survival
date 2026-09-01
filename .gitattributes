@@ -1,0 +1,4 @@
+# Normalize EOL for all files that Git considers text files.
+* text=auto eol=lf
+grass/rs_grass.glb filter=lfs diff=lfs merge=lfs -text
+models/apple_tree.glb filter=lfs diff=lfs merge=lfs -text

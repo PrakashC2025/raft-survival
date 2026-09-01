@@ -1,0 +1,62 @@
+[gd_scene format=3 uid="uid://bwu6d4qnjeamg"]
+
+[ext_resource type="Script" uid="uid://b73vh4kl4v0mu" path="res://build_socket.gd" id="1_buildsocket"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
+size = Vector3(2, 0.15, 2)
+
+[sub_resource type="StandardMaterial3D" id="mat_roof"]
+albedo_color = Color(0.50, 0.34, 0.18, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_ybjjv"]
+material = SubResource("mat_roof")
+size = Vector3(2, 0.15, 2)
+
+[node name="Roof" type="AnimatableBody3D" unique_id=2024638497]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=18223137]
+shape = SubResource("BoxShape3D_ybjjv")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=223086880]
+mesh = SubResource("BoxMesh_ybjjv")
+
+[node name="BuildSockets" type="Node3D" parent="."]
+
+[node name="Socket_Base" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, -0.075, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 3
+accepts = Array[String](["Wall"])
+
+[node name="Socket_Top" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0.075, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 3
+accepts = Array[String](["Roof"])
+
+[node name="Socket_North" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0, 1)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Foundation"])
+
+[node name="Socket_South" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0, -1)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Foundation"])
+
+[node name="Socket_East" type="Marker3D" parent="BuildSockets"]
+position = Vector3(1, 0, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Foundation"])
+
+[node name="Socket_West" type="Marker3D" parent="BuildSockets"]
+position = Vector3(-1, 0, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Foundation"])
+
+[node name="SampleMarker" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)

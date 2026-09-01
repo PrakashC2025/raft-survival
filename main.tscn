@@ -1,0 +1,96 @@
+[gd_scene format=3 uid="uid://b0w5l6ob2nsaj"]
+
+[ext_resource type="Shader" uid="uid://c4c20m2yu8o4f" path="res://main.gdshader" id="1_ig7tw"]
+[ext_resource type="Script" uid="uid://h1hmdpbj5a7v" path="res://ocean.gd" id="2_0xm2m"]
+[ext_resource type="PackedScene" uid="uid://jrum7ogp7iku" path="res://raft.tscn" id="4_1bvp3"]
+[ext_resource type="Script" uid="uid://bcayghl33w72" path="res://debris_spawner.gd" id="5_lquwl"]
+[ext_resource type="PackedScene" uid="uid://p6cinliy74fm" path="res://debris.tscn" id="6_7mycd"]
+[ext_resource type="Script" uid="uid://bhmm5rx1csk5" path="res://player.gd" id="7_player"]
+[ext_resource type="Script" uid="uid://ctpoixhgppxtr" path="res://crosshair.gd" id="8_crosshair"]
+[ext_resource type="Script" uid="uid://c0hlxjq5k15ek" path="res://rope_system.gd" id="9_rope"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_5g42j"]
+
+[sub_resource type="Sky" id="Sky_0gc0m"]
+sky_material = SubResource("ProceduralSkyMaterial_5g42j")
+
+[sub_resource type="Environment" id="Environment_ybjjv"]
+background_mode = 2
+sky = SubResource("Sky_0gc0m")
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
+render_priority = 0
+shader = ExtResource("1_ig7tw")
+shader_parameter/water_color = Color(0.05, 0.3, 0.5, 1)
+shader_parameter/wave_height = 0.6
+shader_parameter/wave_speed = 1.2
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ybjjv"]
+material = SubResource("ShaderMaterial_0gc0m")
+size = Vector2(500, 500)
+subdivide_width = 200
+subdivide_depth = 200
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_ybjjv"]
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_ybjjv"]
+
+[node name="Main" type="Node3D" unique_id=370074586]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=354407028]
+transform = Transform3D(1, 0, 0, 0, 0.70710677, -0.70710677, 0, 0.70710677, 0.70710677, 0, 0, 0)
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=197893641]
+environment = SubResource("Environment_ybjjv")
+
+[node name="Ocean" type="MeshInstance3D" parent="." unique_id=1133981721]
+unique_name_in_owner = true
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.05007553, -0.027913809, -0.0011997223)
+mesh = SubResource("PlaneMesh_ybjjv")
+script = ExtResource("2_0xm2m")
+
+[node name="Raft" parent="." unique_id=1362896849 instance=ExtResource("4_1bvp3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.23476696, -3)
+
+[node name="Player" type="CharacterBody3D" parent="." unique_id=1432828520]
+unique_name_in_owner = true
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, -3)
+script = ExtResource("7_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=1021415137]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.0332973, 0)
+shape = SubResource("CapsuleShape3D_ybjjv")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Player" unique_id=556785338]
+visible = false
+mesh = SubResource("CapsuleMesh_ybjjv")
+
+[node name="CamPivot" type="Node3D" parent="Player" unique_id=1611402387]
+
+[node name="SpringArm3D" type="SpringArm3D" parent="Player/CamPivot" unique_id=209342318]
+spring_length = 0.0
+
+[node name="Camera3D" type="Camera3D" parent="Player/CamPivot/SpringArm3D" unique_id=1154674721]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+current = true
+
+
+[node name="RopeSystem" type="Node3D" parent="Player" unique_id=987654321]
+script = ExtResource("9_rope")
+
+[node name="CanvasLayer" type="CanvasLayer" parent="Player" unique_id=111111111]
+
+[node name="Crosshair" type="Control" parent="Player/CanvasLayer" unique_id=123456789]
+layout_mode = 3
+anchors_preset = 0
+offset_left = -12.0
+offset_top = -12.0
+offset_right = 12.0
+offset_bottom = 12.0
+mouse_filter = 2
+script = ExtResource("8_crosshair")
+
+[node name="DebrisSpawner" type="Node3D" parent="." unique_id=1742454693]
+script = ExtResource("5_lquwl")
+debris_scene = ExtResource("6_7mycd")

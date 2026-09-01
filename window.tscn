@@ -1,0 +1,32 @@
+[gd_scene format=3 uid="uid://b0qdnsp1rgimm"]
+
+[ext_resource type="Script" uid="uid://b73vh4kl4v0mu" path="res://build_socket.gd" id="1_buildsocket"]
+
+[sub_resource type="StandardMaterial3D" id="mat_window"]
+transparency = 1
+albedo_color = Color(0.3, 0.7, 1.0, 0.35)
+metallic = 0.6
+roughness = 0.05
+cull_mode = 2
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ybjjv"]
+material = SubResource("mat_window")
+size = Vector2(1.5, 1.5)
+
+[sub_resource type="BoxShape3D" id="col_window"]
+size = Vector3(1.5, 1.5, 0.1)
+
+[node name="Window" type="AnimatableBody3D" unique_id=1910187336]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1863715467]
+shape = SubResource("col_window")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1023702161]
+mesh = SubResource("PlaneMesh_ybjjv")
+
+[node name="BuildSockets" type="Node3D" parent="."]
+
+[node name="Socket_Center" type="Marker3D" parent="BuildSockets"]
+script = ExtResource("1_buildsocket")
+socket_type = 6
+accepts = Array[String](["Wall", "Foundation"])
