@@ -108,10 +108,11 @@ remove_build={
 
 [physics]
 
-common/physics_ticks_per_second=120
+common/physics_ticks_per_second=60
 3d/physics_engine="Jolt Physics"
 
 [rendering]
 
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
+lights_and_shadows/directional_shadow/size=2048

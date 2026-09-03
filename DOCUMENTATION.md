@@ -2,7 +2,7 @@
 
 > **Engine:** Godot 4.7 · **Language:** GDScript · **Physics:** Jolt 3D  
 > **Renderer:** Mobile (D3D12 on Windows) · **Resolution:** Stretched canvas (`canvas_items`, expand)
-> **Physics ticks:** 120 Hz
+> **Physics ticks:** 60 Hz
 
 ---
 
@@ -80,12 +80,13 @@ project_root/
 ├── build_socket.gd              # BuildSocket class (Marker3D sockets)
 ├── build_system.gd              # Shared static socket-attachment solver
 ├── crosshair.gd                 # Hollow-circle reticle (CanvasLayer)
-├── ocean.gd                     # Wave height function (physics-side)
+├── ocean.gd                     # Wave height function + day/night driver for the ocean shader
 ├── raft.gd                      # Floating physics + buoyancy sample points
 ├── raft.tscn                    # Base raft: 8 edge/corner sockets + BuiltPieces/
 ├── debris.gd / debris.tscn      # Floating debris (RigidBody3D)
 ├── debris_spawner.gd            # Continuous upstream debris stream
-├── rope_system.gd               # Hook + rope state machine (~484 lines)
+├── rope_system.gd               # Hook + rope state machine (auto-reel, multi-catch)
+├── mobile_controls.gd           # Mobile touch UI (joystick, look drag, action buttons)
 ├── inventory.gd                 # Autoload singleton (items + crafting)
 ├── stats.gd                     # Survival stats (health/hunger/thirst) — NOT wired in yet
 ├── foundation.tscn              # 2x2x0.3m — 4 edge sockets + Socket_Top
@@ -105,6 +106,19 @@ project_root/
 
 Defined in `project.godot` (`[input]`). `rope_*` actions are **created at runtime** by `rope_system._ensure_actions()`.
 
+### 3.1 Mobile Touch Controls (`mobile_controls.gd`)
+
+A full-screen `Control` under `Player/CanvasLayer` (`MobileControls`) that feeds the **same Input actions** as the keyboard — the game logic never knows the input is a touch:
+
+- **Left half of the screen:** a **visible joystick dock** sits at bottom-left; touch it (or anywhere on the left half) and drag to walk. Analog strength is pushed to `move_*` via `Input.action_press(action, strength)`.
+- **Right half of the screen:** drag to look around (`player.add_look_input(rel, 0.007)` — the shared mouse/touch path).
+- **Full button set** (each presses its keyboard action on touch-down, releases on touch-up, so taps and holds both behave like the keys):
+  - Normal mode — `JUMP` (big; jump / hold = swim up), `RUN` (sprint, hold), `USE` (interact), `DIVE` (shown while swimming; move_down), `ROPE` (big; **hold to charge, release to throw** — same as Q), `BACK` (shown only while the rope is out; rope_cancel recall), `EDIT` (shown when aiming at your own piece; one tap = desktop "E, E" pickup), `BUILD` (top-right).
+  - Build mode — big `PLACE`, `ROT`, `NEXT`, `EXIT` (JUMP/RUN/USE/ROPE hide so you don't mis-tap).
+  - Edit mode — `PLACE` (confirm), `ROT`, `REMOVE`, `CANCEL` (top-right).
+- **Visibility:** mobile UI shows **only on real mobile builds** (Android/iOS) or when `force_show` is enabled in the inspector — **F10** toggles it live for quick desktop previews. Never on a plain PC otherwise, so the keyboard + mouse are untouched (the overlay is `mouse_filter = IGNORE`; it reads touches via `_input` and can never swallow the PC mouse). Everything is laid out per-viewport (safe margins, sizes scale), portrait and landscape.
+- Buttons are semi-transparent rounded tiles; the joystick ring/knob and the resting dock are `_draw()` visuals.
+
 | Action | Key | Purpose |
 |---|---|---|
 | `move_forward/back/left/right` | W / S / A / D (+ Arrows) | Movement |
@@ -118,12 +132,17 @@ Defined in `project.godot` (`[input]`). `rope_*` actions are **created at runtim
 | `place_build` | P | Place building / Confirm edit |
 | `remove_build` | X | Remove building (edit mode) + refund |
 | `sprint` | Shift | Sprint / Swim fast |
-| `rope_throw` | Q (runtime) | Hold to charge, release to throw hook |
-| `rope_pull` | F (runtime) | Reel hook / hooked debris |
-| `rope_cancel` | Right-click (runtime) | Cancel throw / release debris |
+| `rope_throw` | Q (runtime) | Hold to charge, release to throw hook (reel is automatic) |
+| `rope_pull` | F (runtime) | Skip the pause and reel immediately (shortcut — auto anyway) |
+| `rope_cancel` | Right-click (runtime) | Recall the rope from any state; releases any caught debris |
 | **F3** (runtime) | Toggle the build overlay (footprint samples + support ratio) |
+| **F5** (dev, ocean.gd) | Force Noon (12:00) — jump straight to a time of day |
+| **F6** (dev, ocean.gd) | Force Sunset (18:36) |
+| **F7** (dev, ocean.gd) | Force Night (00:24) |
+| **F8** (dev, ocean.gd) | Force Sunrise (06:24) |
+| **F9** (dev, ocean.gd) | Toggle the day/night debug HUD (time, sun/moon energy, ambient, ocean factors, fog) |
 
-> **Note:** `rotate_build` binds both R and Y; holding **Shift** while rotating uses 15° steps instead of 90° (handy for angling walls placed in a foundation's center). `rotate_build_x` binds X, but in edit mode X is consumed by `remove_build` first (checked earlier in `_process`), so the X-axis rotation is effectively unreachable via keyboard right now. **F3** toggles the build overlay in build mode (see below).
+> **Note:** `rotate_build` binds both R and Y; holding **Shift** while rotating uses 15° steps instead of 90° (handy for angling walls placed in a foundation's center). `rotate_build_x` binds X, but in edit mode X is consumed by `remove_build` first (checked earlier in `_process`), so the X-axis rotation is effectively unreachable via keyboard right now. **F3** toggles the build overlay in build mode (see below). **F5–F9** are dev-only time/debug keys handled by `ocean.gd` (`dev_time_keys` export — F3 is left to the build overlay).
 
 ---
 
@@ -168,7 +187,7 @@ Main (Node3D)
 ├── DirectionalLight3D            (shadow_enabled)
 ├── WorldEnvironment              (ProceduralSkyMaterial)
 ├── Ocean (MeshInstance3D) [ocean.gd]
-│   └── PlaneMesh 500x500, 200x200 subdiv, ShaderMaterial (main.gdshader)
+│   └── PlaneMesh 500x500, 160x160 subdiv, ShaderMaterial (main.gdshader)
 ├── Raft (AnimatableBody3D) [raft.gd]  — instance of raft.tscn
 │   ├── CollisionShape3D (Box 2x0.3x2)
 │   ├── MeshInstance3D (BoxMesh, brown)
@@ -177,12 +196,18 @@ Main (Node3D)
 │   └── BuiltPieces/ (runtime container for all placed structures)
 ├── Player (CharacterBody3D) [player.gd]
 │   ├── CollisionShape3D (CapsuleShape3D)
-│   ├── MeshInstance3D (CapsuleMesh, visible=false at runtime)
+│   ├── Body (Node3D) — low-poly humanoid, visible first-person body:
+│   │     LegL/LegR (pants) · Torso/ArmL/ArmR (shirt) · Head (skin)
 │   ├── CamPivot → SpringArm3D (length 0) → Camera3D (offset y=0.6, current)
+│   │     └── HandPivot (rope-anchor viewmodel, local (0.18, -0.3, -0.55), inside the
+│   │           camera frustum so the fist is visible) → Arm + Fist
 │   ├── RopeSystem (Node3D) [rope_system.gd]
 │   └── CanvasLayer
 │       ├── Crosshair (Control) [crosshair.gd]
-│       └── InventoryHUD (Label, created at runtime by player._create_hud)
+│       ├── InventoryHUD (Label, created at runtime by player._create_hud)
+│       └── MobileControls (Control) [mobile_controls.gd] — touch UI (hidden on
+│             pure-desktop machines; see §3.1), created at runtime: JUMP / RUN /
+│             USE / BUILD / PLACE / ROT / NEXT buttons + drawn joystick visuals
 └── DebrisSpawner (Node3D) [debris_spawner.gd]
 	└── (runtime instances of debris.tscn)
 ```
@@ -256,7 +281,7 @@ var _grid_occupancy: Dictionary = {}  # raft-relative Vector2i -> Node3D (Founda
 var _raft_node: Node3D = null
 ```
 
-The raft registers itself at cell (0,0) as the structural anchor, but it does **not** block placement: `_grid_is_blocked()` ignores the raft entry (only real placed pieces block a cell), and `_is_cell_structurally_supported()` treats the raft's own cell and its four cardinal neighbors as directly supported — located from the scene node, not `_grid_occupancy` (which gets overwritten when the first Foundation is placed on the raft). So aiming at the raft deck places the FIRST Foundation **on the raft** (cell 0,0, overlay shows 100% coverage) and then expands around it, instead of snapping the preview into the water beside it.
+The raft registers itself at cell (0,0) as the structural anchor, and `_is_cell_structurally_supported()` treats the raft's own cell and its four cardinal neighbors as directly supported — located from the scene node, not `_grid_occupancy`. **The raft's own cell (0,0) is blocked for Foundation placement** (`_grid_is_blocked()` returns true for it): the raft IS the deck surface there, and a Foundation on that cell would be buried inside the raft box (identical 2x0.3x2 volume → z-fighting, raft color bleed, permanently blocked deck). So aiming at the raft deck snaps the FIRST Foundation to a **neighbor cell at the same level** — its top is exactly the raft deck height, flush edge-to-edge — and then expands around it. This keeps every deck piece level, so walls/roofs placed on any of them sit at the same height (no uneven floors).
 
 ### Edit System State
 
@@ -295,7 +320,7 @@ Camera chain: `CamPivot -> SpringArm3D(length=0) -> Camera3D(offset 0, 0.6, 0)`.
 
 Two independent wave implementations must agree:
 
-1. **Visual** — `main.gdshader` displaces the PlaneMesh vertices (uniforms `wave_height = 0.6`, `wave_speed = 1.2`; water color, roughness 0.05, metallic 0.3).
+1. **Visual** — `main.gdshader` displaces the PlaneMesh vertices (uniforms `wave_height = 0.4`, `wave_speed = 1.2`) and shades the water **time-of-day aware** (see Day/Night below).
 2. **Physics** — `ocean.gd` `get_height(world_pos)` returns the exact water Y at any point (used by raft, debris, player swimming, rope):
 
 ```gdscript
@@ -307,6 +332,23 @@ func get_height(world_pos: Vector3) -> float:
 ```
 
 `wave_height = 0.4`, `wave_speed = 1.2` (exports). Max wave amplitude ~0.33m. The node registers in the `"ocean"` group so any runtime-instanced node (debris, etc.) can find it across scene boundaries.
+
+> Visual and physics waves share the same amplitude: `ocean.gd` pushes `wave_height`/`wave_speed` into the material every frame from its exports, so the raft floats on the same waves it sees (no shaking against mismatched wave heights).
+
+### 8.1 Day / Night Lighting (Sky3D addon + time-aware ocean)
+
+Lighting uses the bundled **Sky3D** addon (`Sky3D` WorldEnvironment with `SunLight` / `MoonLight` / `SkyDome` / `TimeOfDay` children) — nothing is duplicated or hand-rolled in opposition to it. Time is driven by `TimeOfDay` (15 real minutes per game day, `update_interval` 0.016s). The scene is configured for the game in `main.tscn`:
+
+- `TimeOfDay.celestials_calculations = SIMPLE` — the sun sweeps a full day path and the **moon is opposite the sun**, so the moon reliably rises at sunset and stays up through the night (REALISTIC orbital mode kept the moon below the horizon for the game's default date/latitude — that's why it was never visible).
+- `SkyDome`: `sun_light_energy 1.4`, warm horizon sun color for sunrise/sunset, `moon_light_energy 0.55` (cool blue), `moon_size 0.11` (clearly round disc drawn by the sky shader with its glow), `fog_density 0.00045` (very light atmospheric haze only — debris stays visible at range), dark `ground_color`.
+- The addon already fades everything smoothly from the sun/moon altitude (sun color lerp midday→horizon, energy by visible-disk factor, night ambient clamped to value ≥ 0.35 so unlit surfaces never go pure black, no hard day/night switch).
+
+**Time-aware ocean** (`main.gdshader` + `ocean.gd`):
+
+- Wave vertex geometry is **unchanged**; the vertex shader now also emits a wave normal from the same analytic slope so glints follow wave faces.
+- `ocean.gd` runs every frame as the driver: it reads the SkyDome sun/moon world directions and pushes smooth factors into the shader (`night_factor`, `twilight_factor`, `moon_factor`) plus the sun/moon colors and directions.
+- Shader output (`render_mode unshaded`, manually lit): **bright Raft-style blue day** → twilight dusk-blue → **deep navy night** with a `max(..., vec3(0.008, 0.022, 0.06))` floor so the water is *never black*; a fresnel horizon tint that is a *slightly lighter blue* (low red) so distant water brightens naturally like real sky reflection but **never washes toward grey/white**; **wave-band shading** — lit crests catch light blue, troughs darken, highest crests get thin white-blue foam caps — so the surface visibly rolls like waves; **sharp sun sparkle** by day and a subtle moon shimmer at night (night terms kept small so night stays dark navy, never day-bright).
+- **Palette is ACES-aware and LINEAR**: `ALBEDO` is linear HDR and the scene uses ACES tonemapping (mode 3, which lifts mid-tones strongly). The ocean uniforms are deliberately **NOT `source_color`** — that hint makes `set_shader_parameter()` convert pushed colors sRGB→linear and silently darkens the water ~3× (the root cause of the dark/navy look). Linear values are tuned and **verified empirically** against real rendered frames through the ACES+sRGB pipeline: day `(0.05, 0.22, 0.46)` displays ≈ sRGB **bright blue (0.28, 0.50, 0.66)** at noon, night `(0.012, 0.04, 0.12)` displays ≈ navy **(0.09, 0.20, 0.35)**, twilight ≈ dusk blue. Palette tunable on the Ocean node (`day_color`, `twilight_color`, `night_color`, `sparkle_strength`).
 
 ---
 
@@ -380,14 +422,15 @@ angular_velocity = (sin(t*0.5)*0.2, rot_speed, cos(t*0.4)*0.2)
 
 ## 11. Rope / Hook System
 
-**File:** `rope_system.gd` (~484 lines) · Node under Player. Fully blocks during build/edit mode (`_force_cancel`).
+**File:** `rope_system.gd` (~620 lines) · Node under Player. Fully blocks during build/edit mode (`_force_cancel`). Fully **automatic** after the throw: no manual reel/return keys are needed (they still work as shortcuts).
 
 ### State Machine
 
 ```
-IDLE -> THROWING -> EXTENDED -> REELING -> RETURNING -> IDLE
-				  \-> HOOKED -> REELING -/
-Cancel from any active state -> RETURNING
+IDLE -> THROWING -> EXTENDED --(auto after ~0.8s, nothing caught)--> RETURNING
+			   \-> HOOKED --(creep 3m scooping neighbors, then auto)--> REELING
+REELING -> (collect all at hand) -> RETURNING -> IDLE
+Cancel (right-click) from THROWING/EXTENDED/HOOKED/REELING -> RETURNING (releases any catch)
 ```
 
 ### Parameters
@@ -396,22 +439,26 @@ Cancel from any active state -> RETURNING
 |---|---|
 | max_hook_distance | 22m |
 | throw_speed | 22 m/s |
-| reel_speed | 12 m/s |
-| return_speed | 20 m/s |
+| reel_speed | 14 m/s (loaded) / 30 m/s (empty) |
+| return_speed | 30 m/s (always fast — empty returns snap back) |
 | charge_speed | 30 m/s |
-| debris_hook_radius | 1.5m |
+| debris_hook_radius | 1.8m |
 | collection_radius | 1.5m |
+| empty_wait_time | 0.8s |
+| hook_pause_time | 0.25s (settle after creep) |
+| hook_creep_distance / speed | 3m / 6 m/s |
 
 ### Flow
 
 1. **Charge:** hold Q — a charge bar fills from 5m to `max_hook_distance`. Release Q to throw.
-2. **Throw:** aim point from a dedicated RayCast3D (mask 3, 22m, player excluded). Direction is **locked once** at throw and never recalculated. `_throw_dist = min(charge_distance, max_hook_distance)`.
-3. **Flight:** hook steps along the locked direction at 22 m/s, checking debris within 1.5m each frame. On arrival, snaps to water (`water_y + 0.2` if above). Hitting debris → HOOKED; otherwise → EXTENDED.
-4. **HOOKED:** debris is frozen (`freeze_mode = STATIC`, `is_hooked = true`). Q or F starts reeling; right-click releases.
-5. **REEL:** hook moves toward the hand at 12 m/s; hooked debris is dragged along (+0.3m Y) with zeroed velocity. Within 1.5m → collected (`Inventory.add(item_name)`, debris freed) and hook returns.
-6. **RETURN:** hook flies back at 20 m/s; under 0.5m → IDLE.
+2. **Throw:** aim point from a dedicated RayCast3D (mask 3, 22m, player excluded). If the ray misses everything the aim point falls back to where the ray **crosses the ocean surface** — the hook always lands on the water where debris float, never sails 22 m at eye height over them (this was the “catch gap”). Direction is **locked once** at throw. `_throw_dist = min(charge_distance, aim_dist, max_hook_distance)`.
+3. **Flight:** the hook is swept in ≤0.5 m sub-steps along the locked direction at 22 m/s (no debris can be skipped between frames), checking debris within 1.8m at every step.
+4. **HOOKED (multi-catch):** caught pieces are frozen (`freeze_mode = STATIC`, `is_hooked = true`). After the first catch the hook **keeps creeping forward up to 3 m** (6 m/s) along the throw so debris sitting right next to the caught piece get scooped too — **one throw can haul a whole cluster**. Every frame checks for new debris (pieces already held never block new ones). Captured pieces **trail BEHIND the hook on the water surface** (0.7 m spacing, each riding `ocean.get_height + freeboard` — like a net towed behind a boat, never strung up in the air along the rope). After the creep + 0.25 s settle the hook **auto-reels** (Q/F just skip the pause).
+5. **REEL:** hook leads, the trail follows; each piece is collected **individually as it reaches the raft edge** (within 1.5m of the hand → `Inventory.add(item_name)`, piece freed); if the hook reaches the hand first, remaining pieces are pulled in by hand. When the trail is empty the hook returns.
+6. **EXTENDED (empty):** the hook rests on the water riding the waves, still hunting — any debris that drifts into range gets hooked. After `empty_wait_time` (0.8 s) with no catch it **returns by itself at 30 m/s** (no key press needed).
+7. **Cancel:** right-click from any active state instantly recalls the rope — it **releases every hooked debris** (unfreezes them, `is_hooked = false`) and returns fast.
 
-Visuals: gold sphere hook, tan `CylinderMesh` rope (radius 0.025) oriented `Basis(right, rope_dir, perp)` from hand to hook, and a screen-space charge bar. Hook origin rides at `player.pos + right*0.4 + forward*0.3 + up*0.8`.
+Visuals: gold sphere hook, tan `CylinderMesh` rope (radius 0.025) oriented `Basis(right, rope_dir, perp)` from hand to hook, and a screen-space charge bar. The rope origin is anchored to the **hand** viewmodel: `camera.pos − up·0.30 + right·0.18 − forward·0.55` (forward 0.55 m keeps the fist INSIDE the camera frustum on desktop and portrait mobile — verified on screen), so the rope visibly comes from the player's hand below-right of the view, **not from the head**.
 
 ---
 
@@ -581,7 +628,18 @@ BuildSockets/
 
 ## 16. Game Loop & Frame Flow
 
-### Physics Tick (120 Hz)
+### Physics Tick (60 Hz)
+
+`project.godot` runs physics at **60 Hz** (was 120 Hz) — physics load is halved with no visible change to movement, buoyancy, or debris drift, which matters on low-end 4 GB phones.
+
+### Performance Notes (mobile-friendly)
+
+- **Renderer:** `renderer/rendering_method = "mobile"` (already set) — the correct backend for phones.
+- **Ocean:** the 500×500 plane is 160×160 subdivisions (≈26k verts, down from 40k) and **`cast_shadow = 0`** — the largest, permanently-visible mesh no longer renders into the directional shadow maps every frame (day *and* night, since the MoonLight enables shadows too). Zero visual change (water self-shadows were never visible).
+- **Shadows:** `directional_shadow_max_distance = 150` on SunLight/MoonLight and `directional_shadow/size = 2048` — shadow cost is limited to the play area around the raft.
+- **Sky3D screen-space fog is disabled** (`SkyDome.fog_visible = false`): its atmospheric-scatter shader is a full-screen raymarch pass. At the game's very low density it was imperceptible, so disabling it is visually free on low-end GPUs (the sky/environment still carry the atmosphere).
+- **HUD label** is only re-assigned when its text actually changes — re-setting identical text forced a full UI text re-layout every frame.
+- Wave vertex geometry and `get_height()` are unchanged; only the shading responds to time of day (see §8.1).
 
 ```
 Player._physics_process:
@@ -724,6 +782,12 @@ Support selection: P1 ray-hit (Foundation/Raft/Wall/Door/Window)
 					   grazing angles where the main ray passes over the deck edge)
 				   P2 nearest surface to the projected aim, only if within
 					  WALL_SURFACE_SNAP_RANGE (4m)
+				   P2b WALL PREFERENCE — when the resolved surface is a deck
+					   (Foundation/Raft) but a Wall/Door/Window is within snap
+					   range AND not meaningfully farther than the deck (<= +0.5m),
+					   snap to the WALL instead: the ghost auto-joins the wall's
+					   side (foundation-style preview near walls) instead of
+					   falling back to the deck edge and hanging off it.
 				   P3 none -> DO NOT reject yet: fall through to the shared
 					  FOOTPRINT validation below — the wall's real bottom may
 					  still rest on a surface under the crosshair even when the
@@ -742,12 +806,27 @@ If support is Foundation/Raft  -> EDGE or CENTER placement:
 	else EDGE placement:
 		_select_wall_edge: perpendicular distance to the 4 edge lines;
 						   corner tie-break (within 0.25m) uses camera direction dot edge normal
-		_compute_wall_transform:
-			edge_angle = 90° for East/West sockets (wall runs along the edge)
-			wall SLIDES along the edge to follow the crosshair:
-				along = local_aim.dot(edge_axis) - socket_local.dot(edge_axis)
-				clamped to ±(FOUNDATION_HALF_WIDTH - 0.1) so corners work
+		TILE-SLOT snapping (_solve_wall_edge_tile):
+			walls are exactly one deck cell wide (2.0m), so each cell's edge can
+			hold ONE wall, centered on that cell:
+				raw_along = local_aim.dot(edge_axis) - socket_local.dot(edge_axis)
+				slot k0   = round(raw_along / 2.0)   # slot under the crosshair
+				center    = edge socket + edge_axis * (2.0 * k)
+			try k0 first, then k0 ± 1 / ± 2 (aim direction first) until a slot
+			is free AND footprint-valid — so two walls TILE FLUSH side-by-side:
+			aiming at an occupied edge auto-shifts the ghost to the next free
+			slot on the adjacent deck cell (±2.0m); when the whole run is full
+			the ghost stays RED at the aimed slot (OVERLAPPING WALL)
+			_wall_edge_slot_taken: same edge LINE only (|along| < 1.9m and
+			perpendicular < 0.5m) — corner walls on perpendicular edges stay OK
 			wall Socket_Base offset (0, -1.25, 0) rotated by total angle
+		WALL PREFERENCE (over water only): if the resolved surface is a deck
+			BUT no deck is directly under the crosshair (vertical drop hits
+			water) and a Wall/Door/Window is within snap range and not >0.5m
+			farther than the deck, the ghost auto-joins that wall's side
+			instead. When the crosshair IS over a deck, the tile-slot deck path
+			wins so walls tile onto deck cells rather than joining/stacking
+			onto the wall that occupies the aimed slot.
 Footprint validation (_validate_wall_footprint):
 	- support rays use collision mask 1 and EXCLUDE the player RID, the preview
 	  ghost RID, and the piece being edited, so the preview can never block
@@ -869,10 +948,14 @@ Register Foundation cell in grid; register SampleMarker/F1 as raft buoyancy samp
 ## 20. Rope Algorithm Deep Dive
 
 - **Charge:** hold Q — `charge_distance` grows 5→22m at 30 m/s; a ColorRect bar shows the fraction.
-- **Throw:** direction is captured **once** from the aim ray and never recalculated. Hook travels in that fixed world-space direction; camera rotation does not bend the rope.
-- **Hook:** checks every frame for debris within 1.5m during flight; frozen debris is dragged during reeling and collected at 1.5m from the hand.
-- **Reel:** `hook_pos += normalize(hand - hook_pos) * reel_speed * delta`.
-- **Visual:** CylinderMesh from hand to hook, `Basis(right, rope_dir, perp)` — Y axis along the rope.
+- **Aim:** raycast hits (raft/debris) win; a miss falls back to the ray's **intersection with the ocean surface** so the hook lands on the water instead of flying at eye height over the debris (the old “catch gap”).
+- **Throw:** direction is captured **once** and never recalculated. Hook travels in that fixed world-space direction in ≤0.5 m sub-steps; camera rotation does not bend the rope.
+- **Hook:** every frame (flight, resting, creeping, reeling) checks *all* debris within 1.8m and hooks every eligible one — one throw can scoop a cluster. After the first catch the hook creeps forward up to 3 m to pick up neighbors, then auto-reels.
+- **Empty:** nothing caught → hook rests up to 0.8 s (still hunting drift-ins, riding the waves) then **auto-returns at 30 m/s**.
+- **Cancel:** right-click from any active state releases all catches (unfreeze, `is_hooked = false`) and returns the rope fast.
+- **Trail:** captured pieces ride the water BEHIND the hook (`hook − (hook−hand).norm · (i+1)·0.7`, y = `ocean.get_height + freeboard`), velocities zeroed — a towed net, not a chain up in the air. Collected one by one as each reaches the raft edge.
+- **Reel:** `hook_pos += normalize(hand - hook_pos) * speed * delta` (14 m/s loaded, 30 m/s empty); within 1.5m every captured piece is collected.
+- **Visual:** CylinderMesh from hand to hook, `Basis(right, rope_dir, perp)` — Y axis along the rope. Origin anchored at the hand: `camera − up·0.30 + right·0.18 − forward·0.55` — and a visible **first-person viewmodel** (`Camera3D/HandPivot` → Arm + Fist boxes) sits at exactly that anchor inside the camera frustum, so the rope visibly starts from the hand in your view.
 
 ---
 

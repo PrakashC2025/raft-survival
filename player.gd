@@ -110,6 +110,7 @@ var was_swimming: bool = false
 
 # HUD
 var _hud_label: Label = null
+var _last_hud_text := ""
 
 # Grid occupancy — maps raft-relative Vector2i → Node3D
 var _grid_occupancy: Dictionary = {}
@@ -135,9 +136,6 @@ func _ready() -> void:
 	rope_system.camera = camera
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	camera.current = true
-	var mesh := get_node_or_null("MeshInstance3D")
-	if mesh != null:
-		mesh.visible = false
 	if build_pieces.is_empty():
 		for scene_path in BUILD_SCENES:
 			var scene = load(scene_path) as PackedScene
@@ -159,11 +157,19 @@ func _ready() -> void:
 # ============================================================
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
-		rotate_y(-event.relative.x * MOUSE_SENSITIVITY)
-		cam_pivot.rotate_x(-event.relative.y * MOUSE_SENSITIVITY)
-		cam_pivot.rotation.x = clamp(cam_pivot.rotation.x, -1.4, 1.4)
+		add_look_input(event.relative)
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+# ============================================================
+# LOOK INPUT — shared by the mouse and the mobile touch controls.
+# ============================================================
+func add_look_input(rel: Vector2, sens: float = MOUSE_SENSITIVITY) -> void:
+	if cam_pivot == null:
+		return
+	rotate_y(-rel.x * sens)
+	cam_pivot.rotate_x(-rel.y * sens)
+	cam_pivot.rotation.x = clamp(cam_pivot.rotation.x, -1.4, 1.4)
 
 # ============================================================
 # CENTRAL AIM SYSTEM
@@ -479,17 +485,21 @@ func _grid_unregister(cell: Vector2i) -> void:
 func _grid_is_occupied(cell: Vector2i) -> bool:
 	return _grid_occupancy.has(cell)
 
-# A cell is blocked when it holds a REAL placed piece. The raft itself is
-# registered at (0,0) as a structural anchor but must NOT block placement —
-# the player builds the first Foundation ON the raft (aiming at the raft deck
-# should never snap the preview into the water).
+# A cell is blocked when it holds a REAL placed piece, or when it is the
+# raft's own cell. The raft itself is registered at (0,0) as a structural
+# anchor; the FIRST Foundation must be placed in a NEIGHBOR cell, because a
+# Foundation on the raft's own cell would be buried INSIDE the raft box
+# (identical 2x0.3x2 volume -> z-fighting, raft color bleed, blocked deck).
 func _grid_is_blocked(cell: Vector2i) -> bool:
+	var raft_node: Node3D = _get_raft_node()
+	if raft_node != null and _world_to_grid(raft_node.global_position) == cell:
+		return true
 	if not _grid_occupancy.has(cell):
 		return false
 	var occ: Node3D = _grid_occupancy[cell] as Node3D
 	if occ == null or not is_instance_valid(occ):
 		return false
-	return occ != _get_raft_node()
+	return occ != raft_node
 
 # Get the cell that a support piece occupies.
 func _get_piece_cell(piece: Node3D) -> Vector2i:
@@ -793,6 +803,81 @@ func _compute_wall_transform(foundation: Node3D, aim_world: Vector3) -> Transfor
 	# Wall basis = foundation basis rotated by combined angle.
 	var piece_basis: Basis = flat_xf.basis.rotated(Vector3.UP, total_rot)
 	return Transform3D(piece_basis, piece_center)
+
+# Tile-slot edge placement for Wall/Door/Window on a deck edge (Foundation or
+# Raft). Walls are exactly one deck cell wide (2.0m), so each cell's edge can
+# hold ONE wall, centered on that cell — aiming anywhere along an edge snaps to
+# the slot under the crosshair. If that slot already holds a wall, the ghost
+# auto-shifts to the nearest free slot along the same edge line (±1 cell) so
+# two walls TILE FLUSH side-by-side instead of overlapping or leaving a gap.
+# When nothing nearby is free, returns the aimed slot's transform so the ghost
+# still shows RED at the blocked spot (overlap validation runs downstream).
+func _solve_wall_edge_tile(deck: Node3D, aim_world: Vector3, edge_name: String) -> Transform3D:
+	var sockets_node: Node3D = deck.get_node_or_null("BuildSockets")
+	if sockets_node == null:
+		return Transform3D()
+	var edge_socket: Node3D = sockets_node.get_node_or_null(edge_name)
+	if edge_socket == null:
+		return Transform3D()
+	var flat_xf: Transform3D = _get_flat_support_transform(deck)
+	var socket_local: Vector3 = edge_socket.position
+	# Edge rotation + slide axis (mirrors _compute_wall_transform).
+	var edge_angle: float = 0.0
+	var edge_axis: Vector3 = Vector3(1, 0, 0)
+	if absf(socket_local.x) > absf(socket_local.z):
+		edge_angle = PI * 0.5
+		edge_axis = Vector3(0, 0, 1)
+	var total_rot: float = edge_angle + build_rotation
+	var local_aim: Vector3 = flat_xf.affine_inverse() * aim_world
+	var raw_along: float = local_aim.dot(edge_axis) - socket_local.dot(edge_axis)
+	# Slot index under the crosshair: deck cells are 2.0m, so slots repeat every
+	# 2.0m along the edge, starting at the aimed deck cell's edge midpoint.
+	var k0: int = int(roundf(raw_along / 2.0))
+	var dir: int = 1 if raw_along >= float(k0) * 2.0 else -1
+	var wall_base_local: Vector3 = Vector3(0, -1.25, 0)
+	var rotated_offset: Vector3 = wall_base_local.rotated(Vector3.UP, total_rot)
+	var piece_basis: Basis = flat_xf.basis.rotated(Vector3.UP, total_rot)
+	var fallback: Transform3D = Transform3D()
+	# Try the aimed slot first, then walk outward in the aim direction so the
+	# ghost continues the wall line naturally: k0, k0±1, k0±2.
+	var order: Array[int] = [k0, k0 + dir, k0 - dir, k0 + dir * 2, k0 - dir * 2]
+	for k in order:
+		var target_local: Vector3 = socket_local + edge_axis * (2.0 * float(k))
+		var target_flat_pos: Vector3 = flat_xf * target_local
+		var cand: Transform3D = Transform3D(piece_basis, target_flat_pos - rotated_offset)
+		if k == k0:
+			fallback = cand
+		if _wall_edge_slot_taken(cand, edge_axis, deck):
+			continue
+		if not _validate_wall_footprint(cand).get("valid", false):
+			continue
+		_diag["wall_tile_k"] = k
+		return cand
+	return fallback
+
+# True when a placed Wall/Door/Window already occupies the same deck-edge slot
+# as the candidate wall (same edge LINE, not merely nearby — corner walls on
+# perpendicular edges must stay allowed).
+func _wall_edge_slot_taken(cand: Transform3D, edge_axis: Vector3, deck: Node3D) -> bool:
+	var ax: Vector2 = Vector2(edge_axis.x, edge_axis.z).normalized()
+	var raft: Node3D = _get_raft_node()
+	if raft == null:
+		return false
+	var bp: Node3D = raft.get_node_or_null("BuiltPieces")
+	if bp == null:
+		return false
+	for w in bp.get_children():
+		if not (w is Node3D) or w == deck or not is_instance_valid(w):
+			continue
+		var wn: String = _find_piece_name(w)
+		if wn != "Wall" and wn != "Door" and wn != "Window":
+			continue
+		var d: Vector2 = Vector2(cand.origin.x - w.global_position.x, cand.origin.z - w.global_position.z)
+		var along: float = d.dot(ax)
+		var perp: Vector2 = d - ax * along
+		if absf(along) < 1.9 and perp.length() < 0.5:
+			return true
+	return false
 
 # Corner placement: foundation corner touches support corner.
 # Always flat — ignores wave tilt.
@@ -1906,6 +1991,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			var _raft: Node3D = _get_raft_node()
 			if _raft != null:
 				var _best_d: float = Vector2(wall_aim.x - _raft.global_position.x, wall_aim.z - _raft.global_position.z).length()
+				var _best_wall_d: float = INF
+				var _best_wall: Node3D = null
 				wall_foundation = _raft
 				var bp: Node3D = _raft.get_node_or_null("BuiltPieces")
 				if bp != null:
@@ -1915,10 +2002,22 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 							if _cn == "Foundation" or _cn == "Raft" or _cn == "Wall" \
 								or _cn == "Door" or _cn == "Window":
 								var _fd: float = Vector2(wall_aim.x - child.global_position.x, wall_aim.z - child.global_position.z).length()
-								if _fd < _best_d:
+								if _cn == "Wall" or _cn == "Door" or _cn == "Window":
+									if _fd < _best_wall_d:
+										_best_wall_d = _fd
+										_best_wall = child
+								elif _fd < _best_d:
 									_best_d = _fd
 									wall_foundation = child
-				if _best_d > WALL_SURFACE_SNAP_RANGE:
+				# Prefer a Wall/Door/Window surface over a deck when the wall is
+				# within snap range AND not meaningfully farther than the deck —
+				# this is what makes the wall ghost auto-snap flush to a
+				# neighboring wall (foundation-style preview) instead of falling
+				# back to the deck edge and hanging off it.
+				if _best_wall != null and _best_wall_d <= WALL_SURFACE_SNAP_RANGE \
+					and _best_wall_d <= _best_d + 0.5:
+					wall_foundation = _best_wall
+				elif _best_d > WALL_SURFACE_SNAP_RANGE:
 					wall_foundation = null
 		# No surface found near the aim: DO NOT reject yet — the wall's actual
 		# bottom FOOTPRINT may still rest on a foundation directly under the
@@ -1926,8 +2025,51 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		# footprint validation below samples the wall's real bottom; genuinely
 		# unsupported spots (open water, floating above) still come out INVALID
 		# there with NO SUPPORT SURFACE / INSUFFICIENT SUPPORT.
-		# Wall-to-wall: use socket-based placement when support is another wall/door/window
+		# WALL PREFERENCE: when the current surface resolved to a deck
+		# (Foundation/Raft), but a Wall/Door/Window is near the aim and NOT
+		# meaningfully farther than the deck, snap to the WALL instead — the
+		# ghost auto-joins the wall's side (foundation-style preview near
+		# walls) rather than snapping to the deck edge and hanging off it.
+		# Exception: when the crosshair sits over a DECK surface (vertical drop
+		# hits Foundation/Raft), the player is aiming AT the deck to tile
+		# another wall onto the deck's edge slots — the deck path must win so
+		# walls tile side-by-side instead of joining/stacking onto the wall
+		# that already occupies the aimed slot.
 		var _wsn: String = _find_piece_name(wall_foundation)
+		if wall_foundation != null and (_wsn == "Foundation" or _wsn == "Raft"):
+			var _aim_over_deck0: bool = false
+			var _drop_y0: float = _get_structural_deck_y()
+			var _dq0 := PhysicsRayQueryParameters3D.create(
+				Vector3(wall_aim.x, _drop_y0 + 4.0, wall_aim.z),
+				Vector3(wall_aim.x, _drop_y0 - 4.0, wall_aim.z))
+			_dq0.collision_mask = 1
+			var _dh0 := get_world_3d().direct_space_state.intersect_ray(_dq0)
+			if _dh0:
+				var _dp0: Node3D = _find_support_piece(_dh0.get("collider") as Node3D)
+				if _dp0 != null:
+					var _dpn0: String = _find_piece_name(_dp0)
+					if _dpn0 == "Foundation" or _dpn0 == "Raft":
+						_aim_over_deck0 = true
+			if not _aim_over_deck0:
+				var _deck_d0: float = Vector2(wall_aim.x - wall_foundation.global_position.x, wall_aim.z - wall_foundation.global_position.z).length()
+				var _near_wall0: Node3D = null
+				var _near_wall_d0: float = INF
+				var _raft0: Node3D = _get_raft_node()
+				if _raft0 != null:
+					var _bp0: Node3D = _raft0.get_node_or_null("BuiltPieces")
+					if _bp0 != null:
+						for _ch0 in _bp0.get_children():
+							if _ch0 is Node3D:
+								var _cn0: String = _find_piece_name(_ch0)
+								if _cn0 == "Wall" or _cn0 == "Door" or _cn0 == "Window":
+									var _fd0: float = Vector2(wall_aim.x - _ch0.global_position.x, wall_aim.z - _ch0.global_position.z).length()
+									if _fd0 < _near_wall_d0:
+										_near_wall_d0 = _fd0
+										_near_wall0 = _ch0
+				if _near_wall0 != null and _near_wall_d0 <= WALL_SURFACE_SNAP_RANGE \
+					and _near_wall_d0 <= _deck_d0 + 0.5:
+					wall_foundation = _near_wall0
+					_wsn = "Wall"
 		if _wsn == "Wall" or _wsn == "Door" or _wsn == "Window":
 			# SECOND-FLOOR STACKING: aiming at the upper part of a wall's face
 			# (top ~40%) places the new wall directly ON TOP (Socket_Top ->
@@ -2031,7 +2173,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				_diag["wall_edge"] = "CENTER"
 			else:
 				var edge_name: String = _select_wall_edge(wall_foundation, wall_aim)
-				solved = _compute_wall_transform(wall_foundation, wall_aim)
+				solved = _solve_wall_edge_tile(wall_foundation, wall_aim, edge_name)
 				_diag["solved_pos"] = solved.origin
 				_diag["wall_foundation"] = wall_foundation.name
 				_diag["wall_edge"] = edge_name
@@ -3517,7 +3659,12 @@ func _update_hud() -> void:
 					reason = str(_diag.get("final", "UNKNOWN"))
 				if reason != "":
 					text += "\nReason: " + reason
-	_hud_label.text = text
+	# Only re-set the label when the text actually changed — re-assigning an
+	# identical string forces a full text re-layout every frame on the UI
+	# thread (expensive on low-end mobile), even when nothing changed.
+	if text != _last_hud_text:
+		_last_hud_text = text
+		_hud_label.text = text
 
 func _format_debug_hud() -> String:
 	var d: String = ""
