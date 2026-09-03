@@ -5,29 +5,29 @@
 [ext_resource type="Script" uid="uid://dlxq1qxbon1af" path="res://door.gd" id="1_ba8gm"]
 
 [sub_resource type="BoxShape3D" id="door_shape"]
-size = Vector3(1.0, 2.0, 0.12)
+size = Vector3(2, 2.5, 0.2)
 
 [sub_resource type="StandardMaterial3D" id="mat_frame"]
-albedo_color = Color(0.35, 0.22, 0.10, 1)
+albedo_color = Color(0.62, 0.43, 0.22, 1)
 
 [sub_resource type="BoxMesh" id="mesh_frame_left"]
 material = SubResource("mat_frame")
-size = Vector3(0.12, 2.0, 0.12)
+size = Vector3(0.3, 2.15, 0.2)
 
 [sub_resource type="BoxMesh" id="mesh_frame_right"]
 material = SubResource("mat_frame")
-size = Vector3(0.12, 2.0, 0.12)
+size = Vector3(0.3, 2.15, 0.2)
 
 [sub_resource type="BoxMesh" id="mesh_frame_top"]
 material = SubResource("mat_frame")
-size = Vector3(1.0, 0.12, 0.12)
+size = Vector3(2.0, 0.35, 0.2)
 
-[sub_resource type="StandardMaterial3D" id="mat_panel"]
-albedo_color = Color(0.60, 0.42, 0.22, 1)
+[sub_resource type="StandardMaterial3D" id="mat_leaf"]
+albedo_color = Color(0.55, 0.38, 0.20, 1)
 
-[sub_resource type="BoxMesh" id="mesh_panel"]
-material = SubResource("mat_panel")
-size = Vector3(0.76, 1.7, 0.06)
+[sub_resource type="BoxMesh" id="mesh_leaf"]
+material = SubResource("mat_leaf")
+size = Vector3(1.4, 2.15, 0.06)
 
 [sub_resource type="StandardMaterial3D" id="mat_handle"]
 albedo_color = Color(0.8, 0.7, 0.2, 1)
@@ -56,31 +56,34 @@ script = ExtResource("1_ba8gm")
 shape = SubResource("door_shape")
 
 [node name="FrameLeft" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.44, 0, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.85, -0.175, 0)
 mesh = SubResource("mesh_frame_left")
 
 [node name="FrameRight" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.44, 0, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.85, -0.175, 0)
 mesh = SubResource("mesh_frame_right")
 
 [node name="FrameTop" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.94, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.075, 0)
 mesh = SubResource("mesh_frame_top")
 
-[node name="Panel" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0.03)
-mesh = SubResource("mesh_panel")
+[node name="LeafPivot" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7, -0.175, 0)
 
-[node name="Handle" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.28, 0, 0.06)
+[node name="Leaf" type="MeshInstance3D" parent="LeafPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.7, 0, 0.03)
+mesh = SubResource("mesh_leaf")
+
+[node name="Handle" type="MeshInstance3D" parent="LeafPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.32, -0.55, 0.08)
 mesh = SubResource("mesh_handle")
 
-[node name="Hinge1" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.42, 0.6, 0.06)
+[node name="Hinge1" type="MeshInstance3D" parent="LeafPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.7, 0.06)
 mesh = SubResource("mesh_hinge")
 
-[node name="Hinge2" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.42, -0.2, 0.06)
+[node name="Hinge2" type="MeshInstance3D" parent="LeafPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.7, 0.06)
 mesh = SubResource("mesh_hinge")
 
 [node name="IntractZone" type="Area3D" parent="."]
@@ -91,13 +94,40 @@ shape = SubResource("interact_shape")
 [node name="BuildSockets" type="Node3D" parent="."]
 
 [node name="Socket_Base" type="Marker3D" parent="BuildSockets"]
-position = Vector3(0, -1.0, 0)
+position = Vector3(0, -1.25, 0)
 script = ExtResource("1_buildsocket")
-socket_type = 5
-accepts = Array[String](["Wall", "Foundation"])
+socket_type = 2
+accepts = Array[String](["Foundation", "Wall", "Door", "Window"])
 
 [node name="Socket_Top" type="Marker3D" parent="BuildSockets"]
-position = Vector3(0, 1.0, 0)
+position = Vector3(0, 1.25, 0)
 script = ExtResource("1_buildsocket")
-socket_type = 5
-accepts = Array[String](["Wall", "Foundation"])
+socket_type = 3
+accepts = Array[String](["Wall", "Foundation", "Roof"])
+
+[node name="Socket_North" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0, 0.1)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Wall", "Door", "Window"])
+
+[node name="Socket_South" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0, -0.1)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Wall", "Door", "Window"])
+
+[node name="Socket_East" type="Marker3D" parent="BuildSockets"]
+position = Vector3(1, 0, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Wall", "Door", "Window"])
+
+[node name="Socket_West" type="Marker3D" parent="BuildSockets"]
+position = Vector3(-1, 0, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Wall", "Door", "Window"])
+
+[node name="SampleMarker" type="Marker3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
