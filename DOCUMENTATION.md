@@ -1,7 +1,8 @@
 # RaftSurvival — Complete Project Documentation
 
 > **Engine:** Godot 4.7 · **Language:** GDScript · **Physics:** Jolt 3D  
-> **Renderer:** Mobile (D3D12 on Windows) · **Resolution:** Stretched canvas
+> **Renderer:** Mobile (D3D12 on Windows) · **Resolution:** Stretched canvas (`canvas_items`, expand)
+> **Physics ticks:** 120 Hz
 
 ---
 
@@ -11,99 +12,60 @@
 2. [Folder & File Map](#2-folder--file-map)
 3. [Input Map](#3-input-map)
 4. [Autoloads](#4-autoloads)
-5. [Main Scene Tree (`main.tscn`)](#5-main-scene-tree-maintscn)
-6. [Player System (`player.gd`)](#6-player-system)
+5. [Main Scene Tree](#5-main-scene-tree)
+6. [Player System](#6-player-system)
 7. [Camera & Crosshair](#7-camera--crosshair)
-8. [Ocean System (`ocean.gd`)](#8-ocean-system)
-9. [Raft System (`raft.gd` + `raft.tscn`)](#9-raft-system)
-10. [Debris System (`debris.gd` + `debris_spawner.gd`)](#10-debris-system)
-11. [Rope / Hook System (`rope_system.gd`)](#11-rope--hook-system)
-12. [Building System](#12-building-system)
-13. [Inventory System (`inventory.gd`)](#13-inventory-system)
-14. [Door System (`door.gd` + `door.tscn`)](#14-door-system)
-15. [Building Scenes](#15-building-scenes)
-16. [Physics & Collision Layers](#16-physics--collision-layers)
-17. [Complete Code — All Scripts](#17-complete-code--all-scripts)
-18. [Complete Code — All Scenes](#18-complete-code--all-scenes)
-19. [Game Loop & Frame Flow](#19-game-loop--frame-flow)
-20. [State Machines](#20-state-machines)
-21. [Build Algorithm Deep Dive](#21-build-algorithm-deep-dive)
-22. [Rope Algorithm Deep Dive](#22-rope-algorithm-deep-dive)
-23. [How to Extend](#23-how-to-extend)
+8. [Ocean System](#8-ocean-system)
+9. [Raft System](#9-raft-system)
+10. [Debris System](#10-debris-system)
+11. [Rope / Hook System](#11-rope--hook-system)
+12. [Inventory System](#12-inventory-system)
+13. [Door System](#13-door-system)
+14. [Building Scenes](#14-building-scenes)
+15. [Physics & Collision Layers](#15-physics--collision-layers)
+16. [Game Loop & Frame Flow](#16-game-loop--frame-flow)
+17. [State Machines](#17-state-machines)
+18. [Build Algorithm Deep Dive](#18-build-algorithm-deep-dive)
+19. [Edit System Deep Dive](#19-edit-system-deep-dive)
+20. [Rope Algorithm Deep Dive](#20-rope-algorithm-deep-dive)
+21. [Survival Stats (stats.gd)](#21-survival-stats-statsgd)
+22. [Shared Helpers](#22-shared-helpers)
+23. [Placeholder Scenes](#23-placeholder-scenes)
+24. [How to Extend](#24-how-to-extend)
 
 ---
 
 ## 1. Project Overview
 
-**RaftSurvival** is a first-person ocean survival game built in Godot 4. The player starts on a small 2×2 wooden raft in the middle of a vast ocean. Floating debris drifts by on the current. The player uses a throwable hook (Q) to catch distant debris or picks it up directly (E) at close range. Collected resources are spent to build foundations, walls, doors, windows, and stairs to expand the raft into a larger structure.
-
-### Recent Bug Fixes (Sep 2026)
-
-**Root cause:** Every `.tscn` build-piece scene file had been saved in an incomplete/truncated form — the root `[node ...]` block was never closed with its trailing `]` bracket. This produced `Parse Error: Unexpected end of file` and `Index p_idx = N is out of bounds` errors. Because the startup scenes (`raft.tscn`, `foundation.tscn`, `wall.tscn`, `door.tscn`, etc.) failed to load:
-
-- The **raft never appeared on the ocean** in `main.tscn` (`res://main.tscn:53` → `[ext_resource] referenced non-existent resource at: res://raft.tscn`).
-- **Build mode (B) never activated** — `player.gd` preloads every `BUILD_SCENES` path into `build_pieces`; since `load()` returned `null`, `build_pieces` stayed empty and `_toggle_build()` early-returned.
-- Debris spawning, doors, and material pickup were likewise broken.
-
-**Fix:** All **10 scene files** were rewritten as clean UTF-8 text with the root node properly closed AND with explicit `socket_type` / `accepts` on every `BuildSocket` so the placement logic behaves correctly:
-
-| File | Sockets set |
-|---|---|
-| `raft.tscn` | 4× `FOUNDATION_EDGE` (N/S/E/W) + 4× corner `FOUNDATION_EDGE` |
-| `foundation.tscn` | 4× `FOUNDATION_EDGE` + 1× `FOUNDATION_TOP` |
-| `wall.tscn` | 1× `WALL_BASE`, 1× `WALL_TOP`, 4× `WALL_SIDE` |
-| `door.tscn` | 2× `DOOR_SLOT` |
-| `window.tscn` | 1× `WINDOW_SLOT` |
-| `stairs.tscn` | 6× `FOUNDATION_EDGE` |
-| `roof.tscn` | `WALL_TOP`, `WALL_TOP`, 4× `FOUNDATION_EDGE` |
-| `bonfire.tscn` | (no build sockets) |
-| `debris.tscn` | (no build sockets) |
-| `raft_extension.tscn` | (no build sockets) |
-
-Verified: all scenes load cleanly via Godot headless import (no parse errors), so the raft now appears on the ocean and **Build Mode (B)** enters correctly, letting the player place foundation/wall/roof/stairs/door/window pieces.
-
-### Build / Edit / Door / Window Fixes (Sep 2026)
-
-Six gameplay bugs in the build pipeline were fixed in `player.gd` + the piece scenes. The current code uses the shared socket placement path (`_resolve_placement` / `_compute_piece_transform`), not the older `_calc_*` functions described in earlier sections of this doc.
-
-1. **Ghost preview (BUG 1).** `_spawn_ghost()` previously parented the ghost under the moving `build_surface` raft and never reset its scale, so the preview inherited the raft's motion and possibly a baked scale. The ghost is now parented to a static `BuildPreviewRoot` under the scene root, reset `ghost.scale = Vector3.ONE`, seeded at `aim_point`, and always positioned via `ghost.global_transform` (absolute world pose) each frame.
-2. **False INVALID previews (BUG 2).** `_check_overlap`, `_check_overlap_edit`, and `_confirm_edit` now exclude **all** `build_surface` members (plus player/ghost/edited piece) via a shared `_overlap_excludes()`, so a piece can snap to / overlap the raft and existing buildings without reporting a false collision. This also fixed a real GDScript runtime error: `_overlap_excludes` passed an untyped `Array` into a typed `Array[RID]` return, throwing "Trying to assign an array of type `Array` to a variable of type `Array[RID]`" every preview frame (which failed the overlap check closed → false INVALID). The parameter is now typed `Array[RID]` and both callers cast their literal with `as Array[RID]`.
-3. **Edit-mode offset (BUG 3).** `_update_edit_follow()` no longer hardcodes a raft `z=-3` grid; it reuses the live `_resolve_placement(piece_name, aim_point)` shared with build mode, so moves track the raft's current transform.
-4. **Door (BUG 4).** `door.tscn` root gets explicit `collision_layer = 1` so the single aim raycast (mask = 3) hits it; interaction stays on the one source of truth (`"toggle" in aim_collider`) — the separate `IntractZone` Area3D is unused.
-5. **Window glass (BUG 5).** `window.tscn` material is `transparency=1`, `albedo_color = Color(0.3,0.7,1.0,0.35)`, `metallic=0.6`, `roughness=0.05`, `cull_mode=2` (double-sided). `_apply_building_color()` no longer recolours windows opaque.
-6. **Ceiling / foundation-on-wall (BUG 6).** Walled socket `Socket_Top` (WALL_TOP) accepts `Foundation` and resolves to `socket_gpos + half.y` (flush on top of the wall); walls join `build_surface`, and the BUG-2 overlap exclude lets the ceiling foundation overlap the wall below and validate green.
+**RaftSurvival** is a first-person ocean survival game built in Godot 4. The player starts on a small 2x2 wooden raft in the middle of a vast ocean. Floating debris drifts by on the current. The player uses a throwable hook (Q) to catch distant debris or picks it up directly (E) at close range. Collected resources are spent to build foundations, walls, doors, windows, roofs, and stairs to expand the raft into a larger structure.
 
 ### Core Gameplay Loop
 
 ```
 See debris floating by
-		↓
+		|
 Aim crosshair at debris
-		↓
-┌─────────────────────────────────┐
-│  CLOSE (≤5m): Press E          │ → Direct pickup into inventory
-│  FAR  (>5m): Hold Q → Release  │ → Hook thrown toward debris
-│       ↓                         │
-│  Hook catches debris            │
-│       ↓                         │
-│  Press Q/F to reel in           │
-│       ↓                         │
-│  Debris reaches collection dist │
-│       ↓                         │
-│  Inventory.add(item_name)       │
-└─────────────────────────────────┘
-		↓
+		|
+  CLOSE (<=5m): Press E        -> Direct pickup into inventory
+  NEARBY (<=2m): Press E        -> Area pickup (no aim needed)
+  FAR  (>5m): Hold Q / Release -> Hook thrown toward debris (charge = distance)
+		|
 Spend resources in Build Mode (B)
-		↓
-Expand raft → Build walls → Build upper floors
+		|
+Expand raft -> Build walls -> Build roof -> Build shelter
+		|
+Double-click E on a placed piece -> move / rotate / remove it (X refunds)
 ```
 
 ### Key Design Principles
 
-- **Single Aim Source:** One raycast from the camera center powers all interactions (pickup, hook throw, building placement).
-- **World-Space Hook:** After throwing, the hook is locked in world space. Camera rotation never moves it.
-- **Socket-Based Building:** Every build piece has `BuildSockets` (Marker3D nodes). The build system snaps to these sockets for perfect edge-to-edge alignment.
-- **Ocean-Driven Debris:** Debris spawns upstream and drifts past the player on a simulated current with buoyancy, wave bobbing, and gentle tumbling.
+- **Single Aim Source:** One raycast from the camera center powers all interactions.
+- **Grid-Cell Foundation:** Foundations snap to a structural grid. Only Foundations (and the raft) live in the occupancy grid; walls/roofs/doors/windows are edge or socket attachments.
+- **Edge-Based Wall:** Walls attach to Foundation edges. Crosshair determines which edge and position.
+- **Top-Attachment Roof:** Roofs snap to Wall tops automatically when aiming at a Wall.
+- **Group-Based Overlap:** All build pieces join the `"build_surface"` group. Overlap detection excludes group members hierarchically.
+- **Flat Transform Solver:** All placement math uses the support's *flat* transform (position + Y-rotation only, no wave tilt) so placed buildings are always level, never tilted by waves.
+- **Debug-by-default:** `player._ready()` sets `Inventory.infinite = true` and grants 999 Wood / Rope / Plastic.
 
 ---
 
@@ -111,60 +73,56 @@ Expand raft → Build walls → Build upper floors
 
 ```
 project_root/
-├── project.godot              # Engine config, input map, autoloads, physics
-├── main.tscn                  # Main scene: world root with all children
-│
-├── player.gd                  # Player: movement, swimming, aim, building, HUD
-├── camera_pivot.tscn          # (inline in main.tscn — CamPivot node)
-├── crosshair.gd               # Screen-center UI reticle
-│
-├── ocean.gd                   # Ocean mesh + wave height function
-├── raft.gd                    # Raft: floats on ocean, build surface root
-├── raft.tscn                  # Raft scene: mesh + collision + sockets
-│
-├── debris.gd                  # Debris: buoyancy, current, fade in/out
-├── debris.tscn                # Debris scene: RigidBody3D + mesh
-├── debris_spawner.gd          # Spawner: upstream spawning, cleanup, groups
-│
-├── rope_system.gd             # Hook + rope: state machine, throw, reel, cancel
-│
-├── inventory.gd               # Autoload singleton: items, recipes, crafting
-│
-├── foundation.tscn            # 2×2×0.3m platform with 8 edge sockets
-├── wall.tscn                  # 2×2.5×0.2m vertical panel with 4 sockets
-├── window.tscn                # 1.5×1.5m transparent plane with 1 socket
-├── stairs.tscn                # 5-step staircase (30° incline)
-├── door.tscn                  # Realistic door: frame + panel + handle + hinges
-├── door.gd                    # Door script: toggle open/close with lerp
-│
-└── icon.svg                   # Project icon
+├── project.godot
+├── main.gdshader                # Ocean vertex/fragment shader (visual waves)
+├── main.tscn                    # Main scene (ocean, raft, player, spawner)
+├── player.gd                    # ~2980 lines — movement, building, edit, HUD
+├── build_socket.gd              # BuildSocket class (Marker3D sockets)
+├── build_system.gd              # Shared static socket-attachment solver
+├── crosshair.gd                 # Hollow-circle reticle (CanvasLayer)
+├── ocean.gd                     # Wave height function (physics-side)
+├── raft.gd                      # Floating physics + buoyancy sample points
+├── raft.tscn                    # Base raft: 8 edge/corner sockets + BuiltPieces/
+├── debris.gd / debris.tscn      # Floating debris (RigidBody3D)
+├── debris_spawner.gd            # Continuous upstream debris stream
+├── rope_system.gd               # Hook + rope state machine (~484 lines)
+├── inventory.gd                 # Autoload singleton (items + crafting)
+├── stats.gd                     # Survival stats (health/hunger/thirst) — NOT wired in yet
+├── foundation.tscn              # 2x2x0.3m — 4 edge sockets + Socket_Top
+├── wall.tscn                    # 2x2.5x0.2m — Socket_Base/Top/Middle + 4 sides
+├── roof.tscn                    # 2x0.15x2m — Socket_Base/Top + 4 edge sockets
+├── stairs.tscn                  # 5-step staircase — Socket_Base/Top + 4 edges
+├── door.tscn / door.gd          # Swinging door + interact Area3D
+├── window.tscn                  # 1.5x1.5x0.1m transparent pane
+├── raft_extension.tscn          # Placeholder (no sockets/script yet)
+├── bonfire.tscn                 # Placeholder (no physics body/script yet)
+└── icon.svg
 ```
 
 ---
 
 ## 3. Input Map
 
-All input actions defined in `project.godot`:
+Defined in `project.godot` (`[input]`). `rope_*` actions are **created at runtime** by `rope_system._ensure_actions()`.
 
 | Action | Key | Purpose |
 |---|---|---|
-| `move_forward` | ↑ / W | Walk / swim forward |
-| `move_back` | ↓ / S | Walk / swim backward |
-| `move_left` | ← / A | Walk / swim left |
-| `move_right` | → / D | Walk / swim right |
-| `move_down` | C | Dive / swim down |
-| `jump` | Space | Jump (land) / Swim up (water) |
-| `interact` | E | Pickup debris / Place building / Confirm edit / Toggle door |
+| `move_forward/back/left/right` | W / S / A / D (+ Arrows) | Movement |
+| `jump` | Space | Jump / Swim up (hold = continuous swim up) |
+| `move_down` | C | Dive on ground / Swim down |
+| `interact` | E | Pickup debris / Toggle door / Double-click = pick up piece for editing |
 | `build` | B | Toggle build mode / Cancel edit |
-| `cycle_build` | Tab | Cycle building type (Foundation→Wall→Stairs→Door→Window) |
-| `rotate_build` | R | Rotate building preview 90° |
-| `remove_build` | X | Remove building (edit mode) + refund resources |
-| `sprint` | Shift | Sprint (land) / Swim fast (water) |
-| `rope_throw` | Q | Hold to charge, release to throw hook. Q/F to reel when extended. **Created dynamically** by `rope_system.gd` if not in project.godot |
-| `rope_pull` | F | Reel hook back. **Created dynamically** |
-| `rope_cancel` | Right-click | Cancel throw / release debris. **Created dynamically** |
+| `cycle_build` | Tab | Cycle: Foundation→Wall→Roof→Stairs→Door→Window |
+| `rotate_build` | R **and** Y | Rotate build (90°) |
+| `rotate_build_x` | X | Rotate on X axis (**edit mode only** — X is shadowed by `remove_build` in edit mode) |
+| `place_build` | P | Place building / Confirm edit |
+| `remove_build` | X | Remove building (edit mode) + refund |
+| `sprint` | Shift | Sprint / Swim fast |
+| `rope_throw` | Q (runtime) | Hold to charge, release to throw hook |
+| `rope_pull` | F (runtime) | Reel hook / hooked debris |
+| `rope_cancel` | Right-click (runtime) | Cancel throw / release debris |
 
-**Note:** `rope_throw`, `rope_pull`, and `rope_cancel` are NOT in `project.godot`. They are created at runtime by `rope_system.gd::_ensure_actions()` to avoid conflicts.
+> **Note:** `rotate_build` binds both R and Y. `rotate_build_x` binds X, but in edit mode X is consumed by `remove_build` first (checked earlier in `_process`), so the X-axis rotation is effectively unreachable via keyboard right now.
 
 ---
 
@@ -172,24 +130,16 @@ All input actions defined in `project.godot`:
 
 | Name | Script | Purpose |
 |---|---|---|
-| `Inventory` | `inventory.gd` | Global item tracker + crafting cost checker. Accessible as `Inventory.add("Wood")`, `Inventory.can_afford("Foundation")`, etc. |
-
-### Inventory API
+| `Inventory` | `inventory.gd` | Item tracker + crafting |
 
 ```gdscript
-# Add items
 Inventory.add("Wood", 5)
-Inventory.add("Rope")          # defaults to amount=1
-
-# Check if player can afford a recipe
-Inventory.can_afford("Foundation")  # → true/false
-
-# Craft (deducts resources)
-Inventory.craft("Foundation")   # → true if successful
-
-# Debug: unlimited resources
-Inventory.infinite = true       # can_afford() always returns true
+Inventory.can_afford("Foundation")  # -> true/false
+Inventory.craft("Foundation")       # -> true/false
+Inventory.infinite = true           # debug: crafting never consumes
 ```
+
+> `stats.gd` is **not** registered as an autoload and is not instanced anywhere — it exists as an unwired survival-stats module (see [§21](#21-survival-stats-statsgd)).
 
 ### Recipes
 
@@ -197,363 +147,152 @@ Inventory.infinite = true       # can_afford() always returns true
 |---|---|
 | Foundation | 5 Wood |
 | Wall | 8 Wood + 1 Rope |
+| Roof | 8 Wood + 1 Rope |
 | Stairs | 6 Wood + 1 Rope |
 | Door | 4 Wood + 1 Rope |
 | Window | 3 Wood + 1 Plastic |
-| Bonfire | 8 Wood + 2 Rope |
-| Raft Extension | 10 Wood + 2 Plastic |
+| Bonfire *(recipe only — not buildable yet)* | 8 Wood + 2 Rope |
+| Raft Extension *(recipe only — not buildable yet)* | 10 Wood + 2 Plastic |
+
+Only the first six recipes are wired into `BUILD_RECIPE_NAMES` / `BUILD_SCENES` in `player.gd`. Bonfire and Raft Extension recipes exist in `inventory.gd` but no build scene is registered for them yet.
 
 ---
 
-## 5. Main Scene Tree (`main.tscn`)
+## 5. Main Scene Tree
+
+From `main.tscn` (raft at (0, 0.235, -3), player at (0, 1.2, -3)):
 
 ```
 Main (Node3D)
-├── DirectionalLight3D              # Sun light
-├── WorldEnvironment                # Sky, ambient light, fog
-│
-├── Ocean (MeshInstance3D)          # Water plane, script: ocean.gd
-│   └── [uid://... Ocean class_name]
-│
-├── Raft (AnimatableBody3D)         # Player's home base, script: raft.gd
-│   ├── CollisionShape3D            # BoxShape3D (2×0.3×2)
-│   ├── MeshInstance3D              # BoxMesh brown planks
-│   ├── F1 / F2 / F3 / F4         # Marker3D — corner markers for wave sampling
-│   └── BuildSockets/              # Socket_North, Socket_South, etc.
-│
-├── Player (CharacterBody3D)        # First-person controller, script: player.gd
-│   ├── CollisionShape3D            # CapsuleShape3D (player body)
-│   ├── MeshInstance3D              # Capsule mesh (HIDDEN — first-person)
-│   ├── CamPivot (Node3D)           # Pitch rotation node
-│   │   └── SpringArm3D            # Length=0.0 (camera at player position)
-│   │       └── Camera3D           # First-person camera, offset=(0, 0.6, 0)
-│   ├── RopeSystem (Node3D)         # Hook+rope, script: rope_system.gd
-│   │   ├── HookOrigin (Node3D)    # Follows player hand position
-│   │   ├── Hook (MeshInstance3D)  # SphereMesh — invisible when IDLE
-│   │   ├── RopeMesh (MeshInstance3D) # CylinderMesh — straight line hand→hook
-│   │   └── AimRay (RayCast3D)     # Camera-center raycast for hook aim
+├── DirectionalLight3D            (shadow_enabled)
+├── WorldEnvironment              (ProceduralSkyMaterial)
+├── Ocean (MeshInstance3D) [ocean.gd]
+│   └── PlaneMesh 500x500, 200x200 subdiv, ShaderMaterial (main.gdshader)
+├── Raft (AnimatableBody3D) [raft.gd]  — instance of raft.tscn
+│   ├── CollisionShape3D (Box 2x0.3x2)
+│   ├── MeshInstance3D (BoxMesh, brown)
+│   ├── F1-F4 (Marker3D corners at ±0.9/±0.9)
+│   ├── BuildSockets/ (8 sockets: 4 cardinal + 4 corner)
+│   └── BuiltPieces/ (runtime container for all placed structures)
+├── Player (CharacterBody3D) [player.gd]
+│   ├── CollisionShape3D (CapsuleShape3D)
+│   ├── MeshInstance3D (CapsuleMesh, visible=false at runtime)
+│   ├── CamPivot → SpringArm3D (length 0) → Camera3D (offset y=0.6, current)
+│   ├── RopeSystem (Node3D) [rope_system.gd]
 │   └── CanvasLayer
-│       ├── Crosshair (Control)     # Screen-center reticle, script: crosshair.gd
-│       └── InventoryHUD (Label)    # Resource counters + build mode info
-│
-├── DebrisSpawner (Node3D)          # Continuous upstream spawning, script: debris_spawner.gd
-│   └── [Debris instances]          # Runtime-created Debris nodes
-│
-└── [Build surfaces]                # Raft + placed foundations all in "build_surface" group
+│       ├── Crosshair (Control) [crosshair.gd]
+│       └── InventoryHUD (Label, created at runtime by player._create_hud)
+└── DebrisSpawner (Node3D) [debris_spawner.gd]
+    └── (runtime instances of debris.tscn)
 ```
 
-### Important Node Relationships
-
-```
-Player.global_position = character body in world
-Camera3D is a CHILD of CamPivot which is a CHILD of Player
-  → Camera moves with player but can pitch independently
-  → Camera offset (0, 0.6, 0) = eye level above feet
-
-RopeSystem is a CHILD of Player
-  → HookOrigin follows player's hand (right +0.4, forward +0.3, up +0.8)
-  → Hook is a WORLD-SPACE entity (position set manually, not parented to camera)
-
-Raft is an AnimatableBody3D (NOT CharacterBody3D)
-  → Floats on ocean, but doesn't collide with player like a static wall
-  → Player stands on it via CharacterBody3D floor detection
-```
+Runtime-created nodes: `BuildPreviewRoot` (ghost preview parent), `BuildDebugMarkers` (debug spheres, only when `debug_building`).
 
 ---
 
 ## 6. Player System
 
-**File:** `player.gd` (980 lines)  
-**Node:** `CharacterBody3D` named "Player"  
-**Group:** "player"
+**File:** `player.gd` (~2980 lines) · **Node:** CharacterBody3D
 
-### Constants
+### Movement Constants
 
 ```gdscript
-WALK_SPEED = 3.0          # m/s normal walking
-SPRINT_SPEED = 5.0        # m/s sprinting
-SWIM_SPEED = 2.0          # m/s swimming
-SWIM_SPRINT_SPEED = 3.5   # m/s swim sprint
-JUMP_VELOCITY = 10.0      # jump force on land
-WATER_JUMP_VELOCITY = 12.0 # burst jump out of water
-DIVE_VELOCITY = -6.0       # dive downward force
-GRAVITY = 9.8              # m/s²
-MOUSE_SENSITIVITY = 0.003  # radians per pixel
-
-# Swimming
-SWIM_UP_CONTINUOUS = 5.0   # upward speed when holding space underwater
-SWIM_DOWN_SPEED = 3.0      # downward speed when holding C
-SWIM_ACCELERATION = 12.0   # how fast vertical speed changes
-SWIM_DECELERATION = 6.0    # how fast vertical speed drops to zero
-FLOAT_FORCE = 8.0          # buoyancy near surface
-FLOAT_DAMPING = 0.95       # velocity multiplier per frame
-WATER_ENTER_OFFSET = 0.3   # how far below surface triggers swimming
-WATER_EXIT_OFFSET = 1.5    # how far above surface exits swimming
-MAX_SWIM_DEPTH = 30.0      # depth limit
-
-# Aim
-AIM_DISTANCE = 60.0        # raycast max length
-PICKUP_RANGE = 5.0         # E key direct pickup max distance
-NEARBY_PICKUP_RANGE = 2.0  # fallback: collect if debris is very close
+WALK_SPEED = 3.0, SPRINT_SPEED = 5.0
+SWIM_SPEED = 2.0, SWIM_SPRINT_SPEED = 3.5
+JUMP_VELOCITY = 10.0, WATER_JUMP_VELOCITY = 12.0
+DIVE_VELOCITY = -6.0, GRAVITY = 9.8
+MOUSE_SENSITIVITY = 0.003
 ```
 
-### Node References
+### Swimming Constants
 
 ```gdscript
-@onready var cam_pivot: Node3D = $CamPivot
-@onready var camera: Camera3D = $CamPivot/SpringArm3D/Camera3D
-@onready var crosshair: Control = $CanvasLayer/Crosshair
-@onready var rope_system: RopeSystem = $RopeSystem
+SWIM_UP_CONTINUOUS = 5.0      # hold Space while swimming
+SWIM_DOWN_SPEED = 3.0         # hold C while swimming
+SWIM_ACCELERATION = 12.0, SWIM_DECELERATION = 6.0
+FLOAT_FORCE = 8.0, FLOAT_DAMPING = 0.95
+WATER_ENTER_OFFSET = 0.3      # start swimming when head drops below water+0.3
+WATER_EXIT_OFFSET = 1.5       # stop swimming above water+1.5 and not on floor
+MAX_SWIM_DEPTH = 30.0
 ```
 
-### Build Variables
+### Aim & Pickup
 
 ```gdscript
-BUILD_RECIPE_NAMES = ["Foundation", "Wall", "Stairs", "Door", "Window"]
-BUILD_SCENES = ["res://foundation.tscn", "res://wall.tscn", ...]
-SOCKET_SNAP_RADIUS = 2.5  # max distance to find a socket
-SOCKET_MATCH_TOLERANCE = 0.3
+AIM_DISTANCE = 60.0, PICKUP_RANGE = 5.0, NEARBY_PICKUP_RANGE = 2.0
+```
 
-var selected_piece_index: int = 0
+### Build Constants
+
+```gdscript
+BUILD_RECIPE_NAMES = ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
+BUILD_SCENES = [foundation.tscn, wall.tscn, roof.tscn, stairs.tscn, door.tscn, window.tscn]
+SOCKET_SNAP_RADIUS = 2.5
+WALL_SURFACE_SNAP_RANGE = 3.0    # wall ghost snaps to a surface within this 2D distance
+
+FOUNDATION_WIDTH = 2.0, FOUNDATION_DEPTH = 2.0, FOUNDATION_THICKNESS = 0.30
+FOUNDATION_HALF_WIDTH = 1.0, FOUNDATION_HALF_DEPTH = 1.0, FOUNDATION_HALF_HEIGHT = 0.15
+```
+
+### State Variables
+
+```gdscript
 var build_mode: bool = false
-var ghost: Node3D = null              # current preview piece
-var build_rotation: float = 0.0       # radians, increments by PI/2
-var build_valid: bool = false         # true = green preview = can place
-var _ghost_valid_mat: StandardMaterial3D    # green transparent
-var _ghost_invalid_mat: StandardMaterial3D  # red transparent
+var ghost: Node3D = null
+var build_rotation: float = 0.0      # 90° steps around Y
+var build_rotation_x: float = 0.0    # X-axis rotation (edit mode)
+var build_valid: bool = false
+var _ghost_valid_mat / _ghost_invalid_mat  # green/red, alpha 0.85, unshaded, no_depth_test
 ```
 
-### Edit Variables
+### Grid & Occupancy
 
 ```gdscript
-var _editing: Node3D = null           # the building being edited
-var _edit_original_pos: Vector3       # where it was before pickup
-var _edit_original_rot: Vector3       # rotation before pickup
-var _last_click_time: float = 0.0     # for double-click detection
+var _grid_occupancy: Dictionary = {}  # raft-relative Vector2i -> Node3D (Foundations + Raft only)
+var _raft_node: Node3D = null
 ```
 
-### Aim Variables (Single Source of Truth)
+### Edit System State
 
 ```gdscript
-var aim_point: Vector3       # world position where ray hit
-var aim_normal: Vector3      # surface normal at hit point
-var aim_collider: Node3D     # what was hit
-var aim_distance: float      # distance from camera to hit
-var aim_valid: bool          # did the ray hit anything?
+var _editing: Node3D = null
+var _edit_original_transform / _edit_candidate_transform: Transform3D
+var _edit_original_cell / _edit_candidate_cell: Vector2i
+var _edit_valid: bool = false
+var _last_click_time: float = 0.0, _last_clicked_piece: Node3D = null
+const DOUBLE_CLICK_TIME: float = 0.30
 ```
 
-### `_ready()` — Initialization
+### Hysteresis
 
 ```gdscript
-func _ready() -> void:
-    add_to_group("player")
-    rope_system.player = self
-    rope_system.camera = camera
-    Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-    camera.current = true
-    
-    # Hide player mesh (first-person)
-    var mesh := get_node_or_null("MeshInstance3D")
-    if mesh != null:
-        mesh.visible = false
-    
-    # Load build scenes
-    if build_pieces.is_empty():
-        for scene_path in BUILD_SCENES:
-            var scene = load(scene_path) as PackedScene
-            if scene:
-                build_pieces.append(scene)
-    
-    # Testing: unlimited resources
-    Inventory.infinite = true
-    Inventory.add("Wood", 999)
-    Inventory.add("Rope", 999)
-    Inventory.add("Plastic", 999)
-    
-    _create_hud()
+var _roof_last_support: Node3D = null   # remembers last Wall used for a Roof
 ```
-
-### `_unhandled_input()` — Mouse Look
-
-```gdscript
-func _unhandled_input(event: InputEvent) -> void:
-    if event is InputEventMouseMotion:
-        # Horizontal: rotate entire player body
-        rotate_y(-event.relative.x * MOUSE_SENSITIVITY)
-        # Vertical: rotate camera pivot (clamped)
-        cam_pivot.rotate_x(-event.relative.y * MOUSE_SENSITIVITY)
-        cam_pivot.rotation.x = clamp(cam_pivot.rotation.x, -1.4, 1.4)
-    
-    if event.is_action_pressed("ui_cancel"):
-        Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-```
-
-**Why this works:**  
-- `rotate_y()` rotates the CharacterBody3D around its vertical axis — the player's facing direction changes.  
-- `cam_pivot.rotate_x()` pitches the camera up/down without rotating the body.  
-- Clamping at ±1.4 radians (≈80°) prevents looking past straight up/down.  
-- Mouse is captured at start so it disappears and controls the camera.
-
-### `_update_aim()` — Central Raycast
-
-```gdscript
-func _update_aim() -> void:
-	var space_state := get_world_3d().direct_space_state
-	var ray_origin := camera.global_position
-	var ray_dir := -camera.global_transform.basis.z    # camera forward
-	var ray_end := ray_origin + ray_dir * AIM_DISTANCE
-	
-	var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_end)
-	query.collision_mask = 3       # bits 1+2: structures + debris
-	query.exclude = [get_rid()]    # skip own collision body
-	var result := space_state.intersect_ray(query)
-	
-	if result:
-		aim_valid = true
-		aim_point = result.position
-		aim_normal = result.normal
-		aim_collider = result.collider as Node3D
-		aim_distance = ray_origin.distance_to(result.position)
-	else:
-		aim_valid = false
-		aim_point = ray_end
-		aim_normal = -ray_dir
-		aim_collider = null
-		aim_distance = AIM_DISTANCE
-```
-
-**Why this matters:**  
-This single raycast powers EVERY interaction — debris pickup, hook throw direction, and building placement. The crosshair is at screen center, and this ray fires from the camera through that exact screen center. This guarantees the crosshair and all interactions point at the same world location.
-
-### `_physics_process(delta)` — Main Loop
-
-```
-1. _update_aim()                        # Fire raycast every frame
-2. Get ocean height at player position
-3. Read movement input (WASD → Vector2)
-4. Calculate movement direction from camera facing
-5. If swimming → _update_swimming()
-   If on land  → _update_land()
-6. move_and_slide()                     # CharacterBody3D physics
-7. _update_swimming_state()             # Check if entered/exited water
-```
-
-### Swimming State Machine
-
-```
-				 ┌────────────────────────────┐
-				 │        ON LAND             │
-				 │  velocity.y -= gravity     │
-				 │  jump = upward burst       │
-				 │  C key = dive              │
-				 └───────────┬────────────────┘
-							 │ player.y < water_y + 0.3
-							 ↓
-				 ┌────────────────────────────┐
-				 │      IS SWIMMING           │
-				 │  Space = swim up           │
-				 │  C = swim down             │
-				 │  No input = decelerate     │
-				 │  Near surface = buoyancy   │
-				 └───────────┬────────────────┘
-							 │ player.y > water_y + 1.5
-							 │ OR is_on_floor()
-							 ↓
-				 ┌────────────────────────────┐
-				 │        ON LAND             │
-				 │  Clamp velocity.y ≤ 0      │
-				 └────────────────────────────┘
-```
-
-**Key swimming details:**
-- **Water enter:** Player y-position drops below `water_y + 0.3m`
-- **Water exit:** Player y-position rises above `water_y + 1.5m` OR stands on a floor (raft)
-- **Buoyancy:** Only active near the surface (depth between -1 and 2 meters). Pushes player toward `water_y + 0.2m` with spring force. Prevents violent surface shaking by only applying when `|error| > 0.3`.
-- **Depth limit:** At 30m depth, vertical velocity is damped to zero.
 
 ---
 
 ## 7. Camera & Crosshair
 
-### Camera Setup (in `main.tscn`)
+Camera chain: `CamPivot -> SpringArm3D(length=0) -> Camera3D(offset 0, 0.6, 0)`.
 
-```
-Player (CharacterBody3D)
-└── CamPivot (Node3D)                     # pitch rotation
-	└── SpringArm3D (length=0.0)          # no arm — camera at pivot position
-		└── Camera3D                      # offset = (0, 0.6, 0)
-```
+`crosshair.gd` draws a hollow circle centered on screen (with configurable `aim_vertical_offset`). It never intercepts mouse input (`MOUSE_FILTER_IGNORE`).
 
-- **SpringArm3D length = 0.0:** Camera sits exactly at the CamPivot position (no spring-back)
-- **Camera offset (0, 0.6, 0):** Eye level, 0.6m above player's feet
-- **No player mesh visible:** `MeshInstance3D.visible = false` in both scene and code
-- **First-person:** The camera IS the player's eyes. Crosshair = screen center = aim point.
-
-### Crosshair (`crosshair.gd`)
-
-```gdscript
-extends Control
-
-enum State { NONE, ITEM, BUILD }
-
-@export var crosshair_size: float = 24.0
-@export var line_width: float = 3.0
-@export var aim_vertical_offset: float = 0.0
-@export var color_idle: Color = Color(1.0, 1.0, 1.0, 0.85)     # white
-@export var color_item: Color = Color(0.4, 1.0, 0.4, 0.95)     # green
-@export var color_build: Color = Color(0.4, 0.8, 1.0, 0.95)    # blue
-
-var state: int = State.NONE
-
-func _ready() -> void:
-	mouse_filter = Control.MOUSE_FILTER_IGNORE  # don't block mouse
-    custom_minimum_size = Vector2(crosshair_size, crosshair_size)
-    # Center on screen
-    set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-    get_viewport().size_changed.connect(_position_reticle)
-    _position_reticle()
-
-func _position_reticle() -> void:
-    var vp := get_viewport_rect().size
-    var half := custom_minimum_size * 0.5
-    position = Vector2(vp.x * 0.5 - half.x, vp.y * 0.5 + aim_vertical_offset - half.y)
-
-func _draw() -> void:
-    var col: Color = color_idle
-    if state == State.ITEM:  col = color_item
-    elif state == State.BUILD: col = color_build
-    var r: float = crosshair_size * 0.5
-    var radius: float = max(r - line_width * 0.5, 0.5)
-    draw_arc(Vector2(r, r), radius, 0.0, TAU, 32, col, line_width, true)
-```
-
-**Crosshair states:**
-- **NONE (white):** Default. Looking at nothing relevant.
-- **ITEM (green):** Looking at collectible debris within pickup range, or an interactable door.
-- **BUILD (blue):** In build mode, or editing a placed building.
+| Crosshair State | Color | When |
+|---|---|---|
+| NONE | White | Default |
+| ITEM | Green | Aiming at debris (<=5m) or a toggleable object (door) |
+| BUILD | Blue | Build mode / edit mode |
 
 ---
 
 ## 8. Ocean System
 
-**File:** `ocean.gd`  
-**Node:** `MeshInstance3D` (large water plane in the scene)  
-**Group:** "ocean"
+Two independent wave implementations must agree:
+
+1. **Visual** — `main.gdshader` displaces the PlaneMesh vertices (uniforms `wave_height = 0.6`, `wave_speed = 1.2`; water color, roughness 0.05, metallic 0.3).
+2. **Physics** — `ocean.gd` `get_height(world_pos)` returns the exact water Y at any point (used by raft, debris, player swimming, rope):
 
 ```gdscript
-extends MeshInstance3D
-class_name Ocean
-
-@export var wave_height := 0.4
-@export var wave_speed := 1.2
-var _time := 0.0
-
-func _ready() -> void:
-    add_to_group("ocean")
-
-func _process(delta: float) -> void:
-    _time += delta
-
 func get_height(world_pos: Vector3) -> float:
     var h := sin(world_pos.x * 0.4 + _time * wave_speed) \
         + sin(world_pos.z * 0.3 + _time * wave_speed * 0.8) \
@@ -561,1577 +300,548 @@ func get_height(world_pos: Vector3) -> float:
     return global_position.y + h * wave_height * 0.33
 ```
 
-**How it works:**
-- The ocean is a giant `MeshInstance3D` (flat plane) with a blue material.
-- `get_height()` returns the exact water surface Y at any world position.
-- Uses **3 sine waves** with different frequencies, speeds, and phases for natural-looking waves:
-  - Wave 1: frequency 0.4 along X, speed 1.2
-  - Wave 2: frequency 0.3 along Z, speed 0.96 (1.2 × 0.8)
-  - Wave 3: diagonal (X+Z) at frequency 0.7, speed 1.7, half amplitude
-- The final height = `ocean_y + h × 0.4 × 0.33` = ocean_y + h × 0.133
-- Maximum wave amplitude: ~0.4m (0.133 × 3 peaks)
-
-**Who calls `get_height()`:**
-- `raft.gd` — to float on the surface
-- `debris.gd` — to bob on the surface
-- `rope_system.gd` — to snap the hook to water level
+`wave_height = 0.4`, `wave_speed = 1.2` (exports). Max wave amplitude ~0.33m. The node registers in the `"ocean"` group so any runtime-instanced node (debris, etc.) can find it across scene boundaries.
 
 ---
 
 ## 9. Raft System
 
-### `raft.tscn` Scene Tree
-
-```
-Raft (AnimatableBody3D)              # script: raft.gd
-├── CollisionShape3D                 # BoxShape3D (2×0.3×2)
-├── MeshInstance3D                   # BoxMesh (2×0.3×2) — brown planks
-├── F1 (Marker3D)                    # (0.9, 0, 0.9)  — corner for wave sampling
-├── F2 (Marker3D)                    # (-0.9, 0, 0.9)
-├── F3 (Marker3D)                    # (0.9, 0, -0.9)
-├── F4 (Marker3D)                    # (-0.9, 0, -0.9)
-└── BuildSockets (Node3D)
-    ├── Socket_North (Marker3D)      # (0, 0, 1)
-    ├── Socket_South (Marker3D)      # (0, 0, -1)
-    ├── Socket_East (Marker3D)       # (1, 0, 0)
-    ├── Socket_West (Marker3D)       # (-1, 0, 0)
-    ├── Socket_NorthEast (Marker3D)  # (0.707, 0, 0.707)
-    ├── Socket_NorthWest (Marker3D)  # (-0.707, 0, 0.707)
-    ├── Socket_SouthEast (Marker3D)  # (0.707, 0, -0.707)
-    └── Socket_SouthWest (Marker3D)  # (-0.707, 0, -0.707)
-```
-
-### `raft.gd` — Floating Physics
+- `AnimatableBody3D` floating on the ocean, in the `"build_surface"` group, registered at grid cell `(0, 0)`.
+- **Buoyancy:** samples its 4 corner markers (F1–F4) **plus registered sample points** from placed pieces, averages the wave heights, then lerps to `target_y = avg + float_height`:
 
 ```gdscript
-extends AnimatableBody3D
-
-@export var float_height: float = 0.6   # deck sits 0.6m above water
-@export var follow_speed: float = 4.0    # how fast it follows waves
-
-var ocean: Ocean = null
-var _markers: Array = []     # [F1, F2, F3, F4]
-
-func _ready() -> void:
-    add_to_group("build_surface")  # raft is a valid build target
-    _markers = [
-        get_node_or_null("F1"),
-        get_node_or_null("F2"),
-        get_node_or_null("F3"),
-        get_node_or_null("F4"),
-    ]
-    rotation = Vector3.ZERO  # raft stays level, never tilts
-
-func _physics_process(delta: float) -> void:
-    var oc := _get_ocean()
-    if oc == null: return
-    
-    # Average wave height at 4 corners
-    var avg_height: float = 0.0
-    var count: int = 0
-    for m in _markers:
-        if m != null:
-            avg_height += float(oc.get_height(m.global_position))
-            count += 1
-    if count > 0:
-        avg_height /= float(count)
-    
-    # Smoothly move to target height
-    var target_y: float = avg_height + float_height
-    global_position.y = lerpf(
-        global_position.y,
-        target_y,
-        1.0 - exp(-follow_speed * delta)
-    )
+global_position.y = lerpf(global_position.y, target_y, 1.0 - exp(-follow_speed * delta))
 ```
 
-**Key design decisions:**
-- **`AnimatableBody3D`:** Can be moved by code but still collides with CharacterBody3D (the player). This is how the player stands on the moving raft.
-- **4-corner averaging:** Samples wave height at each corner marker and averages them. This prevents the raft from tilting on waves — it only moves up/down as a unit.
-- **`lerpf()` with exponential smoothing:** Smooth, frame-rate-independent motion. At 120 physics ticks/sec, `1 - exp(-4 * (1/120)) ≈ 0.033`, so the raft moves ~3.3% toward the target each tick.
-- **`float_height = 0.6`:** The raft deck top sits 0.6m above average water level. Wave peaks (0.4m max) never wash over the deck.
+  `float_height = 0.6`, `follow_speed = 4.0`. Rotation is zeroed in `_ready()` — the raft never tilts with waves.
+- **Growing structure support:** `player._try_build()` calls `raft.register_sample_point(SampleMarker-or-F1)` after placing a piece so buoyancy averaging expands to cover the structure; `unregister_sample_point()` exists for removals. Invalid refs are pruned lazily each physics tick.
+- `BuiltPieces/` container holds **all** placed structures — always parented directly to the raft (never to a foundation), so local transforms stay raft-relative.
 
 ---
 
 ## 10. Debris System
 
-### Debris Scene (`debris.tscn`)
+`debris.gd` (RigidBody3D, class `Debris`). Collision: **layer 2**, mask 1 (hits structures, not other debris). `gravity_scale = 0` (buoyancy fully controls vertical motion), `linear_damp = 2.5`, `angular_damp = 3.0`.
 
-```
-Debris (RigidBody3D)                  # script: debris.gd
-├── CollisionShape3D                  # BoxShape3D (0.6×0.3×0.6)
-├── MeshInstance3D                    # BoxMesh (0.6×0.3×0.6)
-└── F1 (Marker3D)                     # unused marker
-```
+### Item Profiles
 
-**Size:** 0.6×0.3×0.6 meters — small floating debris, realistic.
-
-### `debris.gd` — Buoyancy & Current
-
-```gdscript
-extends RigidBody3D
-class_name Debris
-
-@export var item_name := "Wood"
-@export var current_direction: Vector3 = Vector3(0, 0, 1)
-@export var current_speed: float = 1.2
-@export var freeboard: float = 0.15      # how high above water
-@export var buoyancy: float = 8.0
-@export var max_vertical_speed: float = 2.0
-
-var travel_start: Vector3 = Vector3.ZERO  # spawn position (for despawn check)
-var collected: bool = false
-var is_hooked: bool = false
-```
-
-**Item Profiles (visual + physics per type):**
-
-| Item | Mass (kg) | Freeboard (m) | Color |
+| Item | Mass | Freeboard | Color |
 |---|---|---|---|
-| Wood | 2.0 | 0.20 | Warm brown (0.85, 0.65, 0.35) |
-| Rope | 1.0 | 0.05 | Dark tan (0.75, 0.60, 0.35) |
-| Plastic | 0.6 | 0.25 | Light blue (0.3, 0.7, 1.0) |
-| Barrel | 6.0 | 0.30 | Dark brown (0.70, 0.45, 0.20) |
-| Stone | 4.0 | 0.10 | Gray (0.65, 0.65, 0.65) |
-| Metal | 5.0 | 0.15 | Silver (0.80, 0.80, 0.85) |
+| Wood | 2.0 | 0.20 | Warm brown |
+| Rope | 1.0 | 0.05 | Dark tan |
+| Plastic | 0.6 | 0.25 | Light blue |
+| Barrel | 6.0 | 0.30 | Dark brown |
+| Stone | 4.0 | 0.10 | Gray |
+| Metal | 5.0 | 0.15 | Silver |
 
-**Buoyancy Physics (per frame):**
+Profile applied in `_ready()` (mass, freeboard, per-item mesh color + soft emission).
 
-```gdscript
-func _physics_process(delta: float) -> void:
-    if freeze or is_hooked or collected:
-        return    # skip when rope is holding this piece
-    
-    var water_y := float(ocean.get_height(global_position))
-    
-    # Vertical: rest at water surface + freeboard
-    var rest_y := water_y + freeboard
-    var y_error := rest_y - global_position.y
-    linear_velocity.y += (buoyancy * y_error - BUOY_DAMPING * linear_velocity.y) * delta
-    linear_velocity.y = clamp(linear_velocity.y, -max_vertical_speed, max_vertical_speed)
-    
-    # Horizontal: current direction + small random drift
-    var target_velocity := dir * current_speed * _speed_variation + side * _side_drift
-    var k := 1.0 - exp(-3.0 * delta)
-    linear_velocity.x = lerpf(linear_velocity.x, target_velocity.x, k)
-    linear_velocity.z = lerpf(linear_velocity.z, target_velocity.z, k)
-    
-    # Gentle tumble
-    angular_velocity = Vector3(sin(t * 0.5) * 0.2, _rot_speed, cos(t * 0.4) * 0.2)
-```
-
-**How buoyancy works:**
-1. **Target Y** = ocean surface height + freeboard (how high the item floats)
-2. **Error** = target Y - current Y (positive means too low, negative means too high)
-3. **Spring force** = buoyancy × error (pushes toward target)
-4. **Damping** = -BUOY_DAMPING × velocity (prevents oscillation)
-5. **Result:** Item smoothly bobs to the correct water level, then gently follows waves
-
-**Collision layers:**
-- Layer 2 (debris): Pickup raycast can detect it
-- Mask 1 (structures): Physically collides with raft/player
-
-**Fade in/out:**
-- On spawn: alpha goes from 0 to 1 over 1.5 seconds
-- Before despawn: alpha goes from 1 to 0 over 1.5 seconds
-- Uses `StandardMaterial3D.albedo_color.a` for transparency
-
-### `debris_spawner.gd` — Continuous Spawning
+### Per-Frame Physics
 
 ```gdscript
-extends Node3D
+# Vertical buoyancy — rest at water surface, follow waves gently
+rest_y = water_y + freeboard
+linear_velocity.y += (buoyancy * (rest_y - y) - BUOY_DAMPING * linear_velocity.y) * delta
+linear_velocity.y = clamp(..., -max_vertical_speed, max_vertical_speed)
 
-@export var debris_scene: PackedScene
-@export var current_direction: Vector3 = Vector3(0, 0, 1)
-@export var current_speed: float = 1.2
-@export var spawn_width: float = 60.0       # lateral spread
-@export var upstream_distance: float = 80.0  # how far upstream to spawn
-@export var downstream_distance: float = 120.0 # how far before despawn
-@export var max_debris: int = 80
-@export var prewarm_count: int = 35          # spawn 35 at startup
+# Horizontal current — one dominant direction + small per-item drift
+target = dir * current_speed * variation + side * side_drift
+linear_velocity.x/z = lerpf(..., 1.0 - exp(-3.0 * delta))
 
-# Spawn timing: 0.2–0.5 seconds between spawns
-@export var spawn_interval_min: float = 0.2
-@export var spawn_interval_max: float = 0.5
+# Gentle tumble
+angular_velocity = (sin(t*0.5)*0.2, rot_speed, cos(t*0.4)*0.2)
 ```
 
-**Spawn flow:**
+- Skips all physics while `freeze` (hooked), `is_hooked`, or `collected`.
+- **Fade in** on spawn and **fade out** before despawn (1.5s alpha tween on the material).
 
-```
-_prewarm() → 35 debris spread from -80m to +60m along current
-                ↓
-每一 0.2–0.5 sec:
-    _cleanup() → fade out debris past +120m
-    _spawn_upstream() → new debris at -80m to -64m
-                ↓
-    Random position:
-        along current: -80m to -64m (upstream)
-        lateral: ±30m (spawn_width / 2)
-        jitter: ±5m
-                ↓
-    Random item from pool:
-        Wood ×6, Rope ×3, Plastic ×2, Barrel ×1, Stone ×2, Metal ×1
-                ↓
-    Current speed varies: 0.7× to 1.3× base speed
-```
+### Spawner (`debris_spawner.gd`)
 
-**Despawn logic:**
+| Parameter | Value |
+|---|---|
+| spawn_width | 60m |
+| upstream_distance | 80m |
+| downstream_distance | 120m |
+| max_debris | 80 |
+| prewarm_count | 35 |
+| spawn interval | 0.2–0.5s |
+| current_speed | 1.2 (per-item × 0.7–1.3) |
 
-```gdscript
-func _cleanup() -> void:
-    for d in _active:
-        var travelled: float = (d.global_position - d.travel_start).dot(_direction)
-        if travelled > downstream_distance and not d._is_fading_out:
-            d.start_fade_out()    # begin 1.5s fade
-        if d.is_fade_done():
-            d.queue_free()        # fully faded → remove
-```
+- `ITEM_POOL` weights: Wood×6, Rope×3, Plastic×2, Stone×2, Barrel×1, Metal×1.
+- Prewarms upstream so debris is visible from frame 1. New debris always spawns upstream; despawns (with fade) after travelling `downstream_distance` along the current.
 
 ---
 
 ## 11. Rope / Hook System
 
-**File:** `rope_system.gd` (483 lines)  
-**Node:** `RopeSystem` (Node3D, child of Player)
+**File:** `rope_system.gd` (~484 lines) · Node under Player. Fully blocks during build/edit mode (`_force_cancel`).
 
 ### State Machine
 
 ```
-         ┌──────────┐
-         │   IDLE   │ ← hold Q to charge, release to throw
-         └────┬─────┘
-              │ Q release
-              ↓
-         ┌──────────┐
-         │ THROWING │ ← hook flies along locked direction
-         └────┬─────┘
-              │ reached max distance / hit debris
-              ↓
-      ┌───────┴────────┐
-      │                │
-┌─────┴─────┐    ┌─────┴─────┐
-│  EXTENDED │    │  HOOKED   │ ← debris attached
-└─────┬─────┘    └─────┬─────┘
-      │                │
-      │ Q/F            │ Q/F
-      ↓                ↓
-┌──────────────────────────┐
-│         REELING          │ ← hook + debris move toward player
-└──────────┬───────────────┘
-           │ reached player
-           ↓
-┌──────────────────────────┐
-│        RETURNING         │ ← empty hook flies back
-└──────────┬───────────────┘
-           │ close enough
-           ↓
-         ┌──────────┐
-         │   IDLE   │
-         └──────────┘
-
-Cancel (right-click) from any active state → RETURNING
+IDLE -> THROWING -> EXTENDED -> REELING -> RETURNING -> IDLE
+                  \-> HOOKED -> REELING -/
+Cancel from any active state -> RETURNING
 ```
 
-### Exported Tuning Variables
+### Parameters
 
-```gdscript
-@export var max_hook_distance: float = 22.0   # max throw range (meters)
-@export var throw_speed: float = 22.0          # hook flight speed (m/s)
-@export var reel_speed: float = 12.0           # reel-in speed (m/s)
-@export var return_speed: float = 20.0         # empty return speed (m/s)
-@export var debris_hook_radius: float = 1.5    # how close hook must get to catch
-@export var collection_radius: float = 1.5     # how close to player to collect
-```
-
-### Key Variables (Immutable After Throw)
-
-```gdscript
-var _throw_direction: Vector3    # captured ONCE at throw moment
-var _throw_start: Vector3        # hand position at throw moment
-var _hook_world_pos: Vector3     # current hook position in world
-var _hook_travelled: float       # distance thrown so far
-var _hooked_debris: RigidBody3D  # debris attached to hook
-```
-
-### How Throwing Works
-
-```gdscript
-func _throw_hook() -> void:
-    var aim_point := _get_aim_point()       # camera raycast result
-    var hand := _hand_pos()                 # HookOrigin position
-    var to_aim := aim_point - hand
-    
-    # LOCK direction — NEVER recalculated after this
-    _throw_direction = (to_aim / aim_dist).normalized()
-    _throw_start = hand
-    _hook_world_pos = hand                  # hook starts at hand
-    
-    _state = State.THROWING
-```
-
-**Critical rule:** `_throw_direction` is set once and never changes. The hook travels along this fixed world-space vector regardless of where the player looks afterward.
-
-### How Reeling Works
-
-```gdscript
-func _handle_reeling(delta: float) -> void:
-    var hand := _hand_pos()
-    var to_hand := hand - _hook_world_pos
-    var dist := to_hand.length()
-    
-    if dist <= collection_radius:
-        _collect_debris()    # add to inventory
-        _start_return()      # hook returns
-        return
-    
-    var dir := to_hand.normalized()
-    _hook_world_pos += dir * reel_speed * delta  # smooth movement
-    
-    # Move hooked debris with hook
-    if _hooked_debris != null:
-        _hooked_debris.global_position = _hook_world_pos + Vector3(0, 0.3, 0)
-        _hooked_debris.linear_velocity = Vector3.ZERO
-```
-
-### Rope Visual
-
-The rope is a single `CylinderMesh` stretched from the player's hand to the hook:
-
-```gdscript
-func _update_rope_visual() -> void:
-	var from := _hand_pos()       # HookOrigin (follows player hand)
-	var to := _hook_world_pos     # hook position (world-locked)
-	var rope_len := from.distance_to(to)
-	
-	# Position at midpoint
-	_rope_mesh.global_position = (from + to) * 0.5
-	
-	# Orient Y axis along rope direction
-	var rope_dir := (to - from).normalized()
-	var arbitrary := Vector3.UP
-	if abs(rope_dir.dot(Vector3.UP)) > 0.9:
-		arbitrary = Vector3.FORWARD
-	var right := arbitrary.cross(rope_dir).normalized()
-	var perp := rope_dir.cross(right).normalized()
-	_rope_mesh.global_transform.basis = Basis(right, rope_dir, perp)
-	
-	# Stretch cylinder to match distance
-	var cyl: CylinderMesh = _rope_mesh.mesh
-	cyl.height = rope_len
-```
-
-**Why this looks correct:**  
-- The `CylinderMesh` extends along its local Y axis.
-- `Basis(right, rope_dir, perp)` maps Y to the rope direction.
-- The cylinder stretches from hand to hook — one continuous straight line.
-- When the player turns, `from` (hand) moves but `to` (hook) stays fixed → rope reorients naturally.
-
-### Hook Origin
-
-```gdscript
-func _update_hook_origin() -> void:
-	var forward := -player.global_transform.basis.z
-	var right := player.global_transform.basis.x
-	_hook_origin.global_position = player.global_position + right * 0.4 + forward * 0.3 + Vector3(0, 0.8, 0)
-```
-
-- **Right +0.4m:** Slightly to the right of the player center (dominant hand)
-- **Forward +0.3m:** Slightly in front of the body
-- **Up +0.8m:** Chest height
-- This position updates every frame, so the rope start point follows the player's hand naturally.
-
-### Debris Detection
-
-```gdscript
-func _check_debris() -> void:
-    for d in get_tree().get_nodes_in_group("debris"):
-        if d is RigidBody3D and is_instance_valid(d):
-            if d.get("collected") == true: continue
-            if d.global_position.distance_to(_hook_world_pos) <= debris_hook_radius:
-                _hook_debris(d)    # attach debris to hook
-                return
-```
-
-Distance-based detection (1.5m radius). No need for perfect aim — forgiving gameplay.
-
-### Water Surface Interaction
-
-```gdscript
-func _snap_hook_to_water() -> void:
-    var water_y := _get_ocean_y(_hook_world_pos)
-    if _hook_world_pos.y > water_y + 1.0:
-        _hook_world_pos.y = water_y + 0.2
-```
-
-When the hook reaches max distance, if it's more than 1m above the water, it snaps to 0.2m above the water surface. This prevents the hook from floating in the sky.
-
----
-
-## 12. Building System
-
-The building system lives entirely in `player.gd`. Here's the complete architecture:
-
-### Build Mode Flow
-
-```
-Press B
-    ↓
-_toggle_build() → build_mode = true
-    ↓
-_spawn_ghost() → instantiate selected scene as preview
-    ↓
-Every frame: _update_build_preview()
-    ↓
-┌────────────────────────────────────────────┐
-│ 1. Fire aim raycast (camera center)        │
-│ 2. Find buildable target at hit point      │
-│ 3. Calculate placement based on piece type │
-│ 4. If no target, search all sockets        │
-│ 5. Set ghost position + rotation           │
-│ 6. Check collision overlap                 │
-│ 7. Check structural support                │
-│ 8. Show GREEN (valid) or RED (invalid)     │
-└────────────────────────────────────────────┘
-    ↓
-Press E → _try_build()
-    ↓
-┌────────────────────────────────────────────┐
-│ 1. Check build_valid == true               │
-│ 2. Check Inventory.can_afford(recipe)       │
-│ 3. Inventory.craft(recipe)                  │
-│ 4. Instantiate final piece                  │
-│ 5. Copy ghost position + rotation          │
-│ 6. Add to "build_surface" group            │
-└────────────────────────────────────────────┘
-```
-
-### Foundation Placement Algorithm
-
-```gdscript
-func _calc_foundation_placement(target: Node3D, hit_pos: Vector3, normal: Vector3) -> Vector3:
-    # Case 1: Aiming at a WALL top → place as ceiling
-    if top_socket != null and normal.y > 0.3:
-        return Vector3(sp.x, sp.y + 0.15, sp.z)
-    
-    # Case 2: Aiming at a SIDE edge (horizontal normal)
-    if h_normal.length() > 0.3:
-        extend_dir = h_normal.normalized()    # use hit normal
-    
-    # Case 3: Aiming at TOP surface (normal is UP)
-    else:
-        extend_dir = camera_forward projected to XZ   # use camera direction
-    
-    # Apply rotation
-    rotated_dir = extend_dir.rotated(Vector3.UP, build_rotation)
-    
-    # Place center 2.0m away from target center in that direction
-    placement = target.global_position + rotated_dir * 2.0
-    placement.y = target.global_position.y
-    return placement
-```
-
-**Why this works:**  
-- The raft is 2×2m. Its center is at `target.global_position`.
-- The edge is 1.0m from center (half-size).
-- The new foundation center is placed 2.0m from the target center = 1.0m beyond the edge.
-- New foundation near edge = center - 1.0 = target edge. **Perfect alignment.**
-
-### Wall Placement
-
-```gdscript
-func _calc_wall_placement(target: Node3D, hit_pos: Vector3, normal: Vector3) -> Vector3:
-    # Find nearest socket on the foundation
-    best_socket = nearest_socket_to_aim
-    
-    # Wall sits at the socket position (at the foundation edge)
-    return Vector3(sp.x, sp.y + 1.25, sp.z)   # 1.25 = half wall height
-```
-
-- Wall center is at the foundation edge (socket position).
-- Wall height = 2.5m, half = 1.25m, so bottom is at foundation surface.
-
-### Structural Support Check
-
-```gdscript
-func _check_support(pos: Vector3, piece_name: String) -> bool:
-    # Foundation: must be within 1.5–2.5m of an existing structure (edge-to-edge)
-    # Wall: must be within 1.2m of a foundation center (directly above)
-    # Door: must be within 2.0m of a Wall
-    # Window: must be within 1.0m of a Wall
-```
-
-### Validation Pipeline
-
-```
-Position calculated
-    ↓
-Collision check: BoxShape3D at position, exclude player + ghost + all structures
-    ↓
-If collision found → INVALID
-    ↓
-Support check: must be connected to raft/foundation tree
-    ↓
-If no support → INVALID
-    ↓
-Both pass → VALID → GREEN preview
-```
-
-### Socket System
-
-Every buildable piece has `BuildSockets` (Node3D) with `Marker3D` children:
-
-```
-Foundation (2×2)
-├── Socket_North      (0, 0, 1)     ← edge center
-├── Socket_South      (0, 0, -1)
-├── Socket_East       (1, 0, 0)
-├── Socket_West       (-1, 0, 0)
-├── Socket_NorthEast  (0.707, 0, 0.707)  ← corner
-├── Socket_NorthWest  (-0.707, 0, 0.707)
-├── Socket_SouthEast  (0.707, 0, -0.707)
-└── Socket_SouthWest  (-0.707, 0, -0.707)
-
-Wall (2×2.5×0.2)
-├── Socket_Base       (0, -1.25, 0)   ← bottom center
-├── Socket_Top        (0, 1.25, 0)    ← top center (for ceiling)
-├── Socket_Left       (-1, 0, 0)      ← left edge
-└── Socket_Right      (1, 0, 0)       ← right edge
-
-Window (1.5×1.5)
-└── Socket_Center     (0, 0, 0)
-
-Door (1×2)
-├── Socket_Front      (0, 0, 0.1)
-└── Socket_Back       (0, 0, -0.1)
-```
-
-### Empty-Space Socket Search
-
-When the crosshair points at ocean/sky (no direct target), the system searches ALL build surfaces for nearby sockets:
-
-```gdscript
-func _find_nearest_valid_socket(aim: Vector3, piece_name: String) -> Vector3:
-    for surf in get_tree().get_nodes_in_group("build_surface"):
-        for socket in _get_build_sockets(surf):
-            var dist: float = aim.distance_to(socket.global_position)
-            if dist >= best_dist: continue
-            
-            # Calculate where piece would go from this socket
-            if piece_name == "Foundation":
-                # Offset = 1.0 (half piece size) in socket direction
-                candidate = socket_pos + Vector3(0, 0, 1)  # for Socket_North
-```
-
-**Important:** The offset is **1.0m** (half piece size), not 2.0m. The socket is already at the edge, so we only need to offset by the half-size to place the new center.
-
-### Edit Mode
-
-**Double-click E** on any placed building (NOT the raft):
-
-```gdscript
-func _start_edit(target: Node3D) -> void:
-    _editing = target
-    _edit_original_pos = target.global_position
-    _edit_original_rot = target.rotation
-	# Disable collision so it doesn't push physics
-	col.disabled = true
-	# Make blue/transparent
-	mat.albedo_color = Color(0.4, 0.8, 1.0, 0.6)
-```
-
-```gdscript
-func _update_edit_follow() -> void:
-	# Snap to 2m grid aligned with raft (raft at z=-3)
-	target_pos.x = snapped(target_pos.x, 2.0)
-	target_pos.z = snapped(target_pos.z + 3.0, 2.0) - 3.0
-	target_pos.y = _edit_original_pos.y
-	_editing.global_position = target_pos
-```
-
-```gdscript
-func _confirm_edit() -> void:
-	# Check overlap at new position
-	# If clear → keep new position
-	# If overlap → snap back to original
-	col.disabled = false
-	_apply_building_color(_editing)
-	_editing = null
-```
-
-```gdscript
-func _remove_editing() -> void:
-	# Refund resources
-	for recipe_name in RECIPE_REFUND:
-		if building_name.begins_with(recipe_name):
-			for item in refund:
-				Inventory.add(item, refund[item])
-	_editing.queue_free()
-```
-
-### Refund Table
-
-| Building | Refund |
+| Parameter | Value |
 |---|---|
-| Foundation | 5 Wood |
-| Wall | 8 Wood + 1 Rope |
-| Stairs | 6 Wood + 1 Rope |
-| Door | 4 Wood + 1 Rope |
-| Window | 3 Wood + 1 Plastic |
+| max_hook_distance | 22m |
+| throw_speed | 22 m/s |
+| reel_speed | 12 m/s |
+| return_speed | 20 m/s |
+| charge_speed | 30 m/s |
+| debris_hook_radius | 1.5m |
+| collection_radius | 1.5m |
+
+### Flow
+
+1. **Charge:** hold Q — a charge bar fills from 5m to `max_hook_distance`. Release Q to throw.
+2. **Throw:** aim point from a dedicated RayCast3D (mask 3, 22m, player excluded). Direction is **locked once** at throw and never recalculated. `_throw_dist = min(charge_distance, max_hook_distance)`.
+3. **Flight:** hook steps along the locked direction at 22 m/s, checking debris within 1.5m each frame. On arrival, snaps to water (`water_y + 0.2` if above). Hitting debris → HOOKED; otherwise → EXTENDED.
+4. **HOOKED:** debris is frozen (`freeze_mode = STATIC`, `is_hooked = true`). Q or F starts reeling; right-click releases.
+5. **REEL:** hook moves toward the hand at 12 m/s; hooked debris is dragged along (+0.3m Y) with zeroed velocity. Within 1.5m → collected (`Inventory.add(item_name)`, debris freed) and hook returns.
+6. **RETURN:** hook flies back at 20 m/s; under 0.5m → IDLE.
+
+Visuals: gold sphere hook, tan `CylinderMesh` rope (radius 0.025) oriented `Basis(right, rope_dir, perp)` from hand to hook, and a screen-space charge bar. Hook origin rides at `player.pos + right*0.4 + forward*0.3 + up*0.8`.
 
 ---
 
-## 13. Inventory System
+## 12. Inventory System
 
-**File:** `inventory.gd`  
-**Autoload Name:** `Inventory`
+`inventory.gd` — autoload `Inventory`. Items: `Wood, Rope, Plastic, Barrel, Stone, Metal`.
 
 ```gdscript
-extends Node
-
-var items := {"Wood": 0, "Rope": 0, "Plastic": 0, "Barrel": 0, "Stone": 0, "Metal": 0}
-var infinite: bool = false   # debug: bypass all costs
-
-const RECIPES := {
-	"Foundation":      {"Wood": 5},
-	"Wall":            {"Wood": 8, "Rope": 1},
-	"Stairs":          {"Wood": 6, "Rope": 1},
-	"Door":            {"Wood": 4, "Rope": 1},
-	"Window":          {"Wood": 3, "Plastic": 1},
-	"Bonfire":         {"Wood": 8, "Rope": 2},
-	"Raft Extension":  {"Wood": 10, "Plastic": 2},
-}
-
-func add(item: String, amount: int = 1) -> void:
-	items[item] = items.get(item, 0) + amount
-
-func can_afford(recipe: String) -> bool:
-	if infinite: return true
-	for item in RECIPES[recipe]:
-		if items.get(item, 0) < RECIPES[recipe][item]:
-			return false
-	return true
-
-func craft(recipe: String) -> bool:
-	if not can_afford(recipe): return false
-	if infinite: return true
-	for item in RECIPES[recipe]:
-		remove(item, RECIPES[recipe][item])
-	return true
+func add(item, amount) / has(item, amount) / remove(item, amount)
+func can_afford(recipe) -> bool   # infinite => always true
+func craft(recipe) -> bool        # re-checks affordability; never lets counts go negative
 ```
+
+See [§4](#4-autoloads) for the recipe table.
 
 ---
 
-## 14. Door System
+## 13. Door System
 
-### `door.gd`
+`door.gd` on `AnimatableBody3D`:
 
 ```gdscript
-extends AnimatableBody3D
-class_name Door
-
-@export var open_angle: float = 90.0
-@export var swing_speed: float = 4.0
-var is_open: bool = false
-var _target_rotation: float = 0.0
-
-func toggle() -> void:
-	is_open = !is_open
-	_target_rotation = deg_to_rad(open_angle) if is_open else 0.0
-
-func _physics_process(delta: float) -> void:
-	rotation.y = lerp_angle(rotation.y, _target_rotation, delta * swing_speed)
+func toggle() -> void:  # called via "toggle" in collider check on E
+    is_open = !is_open
+    _target_rotation = deg_to_rad(open_angle) if is_open else 0.0
+# _physics_process: rotation.y = lerp_angle(rotation.y, _target_rotation, delta * swing_speed)
 ```
 
-**Interaction:** Press E while aiming at the door → calls `toggle()` → door swings open/closed with smooth lerp.
-
-### `door.tscn` Scene Tree
-
-```
-Door (AnimatableBody3D)            # script: door.gd
-├── CollisionShape3D               # BoxShape3D (1.0×2.0×0.12) — thin door slab
-├── FrameLeft (MeshInstance3D)     # BoxMesh (0.12×2.0×0.12) — dark frame
-├── FrameRight (MeshInstance3D)    # same
-├── FrameTop (MeshInstance3D)      # BoxMesh (1.0×0.12×0.12) — header
-├── Panel (MeshInstance3D)         # BoxMesh (0.76×1.7×0.06) — lighter door panel
-├── Handle (MeshInstance3D)        # SphereMesh (r=0.035) — gold knob
-├── Hinge1 (MeshInstance3D)        # BoxMesh (0.08×0.04×0.02) — metal hinge
-├── Hinge2 (MeshInstance3D)        # second hinge
-├── IntractZone (Area3D)           # detection zone
-│   └── CollisionShape3D           # BoxShape3D (1.8×2.5×1.8) — large trigger
-└── BuildSockets (Node3D)
-	├── Socket_Front (0, 0, 0.1)
-	└── Socket_Back (0, 0, -0.1)
-```
+- `open_angle = 90°`, `swing_speed = 4.0`.
+- Node config: `collision_layer = 1`, `collision_mask = 5` (bits 1+3). Extra `IntractZone` Area3D (1.8×2.5×1.8) for interaction detection.
+- Meshes: frame (left/right/top), panel, handle, 2 hinges.
 
 ---
 
-## 15. Building Scenes
+## 14. Building Scenes
 
-### Foundation (`foundation.tscn`)
+All build-piece roots are now **`AnimatableBody3D`** except Foundation (`StaticBody3D`). Every socket is a `BuildSocket` (Marker3D). `SocketType` enum: `FOUNDATION_EDGE(0), FOUNDATION_TOP(1), WALL_BASE(2), WALL_TOP(3), WALL_SIDE(4), DOOR_SLOT(5), WINDOW_SLOT(6), PILLAR_TOP(7)`. Sockets use `accepts` (explicit allow-list) for compatibility, not the enum.
 
-```
-Foundation (StaticBody3D)
-├── CollisionShape3D               # BoxShape3D (2×0.3×2)
-├── MeshInstance3D                 # BoxMesh (2×0.3×2) — brown material
-└── BuildSockets (Node3D)          # 8 sockets: N/S/E/W/NE/NW/SE/SW
-```
-
-**Size:** 2×0.3×2 meters — a flat platform that tiles perfectly.
-
-### Wall (`wall.tscn`)
+### Raft (`raft.tscn`) — AnimatableBody3D, 2x0.3x2
 
 ```
-Wall (StaticBody3D)
-├── CollisionShape3D               # BoxShape3D (2×2.5×0.2)
-├── MeshInstance3D                 # BoxMesh (2×2.5×0.2) — darker brown
-└── BuildSockets (Node3D)
-	├── Socket_Base (0, -1.25, 0)  # bottom center
-	├── Socket_Top (0, 1.25, 0)    # top center
-	├── Socket_Left (-1, 0, 0)     # left edge
-	└── Socket_Right (1, 0, 0)     # right edge
+BuildSockets/
+  Socket_North/South/East/West        FOUNDATION_EDGE @ y=0.15, accepts [Foundation, Wall, Stairs]
+  Socket_NorthEast/NorthWest/SouthEast/SouthWest  FOUNDATION_EDGE @ (±0.707, 0.15, ±0.707), accepts [Foundation]
+BuiltPieces/                          (runtime container)
 ```
 
-**Size:** 2×2.5×0.2 meters — tall vertical panel.
-
-### Window (`window.tscn`)
+### Foundation (`foundation.tscn`) — StaticBody3D, 2x0.3x2
 
 ```
-Window (StaticBody3D)
-├── CollisionShape3D               # BoxShape3D (1.5×1.5×0.1)
-├── MeshInstance3D                 # PlaneMesh (1.5×1.5) — transparent blue
-└── BuildSockets (Node3D)
-	└── Socket_Center (0, 0, 0)
+CollisionShape3D (Box 2x0.3x2) + MeshInstance3D
+BuildSockets/
+  Socket_North/South/East/West        FOUNDATION_EDGE @ y=0.15, accepts [Foundation, Wall, Stairs]
+  Socket_Top                          FOUNDATION_TOP @ (0, 0.15, 0), accepts [Wall, Door, Window]
+SampleMarker                          (buoyancy sample point, registered with raft)
 ```
 
-**Material:** Transparent glass (alpha 0.35, metallic, low roughness).
-
-### Stairs (`stairs.tscn`)
+### Wall (`wall.tscn`) — AnimatableBody3D, 2x2.5x0.2
 
 ```
-Stairs (StaticBody3D)              # Rotated 30° via transform
-├── CollisionShape3D               # BoxShape3D (2×0.2×2.8) — covers all steps
-├── Step01 (MeshInstance3D)        # BoxMesh (2×0.2×0.4)
-├── Step02                         # offset (0, 0.2, 0.4)
-├── Step03                         # offset (0, 0.4, 0.8)
-├── Step04                         # offset (0, 0.6, 1.2)
-└── Step05                         # offset (0, 0.8, 1.6)
+CollisionShape3D (Box 2x2.5x0.2) + MeshInstance3D
+BuildSockets/
+  Socket_Base    (0, -1.25, 0)  WALL_BASE  accepts [Foundation, Wall, Door, Window]
+  Socket_Top     (0,  1.25, 0)  WALL_TOP   accepts [Wall, Foundation, Roof]
+  Socket_Middle  (0,  0,    0)  WALL_SIDE  accepts [Door, Window]
+  Socket_North/South/East/West  WALL_SIDE  accepts [Wall]
+SampleMarker
 ```
 
-**5 steps**, each 0.2m tall and 0.4m deep, at 30° incline.
+### Roof (`roof.tscn`) — AnimatableBody3D, 2x0.15x2
+
+```
+CollisionShape3D (Box 2x0.15x2) + MeshInstance3D
+BuildSockets/
+  Socket_Base    (0, -0.075, 0)  WALL_TOP (type 3)  accepts [Wall]
+  Socket_Top     (0,  0.075, 0)  WALL_TOP          accepts [Roof]
+  Socket_North/South/East/West   FOUNDATION_EDGE   accepts [Foundation]
+SampleMarker
+```
+
+### Stairs (`stairs.tscn`) — AnimatableBody3D, 5 steps
+
+```
+CollisionShape3D (Box 2x0.2x2) + Step01..Step05 (Box 2x0.2x0.4 rising: (0,0.2i,0.4i))
+BuildSockets/
+  Socket_Base (0, -0.1, 0.6)  FOUNDATION_EDGE  accepts [Foundation]
+  Socket_Top  (0,  0.9, 1.6)  FOUNDATION_EDGE  accepts [Foundation]
+  Socket_North/South/East/West                 accepts [Foundation]
+SampleMarker
+```
+
+### Door (`door.tscn`) — AnimatableBody3D, collision 1.0x2.0x0.12
+
+```
+CollisionShape3D + FrameLeft/Right/Top + Panel + Handle + Hinge1/Hinge2
+IntractZone (Area3D, Box 1.8x2.5x1.8)
+BuildSockets/
+  Socket_Base (0, -1, 0)  DOOR_SLOT  accepts [Wall, Foundation]
+  Socket_Top  (0,  1, 0)  DOOR_SLOT  accepts [Wall, Foundation]
+```
+
+### Window (`window.tscn`) — AnimatableBody3D, PlaneMesh 1.5x1.5 (transparent blue)
+
+```
+CollisionShape3D (Box 1.5x1.5x0.1) + MeshInstance3D
+BuildSockets/
+  Socket_Center  WINDOW_SLOT  accepts [Wall, Foundation]
+```
+
+### Placeholders
+
+`raft_extension.tscn` (StaticBody3D, plain 2x0.3x2 box, no sockets/script) and `bonfire.tscn` (Node3D root with a CollisionShape3D but no physics body) — see [§23](#23-placeholder-scenes).
 
 ---
 
-## 16. Physics & Collision Layers
+## 15. Physics & Collision Layers
 
-### Layer Assignments
-
-| Bit | Layer Name | Used By |
+| Bit | Layer | Used By |
 |---|---|---|
-| 1 | Structures | Raft, foundations, walls (StaticBody3D/AnimatableBody3D) |
-| 2 | Debris | Floating debris (RigidBody3D) |
-| 3 | Player | Player CharacterBody3D |
+| 1 | Structures | Raft, foundations, walls, roofs, stairs, doors, windows |
+| 2 | Debris | Floating debris (`collision_layer = 2`, `collision_mask = 1`) |
 
-### Raycast Masks
+- Player aim raycast: mask 3 (structures + debris), excludes player RID.
+- Rope aim RayCast3D: mask 3, player added as exception.
+- All build validation rays/shape queries: **mask 1** (structures only) — debris never blocks placement.
+- Door node: `collision_layer = 1`, `collision_mask = 5` (bits 1+3; bit 3 currently unused).
 
-| Raycast | Mask | Purpose |
+---
+
+## 16. Game Loop & Frame Flow
+
+### Physics Tick (120 Hz)
+
+```
+Player._physics_process:
+  _update_aim()                      # camera ray, mask 3, 60m
+  -> land or swim movement
+  -> move_and_slide()
+  -> _update_swimming_state()        # enter/exit water, clamp velocity.y on exit
+
+Raft._physics_process:
+  Sample 4 corners + extra sample points -> average -> lerp global y
+
+Debris._physics_process:
+  Buoyancy + current + tumble + fade (skipped when frozen/hooked/collected)
+
+RopeSystem._physics_process:
+  (skips while build/edit active)
+  Update hook origin -> state machine -> hook/rope visuals -> charge bar
+```
+
+### Render Frame
+
+```
+Player._process:
+  _update_hud()
+  PRIORITY 1 — EDIT MODE (if _editing):
+    P = confirm, X = remove+refund, B = cancel
+    R = rotate (90°), then follow preview every frame
+  E double-click detection (works in AND out of build mode)
+  PRIORITY 2 — BUILD MODE:
+    B = toggle, Tab = cycle piece, P = place, R = rotate
+    _update_build_preview() every frame
+  PRIORITY 3 — NORMAL:
+    _handle_pickup() (E) + crosshair state (ITEM when aiming debris/door)
+```
+
+### Build Preview Flow
+
+```
+_update_build_preview():
+  _ensure_ghost_materials()
+  _resolve_placement(piece_name, aim_point)
+    Foundation: structural build-plane ray -> grid cell -> candidate scoring
+    Wall:       actual ray hit -> edge/wall-to-wall/socket -> footprint 3x3
+    Roof:       Socket_Top of Wall (3 search methods)
+    Door/Window/Other: best socket + reciprocal + gap check
+  _apply_ghost_material(valid)        # BEFORE visibility (never flashes wrong color)
+  valid  -> ghost.global_transform = solved, visible (GREEN)
+  invalid-> fallback transform (per-piece), visible (RED), diag reason set
+```
+
+---
+
+## 17. State Machines
+
+### Build Mode
+
+| State | Input | Next |
 |---|---|---|
-| Player `_update_aim()` | 3 (bits 1+2) | Detect structures + debris, exclude self |
-| RopeSystem `_aim_ray` | 3 (bits 1+2) | Hook aim — same targets |
-
-### Physics Engine
-
-```ini
-[physics]
-common/physics_ticks_per_second=120    # high tick rate for smooth physics
-3d/physics_engine="Jolt Physics"       # Jolt for accurate collision
-```
-
----
-
-## 17. Complete Code — All Scripts
-
-### `inventory.gd` (Autoload)
-
-```gdscript
-extends Node
-
-var items := {"Wood": 0, "Rope": 0, "Plastic": 0, "Barrel": 0, "Stone": 0, "Metal": 0}
-var infinite: bool = false
-
-const RECIPES := {
-	"Foundation":      {"Wood": 5},
-	"Wall":            {"Wood": 8, "Rope": 1},
-	"Stairs":          {"Wood": 6, "Rope": 1},
-	"Door":            {"Wood": 4, "Rope": 1},
-	"Window":          {"Wood": 3, "Plastic": 1},
-	"Bonfire":         {"Wood": 8, "Rope": 2},
-	"Raft Extension":  {"Wood": 10, "Plastic": 2},
-}
-
-func add(item: String, amount: int = 1) -> void:
-	items[item] = items.get(item, 0) + amount
-	print("Inventory:", items)
-
-func has(item: String, amount: int) -> bool:
-	return items.get(item, 0) >= amount
-
-func remove(item: String, amount: int) -> void:
-	items[item] = items.get(item, 0) - amount
-
-func can_afford(recipe: String) -> bool:
-	if infinite: return true
-	if not RECIPES.has(recipe): return false
-	for item in RECIPES[recipe]:
-		if items.get(item, 0) < RECIPES[recipe][item]:
-			return false
-	return true
-
-func craft(recipe: String) -> bool:
-	if not RECIPES.has(recipe): return false
-	if not can_afford(recipe): return false
-	if infinite: return true
-	for item in RECIPES[recipe]:
-		remove(item, RECIPES[recipe][item])
-	return true
-```
-
-### `ocean.gd`
-
-```gdscript
-extends MeshInstance3D
-class_name Ocean
-
-@export var wave_height := 0.4
-@export var wave_speed := 1.2
-var _time := 0.0
-
-func _ready() -> void:
-	add_to_group("ocean")
-
-func _process(delta: float) -> void:
-	_time += delta
-
-func get_height(world_pos: Vector3) -> float:
-	var h := sin(world_pos.x * 0.4 + _time * wave_speed) \
-		+ sin(world_pos.z * 0.3 + _time * wave_speed * 0.8) \
-		+ 0.5 * sin((world_pos.x + world_pos.z) * 0.7 + _time * 1.7)
-	return global_position.y + h * wave_height * 0.33
-```
-
-### `raft.gd`
-
-```gdscript
-extends AnimatableBody3D
-
-@export var float_height: float = 0.6
-@export var follow_speed: float = 4.0
-
-var ocean: Ocean = null
-var _markers: Array = []
-
-func _ready() -> void:
-	add_to_group("build_surface")
-	_markers = [
-		get_node_or_null("F1"),
-		get_node_or_null("F2"),
-		get_node_or_null("F3"),
-		get_node_or_null("F4"),
-	]
-	rotation = Vector3.ZERO
-
-func _get_ocean() -> Ocean:
-	if ocean == null or not is_instance_valid(ocean):
-		ocean = get_tree().get_first_node_in_group("ocean")
-		if ocean == null:
-			ocean = get_node_or_null("%Ocean")
-	return ocean
-
-func _physics_process(delta: float) -> void:
-	var oc := _get_ocean()
-	if oc == null: return
-	var avg_height: float = 0.0
-	var count: int = 0
-	for m in _markers:
-		if m != null:
-			avg_height += float(oc.get_height(m.global_position))
-			count += 1
-	if count > 0:
-		avg_height /= float(count)
-	var target_y: float = avg_height + float_height
-	global_position.y = lerpf(
-		global_position.y, target_y,
-		1.0 - exp(-follow_speed * delta)
-	)
-```
-
-### `debris.gd`
-
-```gdscript
-extends RigidBody3D
-class_name Debris
-
-@export var item_name := "Wood"
-@export var current_direction: Vector3 = Vector3(0, 0, 1)
-@export var current_speed: float = 1.2
-@export var freeboard: float = 0.15
-@export var buoyancy: float = 8.0
-@export var max_vertical_speed: float = 2.0
-
-var travel_start: Vector3 = Vector3.ZERO
-var collected: bool = false
-var is_hooked: bool = false
-var mass_kg: float = 2.0
-var ocean: Ocean = null
-var _wander_seed: float = 0.0
-var _side_drift: float = 0.0
-var _speed_variation: float = 1.0
-var _rot_speed: float = 0.0
-var _fade_timer: float = 0.0
-var _fade_duration: float = 1.5
-var _is_fading_in: bool = true
-var _is_fading_out: bool = false
-var _fade_material: StandardMaterial3D = null
-
-const BUOY_DAMPING: float = 3.0
-
-const ITEM_PROFILES := {
-	"Wood":    {"mass": 2.0, "freeboard": 0.20, "color": Color(0.85, 0.65, 0.35)},
-	"Rope":    {"mass": 1.0, "freeboard": 0.05, "color": Color(0.75, 0.60, 0.35)},
-	"Plastic": {"mass": 0.6, "freeboard": 0.25, "color": Color(0.3, 0.7, 1.0)},
-	"Barrel":  {"mass": 6.0, "freeboard": 0.30, "color": Color(0.70, 0.45, 0.20)},
-	"Stone":   {"mass": 4.0, "freeboard": 0.10, "color": Color(0.65, 0.65, 0.65)},
-	"Metal":   {"mass": 5.0, "freeboard": 0.15, "color": Color(0.80, 0.80, 0.85)},
-}
-
-func _ready() -> void:
-	add_to_group("debris")
-	ocean = get_tree().get_first_node_in_group("ocean")
-	if ocean == null:
-		ocean = get_node_or_null("%Ocean")
-	_wander_seed = randf() * 1000.0
-	_side_drift = randf_range(-0.3, 0.3)
-	_speed_variation = randf_range(0.9, 1.0)
-	_rot_speed = randf_range(-1.0, 1.0)
-	_apply_profile()
-	mass = mass_kg
-	linear_damp = 2.5
-	angular_damp = 3.0
-	gravity_scale = 0.0
-	collision_layer = 2
-	collision_mask = 1
-	if ocean != null:
-		global_position.y = float(ocean.get_height(global_position)) + freeboard
-
-func start_fade_out() -> void:
-	_is_fading_out = true
-	_fade_timer = 0.0
-
-func is_fade_done() -> bool:
-	return _is_fading_out and _fade_timer >= _fade_duration
-
-func _apply_profile() -> void:
-	if ITEM_PROFILES.has(item_name):
-		var prof = ITEM_PROFILES[item_name]
-		mass_kg = prof["mass"]
-		freeboard = prof["freeboard"]
-		var mesh_inst := get_node_or_null("MeshInstance3D")
-		if mesh_inst and mesh_inst.get_surface_override_material(0) == null:
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = prof["color"]
-			mat.emission_enabled = true
-			mat.emission = prof["color"] * 0.3
-			mat.emission_energy_multiplier = 0.4
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.albedo_color.a = 0.0
-			mesh_inst.set_surface_override_material(0, mat)
-			_fade_material = mat
-
-func _physics_process(delta: float) -> void:
-	if freeze or is_hooked or collected: return
-	if ocean == null: return
-	var water_y: float = float(ocean.get_height(global_position))
-	var rest_y: float = water_y + freeboard
-	var y_error: float = rest_y - global_position.y
-	linear_velocity.y += (buoyancy * y_error - BUOY_DAMPING * linear_velocity.y) * delta
-	linear_velocity.y = clamp(linear_velocity.y, -max_vertical_speed, max_vertical_speed)
-	var dir: Vector3 = Vector3(current_direction.x, 0.0, current_direction.z).normalized()
-	var side: Vector3 = Vector3(-dir.z, 0.0, dir.x).normalized()
-	var target_velocity: Vector3 = dir * current_speed * _speed_variation + side * _side_drift
-	var k: float = 1.0 - exp(-3.0 * delta)
-	linear_velocity.x = lerpf(linear_velocity.x, target_velocity.x, k)
-	linear_velocity.z = lerpf(linear_velocity.z, target_velocity.z, k)
-	var t: float = Time.get_ticks_msec() / 1000.0 + _wander_seed
-	angular_velocity = Vector3(sin(t * 0.5) * 0.2, _rot_speed, cos(t * 0.4) * 0.2)
-	if _is_fading_in and _fade_material != null:
-		_fade_timer += delta
-		var alpha: float = clampf(_fade_timer / _fade_duration, 0.0, 1.0)
-		_fade_material.albedo_color.a = alpha
-		if alpha >= 1.0:
-			_is_fading_in = false
-	if _is_fading_out and _fade_material != null:
-		_fade_timer += delta
-		var alpha: float = clampf(1.0 - _fade_timer / _fade_duration, 0.0, 1.0)
-		_fade_material.albedo_color.a = alpha
-```
-
-### `debris_spawner.gd`
-
-```gdscript
-extends Node3D
-
-@export var debris_scene: PackedScene
-@export var current_direction: Vector3 = Vector3(0, 0, 1)
-@export var current_speed: float = 1.2
-@export var spawn_width: float = 60.0
-@export var upstream_distance: float = 80.0
-@export var downstream_distance: float = 120.0
-@export var max_debris: int = 80
-@export var prewarm_count: int = 35
-@export var spawn_interval_min: float = 0.2
-@export var spawn_interval_max: float = 0.5
-
-var _timer: float = 0.0
-var _next_interval: float = 0.0
-var _active: Array = []
-var player: Node3D
-var _direction: Vector3 = Vector3.ZERO
-var _side: Vector3 = Vector3.ZERO
-
-const ITEM_POOL := [
-	"Wood","Wood","Wood","Wood","Wood","Wood",
-	"Rope","Rope","Rope",
-	"Plastic","Plastic",
-	"Barrel",
-	"Stone","Stone",
-	"Metal",
-]
-
-func _ready() -> void:
-	player = get_tree().get_first_node_in_group("player")
-	_direction = Vector3(current_direction.x, 0.0, current_direction.z).normalized()
-	if _direction.length() < 0.001:
-		_direction = Vector3(0, 0, 1)
-	_side = Vector3(-_direction.z, 0.0, _direction.x).normalized()
-	_next_interval = randf_range(spawn_interval_min, spawn_interval_max)
-	_prewarm()
-
-func _get_player() -> Node3D:
-	if player == null or not is_instance_valid(player):
-		player = get_tree().get_first_node_in_group("player")
-	return player
-
-func _process(delta: float) -> void:
-	_timer += delta
-	if _timer >= _next_interval:
-		_timer = 0.0
-		_next_interval = randf_range(spawn_interval_min, spawn_interval_max)
-		_cleanup()
-		if _active.size() < max_debris:
-			_spawn_upstream()
-
-func _prewarm() -> void:
-	for i in prewarm_count:
-		var dist := randf_range(-upstream_distance, downstream_distance * 0.5)
-		_spawn_at(dist)
-
-func _spawn_upstream() -> void:
-	_spawn_at(-randf_range(upstream_distance * 0.8, upstream_distance))
-
-func _spawn_at(along_t: float) -> void:
-	if not debris_scene: return
-	var d = debris_scene.instantiate()
-	var p := _get_player()
-	var origin := p.global_position if p != null else Vector3.ZERO
-	var lateral := randf_range(-spawn_width * 0.5, spawn_width * 0.5)
-	var jitter := randf_range(-5.0, 5.0)
-	var spawn_point := origin + _direction * (along_t + jitter) + _side * lateral
-	d.item_name = ITEM_POOL.pick_random()
-	d.current_direction = _direction
-	d.current_speed = current_speed * randf_range(0.7, 1.3)
-	d.travel_start = spawn_point
-	d.rotation = Vector3(randf_range(-0.3, 0.3), randf() * TAU, randf_range(-0.3, 0.3))
-	d.position = spawn_point
-	d.position.y = 0.0
-	add_child(d)
-	_active.append(d)
-
-func _cleanup() -> void:
-	for i in range(_active.size() - 1, -1, -1):
-		var d = _active[i]
-		if not is_instance_valid(d):
-			_active.remove_at(i)
-			continue
-		if d.freeze: continue
-		var travelled: float = (Vector3(d.global_position) - Vector3(d.travel_start)).dot(_direction)
-		if travelled > downstream_distance and not d._is_fading_out:
-			d.start_fade_out()
-		if d.is_fade_done():
-			d.queue_free()
-			_active.remove_at(i)
-```
-
-### `crosshair.gd`
-
-```gdscript
-extends Control
-
-enum State { NONE, ITEM, BUILD }
-
-@export var crosshair_size: float = 24.0
-@export var line_width: float = 3.0
-@export var aim_vertical_offset: float = 0.0
-@export var color_idle: Color = Color(1.0, 1.0, 1.0, 0.85)
-@export var color_item: Color = Color(0.4, 1.0, 0.4, 0.95)
-@export var color_build: Color = Color(0.4, 0.8, 1.0, 0.95)
-
-var state: int = State.NONE
-
-func _ready() -> void:
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	custom_minimum_size = Vector2(crosshair_size, crosshair_size)
-	anchors_preset = Control.PRESET_TOP_LEFT
-	set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	get_viewport().size_changed.connect(_position_reticle)
-	_position_reticle()
-
-func _process(_delta: float) -> void:
-	_position_reticle()
-
-func set_state(value: int) -> void:
-	state = value
-	queue_redraw()
-
-func _position_reticle() -> void:
-	var vp := get_viewport_rect().size
-	var half := custom_minimum_size * 0.5
-	position = Vector2(vp.x * 0.5 - half.x, vp.y * 0.5 + aim_vertical_offset - half.y)
-
-func _draw() -> void:
-	var col: Color = color_idle
-	if state == State.ITEM: col = color_item
-	elif state == State.BUILD: col = color_build
-	var r: float = crosshair_size * 0.5
-	var radius: float = max(r - line_width * 0.5, 0.5)
-	draw_arc(Vector2(r, r), radius, 0.0, TAU, 32, col, line_width, true)
-```
-
-### `door.gd`
-
-```gdscript
-extends AnimatableBody3D
-class_name Door
-
-@export var open_angle: float = 90.0
-@export var swing_speed: float = 4.0
-var is_open: bool = false
-var _target_rotation: float = 0.0
-
-func toggle() -> void:
-	is_open = !is_open
-	_target_rotation = deg_to_rad(open_angle) if is_open else 0.0
-
-func _physics_process(delta: float) -> void:
-	rotation.y = lerp_angle(rotation.y, _target_rotation, delta * swing_speed)
-```
-
-### `rope_system.gd`
-
-*(Full code: 483 lines — see Section 11 for complete breakdown with all state handlers, throw logic, reel logic, debris detection, rope visual, and charge bar UI.)*
-
-### `player.gd`
-
-*(Full code: 980 lines — see Sections 6 and 12 for complete breakdown with movement, swimming, aim, building, editing, and HUD.)*
-
----
-
-## 18. Complete Code — All Scenes
-
-### `main.tscn` Key Properties
-
-```
-Main (Node3D)
-├── DirectionalLight3D
-├── WorldEnvironment
-├── Ocean (MeshInstance3D) [script: ocean.gd]
-├── Raft (AnimatableBody3D) [script: raft.gd] at position (0, 1.0, -3)
-│   ├── CollisionShape3D: BoxShape3D(2, 0.3, 2)
-│   ├── MeshInstance3D: BoxMesh(2, 0.3, 2)
-│   ├── F1–F4: Marker3D corners
-│   └── BuildSockets: 8 edge sockets
-├── Player (CharacterBody3D) [script: player.gd]
-│   ├── CollisionShape3D: CapsuleShape3D
-│   ├── MeshInstance3D: visible=false (first-person)
-│   ├── CamPivot
-│   │   └── SpringArm3D(length=0.0)
-│   │       └── Camera3D(offset=0,0.6,0)
-│   ├── RopeSystem (Node3D) [script: rope_system.gd]
-│   └── CanvasLayer
-│       ├── Crosshair [script: crosshair.gd]
-│       └── InventoryHUD (Label)
-└── DebrisSpawner (Node3D) [script: debris_spawner.gd]
-```
-
----
-
-## 19. Game Loop & Frame Flow
-
-### Every Physics Tick (120 Hz)
-
-```
-Player._physics_process(delta)
-├── _update_aim()                          # Fire raycast from camera center
-├── Get ocean height at player position
-├── Read WASD input → calculate direction
-├── if is_swimming:
-│   └── _update_swimming(delta)
-│       ├── Space = swim up / water jump
-│       ├── C = swim down
-│       ├── No input = decelerate
-│       └── Near surface = buoyancy
-│   else:
-│   └── _update_land(delta)
-│       ├── WASD = walk/sprint
-│       ├── Space = jump
-│       └── C = dive
-├── move_and_slide()                       # CharacterBody3D physics
-└── _update_swimming_state()               # Check water entry/exit
-
-Raft._physics_process(delta)
-├── Sample wave height at 4 corners
-├── Average them
-├── Calculate target_y = avg + float_height
-└── Smoothly lerp to target_y
-
-RopeSystem._physics_process(delta)
-├── _update_hook_origin()                  # Follow player hand
-├── match _state:
-│   ├── IDLE: handle Q charge/release
-│   ├── THROWING: move hook along locked direction
-│   ├── EXTENDED: wait for Q/F/reel or cancel
-│   ├── HOOKED: wait for reel input
-│   ├── REELING: move hook toward player
-│   └── RETURNING: empty hook returns
-├── _update_hook_visual()                  # Position hook mesh
-├── _update_rope_visual()                  # Stretch rope mesh
-└── _update_charge_bar_ui()               # Show charge bar
-
-Debris._physics_process(delta)             # Each debris instance
-├── if frozen/hooked/collected: skip
-├── Calculate buoyancy force toward water surface
-├── Apply horizontal current + drift
-├── Gentle angular tumble
-└── Fade in/out alpha
-
-DebrisSpawner._process(delta)              # Node3D timer
-├── _timer += delta
-├── if timer >= next_interval:
-│   ├── _cleanup()                         # Fade+remove past debris
-│   └── _spawn_upstream()                  # New debris at -80m
-```
-
-### Every Render Frame
-
-```
-Player._process(delta)
-├── _update_hud()                          # Update label text
-├── Handle build mode input (B, Tab, R)
-├── Handle edit mode input (E, X)
-├── Handle double-click detection
-├── Handle normal E pickup
-└── Update crosshair state
-
-Crosshair._process(_delta)
-└── _position_reticle()                    # Keep centered on screen
-```
-
----
-
-## 20. State Machines
-
-### Rope System State Machine
-
-| State | Input | Next State | Action |
-|---|---|---|---|
-| IDLE | Q hold→release | THROWING | Capture aim direction, start hook flight |
-| THROWING | max distance reached | EXTENDED | Hook stops at target |
-| THROWING | debris within 1.5m | HOOKED | Debris attaches to hook |
-| EXTENDED | Q or F | REELING | Pull hook back |
-| EXTENDED | Right-click | RETURNING | Cancel, return empty hook |
-| HOOKED | Q or F | REELING | Pull hook+debris back |
-| HOOKED | Right-click | RETURNING | Release debris, return hook |
-| REELING | distance ≤ 1.5m | RETURNING | Collect debris, start return |
-| RETURNING | distance ≤ 0.5m | IDLE | Hook hidden, ready for next throw |
-
-### Player Swimming State
-
-| State | Condition | Next State |
+| NOT BUILDING | B | BUILDING (spawns ghost) |
+| BUILDING | B | NOT BUILDING (frees ghost) |
+| BUILDING | P (valid + affordable) | Piece placed under raft/BuiltPieces |
+| BUILDING | Tab | Cycle piece (respawns ghost) |
+| BUILDING | R / Y | Rotate 90° |
+
+### Edit Mode (piece pickup)
+
+| State | Input | Next |
 |---|---|---|
-| ON LAND | player.y < water_y + 0.3 | IS SWIMMING |
-| IS SWIMMING | player.y > water_y + 1.5 | ON LAND |
-| IS SWIMMING | is_on_floor() | ON LAND |
+| IDLE | Double-click E on a piece (≤0.3s, same piece) | EDITING |
+| EDITING | P (valid) | Confirmed — re-registered + sockets re-linked |
+| EDITING | X | Removed — refunded (RECIPE_REFUND) + freed sockets |
+| EDITING | B | Cancelled — restored to original transform |
 
-### Building Mode
+During EDITING the piece's collision is disabled, it is unregistered from the grid, and its occupied sockets are freed; on confirm/cancel everything is re-linked.
 
-| State | Input | Next State |
+### Rope
+
+```
+IDLE -> (hold Q, release) THROWING -> EXTENDED (Q/F = REELING, RMB = RETURNING)
+								   \-> HOOKED (Q/F = REELING, RMB = release + RETURNING)
+REELING -> (within 1.5m) collect -> RETURNING -> IDLE
+```
+
+---
+
+## 18. Build Algorithm Deep Dive
+
+All placement is computed by `_resolve_placement(piece_name, hit_point)` in `player.gd`, which fills a `_diag` dictionary (visible in the HUD when `debug_building`).
+
+### Aim Resolution
+
+- **Foundation:** ray is intersected with the structural build plane (`deck_y = raft_flat.y + 0.15`); if the ray misses or hits a non-build object, a plane fallback resolves the exact aim cell (looks up the Foundation under the crosshair among 9 neighboring cells).
+- **Wall:** uses the *actual* ray hit — the crosshair itself picks the edge.
+- **Roof / Door / Window:** ray hit determines the support.
+
+### Foundation — Grid Cell
+
+```
+Candidate cells: aim cell, aim-side cell, support's cardinal+diagonal neighbors,
+                 and neighbors of ALL occupied cells (gap filling).
+Scoring: -dist, +100 if exact aim cell, +5 aimed direction, +2 per supporting neighbor, -3 diagonal-only
+Reject: occupied, structurally unsupported (BFS to raft), >6m from aim
+Transform: _compute_foundation_transform(cell)  # THE single authoritative cell->world formula
+           local = (cell.x*W, 0, cell.y*D), world = flat_raft * local, yaw = build_rotation
+Validation pipeline (any failure => INVALID with reason):
+  1. Size: collision box must equal 2x0.3x2 (±0.01) AND mesh AABB must match
+  2. Height: foundation top (origin.y + 0.15) must equal structural deck Y (±0.01)
+  3. Socket: _verify_foundation_connection — support edge socket vs reciprocal, error <= 0.1m
+  4. Overlap: shape query, mask 1, excludes player/ghost/support ancestors
+  5. Ghost cell must match candidate cell; rotation must be horizontal (±0.1 rad)
+  6. Footprint: 4 shrunken corner cells must not overlap occupied cells (touching is valid)
+```
+
+### Wall — Edge Attachment
+
+The wall ghost follows the crosshair **everywhere**. When the aim ray misses or hits a non-build object, the crosshair is projected onto the structural deck plane (`deck_y + 1.25`) so the ghost never jumps to the raft.
+
+```
+Aim: ray hit (build surface) OR deck-plane projection of the crosshair.
+Support selection: P1 ray-hit (Foundation/Raft/Wall/Door/Window)
+                   P2 nearest surface to the projected aim, only if within
+                      WALL_SURFACE_SNAP_RANGE (3m)
+                   P3 none -> RED ghost AT the crosshair (deck height, invalid)
+If support is Wall/Door/Window  -> WALL-TO-WALL socket placement:
+    _find_best_socket (score = alignment*10 - dist, radius 2.5m)
+    -> reciprocal -> _solve_socket_transform -> overlap (skips foundation below)
+If support is Foundation/Raft  -> EDGE placement:
+    _select_wall_edge: perpendicular distance to the 4 edge lines;
+                       corner tie-break (within 0.25m) uses camera direction dot edge normal
+    _compute_wall_transform:
+        edge_angle = 90° for East/West sockets (wall runs along the edge)
+        wall SLIDES along the edge to follow the crosshair:
+            along = local_aim.dot(edge_axis) - socket_local.dot(edge_axis)
+            clamped to ±(FOUNDATION_HALF_WIDTH - 0.1) so corners work
+        wall Socket_Base offset (0, -1.25, 0) rotated by total angle
+Footprint validation: center-point ray (mask 1, 1m above / 3m below, tolerance 0.3m)
+    + 3x3 grid samples inset 40% from edges; valid if center supported
+    OR support ratio >= minimum_support_ratio (0.50)
+Overlap: scan BuiltPieces for Wall/Door/Window within 0.5m horizontally
+```
+
+Rotation: R toggles build_rotation in 90° steps (180° flip for a wall = two presses). No 90° rotation around X in build mode.
+
+### Roof — Top Attachment
+
+```
+Method 1: Ray hits Wall -> free Socket_Top
+Method 2: Walk up 5 ancestors -> Wall with free Socket_Top
+Method 3: Search ALL BuiltPieces walls for nearest free Socket_Top (<=4m horizontal)
+  -> Find reciprocal: Roof.Socket_Base
+  -> Solve: RoofRoot = TargetSocket * inverse(RoofSocketLocal)  [_solve_socket_transform]
+  -> Verify ghost socket error <= 0.1m
+  -> Overlap: shape query with build_surface-group bodies filtered out
+Hysteresis: _roof_last_support remembers the last Wall used (reset on piece cycle)
+```
+
+### Door / Window / Stairs — Socket-Based
+
+```
+_find_best_socket(support, piece, aim, normal):
+    skip occupied / incompatible / >2.5m sockets
+    score = socket_dir.dot(aim_dir) * 10 - distance
+_find_reciprocal_socket(new_piece, support_name):
+    type-compat bonus +10 (FOUNDATION_EDGE<->EDGE, FOUNDATION_TOP<->WALL_BASE,
+    WALL_TOP<->WALL_BASE, WALL_SIDE<->WALL_SIDE, FOUNDATION_TOP<->DOOR/WINDOW_SLOT, WALL_TOP<->WALL_TOP)
+    +50 if opposite-facing (full 3D direction, so vertical sockets work)
+    -100 if same-direction
+Solve: _solve_socket_transform (flat, Y-rotation only)
+Verify: socket error <= 0.05m, edge gap |gap| < 0.05m (negative = penetration)
+Overlap: filtered by build_surface group + anything below solved.origin.y - 1.0
+```
+
+### Placement (confirm — `_try_build`)
+
+```
+Requires build_valid; walls skip the socket requirement.
+Inventory.can_afford + Inventory.craft.
+Instantiate scene -> parent under raft's BuiltPieces (ALWAYS the raft root,
+  never the socket's parent piece — keeps local transforms raft-relative).
+Collision disabled before add, re-enabled deferred (prevents pushing the player).
+Foundation: transform from exact cell formula (uses _ghost_cell, never recomputed).
+Others: use the ghost preview transform directly.
+Add to "build_surface" group.
+Occupy target socket + link reciprocal socket (nearest socket within 0.35m).
+Register Foundation cell in grid; register SampleMarker/F1 as raft buoyancy sample.
+```
+
+---
+
+## 19. Edit System Deep Dive
+
+**Pickup:** double-click E on the same piece within 0.3s (`_handle_double_click_edit` → `_start_edit`). The raft itself cannot be picked up.
+
+**Start edit:**
+- Saves original transform + grid cell; disables the piece's collision.
+- Unregisters from grid, frees its occupied sockets and any sibling socket pointing at it.
+- Applies the green ghost material; hides the build ghost while editing.
+
+**Follow (per frame):**
+- Foundation: grid-cell search around the aim cell (aim + neighbors, best score) → `_compute_foundation_transform`; overlap check excluding the piece itself.
+- Non-foundation: `_find_best_socket` on the support (or raft fallback) + reciprocal-by-distance → socket solve; overlap check.
+- Valid → green + move preview; invalid → red, stays put.
+
+**Confirm (P):** re-enable collision, restore color, re-register at the new cell, re-link sockets.
+
+**Remove (X):** unregister, free referencing sockets, refund via `RECIPE_REFUND` (same costs as recipes, minus Roof which is not refundable — Roof is absent from `RECIPE_REFUND`), free the piece.
+
+**Cancel (B):** restore original transform + cell + sockets, restore color.
+
+---
+
+## 20. Rope Algorithm Deep Dive
+
+- **Charge:** hold Q — `charge_distance` grows 5→22m at 30 m/s; a ColorRect bar shows the fraction.
+- **Throw:** direction is captured **once** from the aim ray and never recalculated. Hook travels in that fixed world-space direction; camera rotation does not bend the rope.
+- **Hook:** checks every frame for debris within 1.5m during flight; frozen debris is dragged during reeling and collected at 1.5m from the hand.
+- **Reel:** `hook_pos += normalize(hand - hook_pos) * reel_speed * delta`.
+- **Visual:** CylinderMesh from hand to hook, `Basis(right, rope_dir, perp)` — Y axis along the rope.
+
+---
+
+## 21. Survival Stats (stats.gd)
+
+`extends Node` — **not registered as an autoload and not instanced in any scene** (dead code until wired up). Intended API:
+
+```gdscript
+signal stat_changed(stat_name: String, value: float)
+signal player_died
+
+MAX_VALUE = 100.0
+hunger_drain_rate = 0.4 / s, thirst_drain_rate = 0.6 / s   # exports
+health = hunger = thirst = 100.0
+
+_process: drain hunger/thirst, emit stat_changed; if either <= 0 -> change_health(-2.0 * delta)
+change_health(amount): clamps 0..100, emits player_died at 0
+eat(food_value) / drink(thirst_value, health_bonus = 0.0)
+```
+
+---
+
+## 22. Shared Helpers
+
+### BuildSocket (`build_socket.gd`)
+
+`class_name BuildSocket extends Marker3D`
+- `@export socket_type: SocketType` (informational; placement uses `accepts`)
+- `@export accepts: Array[String]` — empty = compatible with anything (use sparingly)
+- `is_occupied: bool` / `occupying_piece: Node3D` + `occupy(piece)` / `free_socket()`
+- `get_parent_raft()` — walks up to the first node in the `"build_surface"` group
+- `get_parent_piece()` — walks up to the node whose `BuildSockets` child owns this socket
+- `is_compatible(piece_name)` — `accepts.is_empty() or accepts.has(name)`
+
+### BuildSystem (`build_system.gd`)
+
+Static universal socket-attachment solver — the same math as `player._solve_socket_transform`:
+
+```gdscript
+static func solve_socket_attachment(
+	target_socket: Node3D,
+	new_piece_socket_local_position: Vector3,
+	build_rotation_y: float,
+	support_basis: Basis,
+) -> Transform3D:
+	# center = target_socket.global_position - local_offset.rotated(UP, rotation)
+	# basis  = support_basis.rotated(UP, rotation)
+```
+
+Currently **unused by player.gd** (which has its own `_solve_socket_transform`) — kept as the canonical shared implementation to migrate toward.
+
+---
+
+## 23. Placeholder Scenes
+
+| Scene | Root | State |
 |---|---|---|
-| NOT BUILDING | B | BUILDING |
-| BUILDING | B | NOT BUILDING |
-| BUILDING | E (valid ghost) | NOT BUILDING (piece placed) |
-| NOT BUILDING | Double-click E on building | EDITING |
-| EDITING | E | NOT BUILDING (edit confirmed) |
-| EDITING | X | NOT BUILDING (building removed) |
-| EDITING | B | NOT BUILDING (edit cancelled) |
+| `raft_extension.tscn` | StaticBody3D, Box 2x0.3x2 | No sockets, no script, no group — cannot be built yet. Recipe exists ("Raft Extension": 10 Wood + 2 Plastic). |
+| `bonfire.tscn` | Node3D + CollisionShape3D (0.8x1.2x0.8) | Collision shape on a non-physics root; no script, no sockets. Recipe exists ("Bonfire": 8 Wood + 2 Rope). |
+
+Neither is in `BUILD_RECIPE_NAMES` / `BUILD_SCENES`, so they are not placeable.
 
 ---
 
-## 21. Build Algorithm Deep Dive
+## 24. How to Extend
 
-### How Foundation Snapping Works
+### New Building Type
+1. Create `.tscn` with an AnimatableBody3D root (Foundation may stay StaticBody3D), CollisionShape3D, MeshInstance3D, BuildSockets, and a `SampleMarker`.
+2. Add BuildSocket nodes with correct `socket_type` and explicit `accepts` lists.
+3. Add to `BUILD_RECIPE_NAMES` and `BUILD_SCENES` in player.gd.
+4. Add a recipe to `inventory.gd` RECIPES (and to `RECIPE_REFUND` if removable).
+5. Add placement logic in `_resolve_placement()` if the piece is non-standard.
 
-**Scenario 1: Aiming at raft's top surface (normal = UP)**
+### New Resource Type
+1. Add to `inventory.gd` items dict.
+2. Add to `ITEM_PROFILES` in debris.gd (mass, freeboard, color).
+3. Add to `ITEM_POOL` in debris_spawner.gd (weight = number of entries).
 
-```
-Camera looking forward at raft top
-    ↓
-hit_normal = (0, 1, 0) → h_normal = (0, 0, 0) → length < 0.3
-    ↓
-Use camera forward direction: cam_dir = normalize(camera_forward projected to XZ)
-    ↓
-extend_dir = cam_dir (e.g., (0, 0, 1) = looking north)
-    ↓
-Apply rotation: rotated_dir = extend_dir.rotated(UP, build_rotation)
-    ↓
-placement = raft_center + rotated_dir × 2.0
-    ↓
-Result: New foundation center is 2.0m from raft center in the looked direction
-```
+### Wire up Survival Stats
+1. Register `stats.gd` as an autoload (or instance it in main.tscn).
+2. Call `eat()` / `drink()` from item pickups and `change_health()` from hazards.
+3. Connect `stat_changed` / `player_died` to HUD and respawn logic.
 
-**Scenario 2: Aiming at raft's side edge (normal = horizontal)**
-
-```
-Camera aimed at the side face of the raft
-	↓
-hit_normal = (0, 0, 1) → h_normal = (0, 0, 1) → length > 0.3
-	↓
-extend_dir = (0, 0, 1)  (use the hit normal directly)
-	↓
-placement = raft_center + (0, 0, 1) × 2.0
-	↓
-Foundation edge aligns with raft edge at z = -2 (for raft at z = -3)
-```
-
-**Scenario 3: Aiming at wall top (ceiling/upper floor)**
-
-```
-Wall has Socket_Top
-	↓
-normal.y > 0.3 → aiming at wall top
-	↓
-placement = Socket_Top.position + (0, 0.15, 0)
-	↓
-Foundation placed on top of wall as an upper floor
-```
-
-### How Collision Validation Works
-
-```
-1. Create BoxShape3D matching the building type:
-   Foundation: (2, 0.3, 2)
-   Wall: (2, 2.5, 0.2)
-   Door: (1.2, 2.2, 0.15)
-   Window: (1.2, 1.0, 0.15)
-
-2. Transform = rotation × position
-
-3. Collision mask = 1 (structures only)
-
-4. Exclude: ghost itself, player, all "build_surface" group members
-   (prevents detecting the raft or existing buildings as overlaps)
-
-5. intersect_shape() → if empty = no overlap
-```
-
-### How Support Validation Works
-
-```
-Foundation:
-  For each structure in "build_surface" group:
-	Calculate XZ distance between proposed position and structure center
-	If distance is between 1.5 and 2.5 (edge-to-edge = 2.0):
-	  → SUPPORTED (edges touch)
-	If distance is between 1.5 and 3.0:
-	  → SUPPORTED (diagonal neighbor)
-  → NOT SUPPORTED
-
-Wall:
-  For each structure in "build_surface":
-	If |dx| < 1.2 and |dz| < 1.2:
-	  → SUPPORTED (wall is directly above this structure)
-  → NOT SUPPORTED
-
-Door:
-  For each structure:
-	If name starts with "Wall" and distance < 2.0:
-	  → SUPPORTED
-  → NOT SUPPORTED
-```
-
----
-
-## 22. Rope Algorithm Deep Dive
-
-### Throw Direction Capture
-
-```
-Q pressed → _throw_hook():
-	aim_point = camera raycast result (world position)
-	hand = HookOrigin.global_position (player's hand)
-    direction = normalize(aim_point - hand)
-    
-    _throw_direction = direction     ← STORED ONCE, NEVER CHANGED
-    _throw_start = hand
-    _hook_world_pos = hand
-```
-
-### Hook Flight (THROWING state)
-
-```
-Every physics tick:
-    step = throw_speed × delta (= 22 × 0.0083 ≈ 0.183m per tick at 120Hz)
-    new_dist = _hook_travelled + step
-    
-    if new_dist >= max_hook_distance (22m):
-        _hook_world_pos = _throw_start + _throw_direction × 22
-        _snap_hook_to_water()    # if hook is in sky, bring to water level
-        _check_debris()          # check if any debris is within 1.5m
-        → EXTENDED or HOOKED
-    else:
-        _hook_world_pos = _throw_start + _throw_direction × new_dist
-        _check_debris()          # can catch debris mid-flight
-        → THROWING (continue) or HOOKED
-```
-
-### Reel Physics (REELING state)
-
-```
-Every physics tick:
-    hand = _hand_pos()                       # current player hand position
-    to_hand = hand - _hook_world_pos         # vector from hook to hand
-    dist = length(to_hand)
-    
-    if dist ≤ collection_radius (1.5m):
-        _collect_debris()                    # Inventory.add()
-        _start_return()
-        return
-    
-    dir = normalize(to_hand)
-    _hook_world_pos += dir × reel_speed × delta  (= 12 × 0.0083 ≈ 0.1m/tick)
-    
-    # Debris follows hook
-    if _hooked_debris:
-        _hooked_debris.global_position = _hook_world_pos + (0, 0.3, 0)
-        _hooked_debris.linear_velocity = ZERO
-```
-
-### Rope Visual Update
-
-```
-from = _hand_pos()          # follows player (updates every frame)
-to = _hook_world_pos        # locked in world after throw
-rope_len = distance(from, to)
-
-midpoint = (from + to) / 2
-rope_direction = normalize(to - from)
-
-# Build rotation basis:
-#   Y axis = rope direction (CylinderMesh extends along Y)
-#   X axis = perpendicular to rope
-#   Z axis = perpendicular to both
-
-Basis(right, rope_dir, perp)
-
-# Stretch cylinder to match distance
-cylinder.height = rope_len
-```
-
-### Why the Rope Doesn't Follow the Camera
-
-```
-Frame 1: Player looks east, throws hook
-	_throw_direction = (1, 0, 0)     ← LOCKED
-	_hook_world_pos = hand + (1,0,0) × distance
-
-Frame 100: Player now looks north
-	_throw_direction is STILL (1, 0, 0)    ← NOT RECALCULATED
-	_hook_world_pos is STILL in the east
-	
-	from = _hand_pos()           ← moved because player turned
-	to = _hook_world_pos         ← stayed in world
-	
-	Rope draws a line from current hand to fixed hook
-	The rope naturally reorients because the hand moved
-	But the hook NEVER moved
-```
-
----
-
-## 23. How to Extend
-
-### Add a New Building Type
-
-1. Create a `.tscn` scene:
-   ```
-   StaticBody3D (root)
-   ├── CollisionShape3D
-   ├── MeshInstance3D
-   └── BuildSockets (Node3D)
-	   └── Socket_xxx (Marker3D)
-   ```
-
-2. Add to `player.gd`:
-   ```gdscript
-   const BUILD_RECIPE_NAMES := [..., "NewType"]
-   const BUILD_SCENES := [..., "res://new_type.tscn"]
-   ```
-
-3. Add recipe to `inventory.gd`:
-   ```gdscript
-   const RECIPES := { ..., "NewType": {"Wood": 10} }
-   ```
-
-4. Add support check in `_check_support()` and socket logic in `_find_nearest_valid_socket()`.
-
-### Add a New Resource Type
-
-1. Add to `inventory.gd`:
-   ```gdscript
-   var items := { ..., "Gold": 0 }
-   ```
-
-2. Add to `ITEM_PROFILES` in `debris.gd`:
-   ```gdscript
-   "Gold": {"mass": 3.0, "freeboard": 0.15, "color": Color(1.0, 0.85, 0.0)}
-   ```
-
-3. Add to `ITEM_POOL` in `debris_spawner.gd`.
-
-### Change Ocean Waves
-
-Modify `ocean.gd` `get_height()`:
-- Change `wave_height` export (default 0.4)
-- Add/remove sine terms for different wave patterns
-- Change frequencies (0.4, 0.3, 0.7) for different wave spacing
-
-### Tune Hook System
-
-All values are `@export` in `rope_system.gd`:
-- `max_hook_distance`: How far the hook can go (default 22m)
-- `throw_speed`: How fast it flies (default 22 m/s)
-- `reel_speed`: How fast it comes back (default 12 m/s)
-- `debris_hook_radius`: Catch radius (default 1.5m)
-- `collection_radius`: Pickup distance (default 1.5m)
+### Migrate placement to BuildSystem
+Replace `player._solve_socket_transform` calls with `BuildSystem.solve_socket_attachment(target_socket, socket_local, build_rotation, support_flat_basis)` — the math is identical, and the shared helper is already extracted.
 
 ---
 
 *End of documentation.*
-# Recent Bug Fixes (Sep 2026) 

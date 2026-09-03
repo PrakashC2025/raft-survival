@@ -26,13 +26,19 @@ mesh = SubResource("BoxMesh_ybjjv")
 position = Vector3(0, -1.25, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 2
-accepts = Array[String](["Foundation", "Wall"])
+accepts = Array[String](["Foundation", "Wall", "Door", "Window"])
 
 [node name="Socket_Top" type="Marker3D" parent="BuildSockets"]
 position = Vector3(0, 1.25, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 3
-accepts = Array[String](["Wall", "Foundation", "Roof", "Door", "Window"])
+accepts = Array[String](["Wall", "Foundation", "Roof"])
+
+[node name="Socket_Middle" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 4
+accepts = Array[String](["Door", "Window"])
 
 [node name="Socket_North" type="Marker3D" parent="BuildSockets"]
 position = Vector3(0, 0, 0.1)
