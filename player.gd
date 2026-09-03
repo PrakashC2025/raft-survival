@@ -40,7 +40,10 @@ const BUILD_SCENES := [
 	"res://window.tscn",
 ]
 const SOCKET_SNAP_RADIUS: float = 2.5
-const WALL_SURFACE_SNAP_RANGE: float = 3.0  # wall ghost snaps to a surface within this 2D distance
+const WALL_SURFACE_SNAP_RANGE: float = 4.0  # wall ghost snaps to a surface within this 2D distance
+const WALL_STACK_AIM_TOLERANCE: float = 0.6  # aiming this close to a wall's top stacks a 2nd floor wall
+const BUILD_ROTATION_STEP := PI / 2.0    # R / Y rotate 90°
+const BUILD_ROTATION_FINE_STEP := PI / 12.0  # hold Shift for 15° fine steps (center walls)
 
 # Grid & Foundation dimensions — single source of truth
 const CELL_SIZE: float = 2.0  # kept for backward compat; prefer FOUNDATION_WIDTH/DEPTH
@@ -75,6 +78,9 @@ var _ghost_invalid_mat: StandardMaterial3D = null
 
 # Diagnostics
 @export var debug_building: bool = false
+# Build overlay: toggleable on-screen footprint samples + support ratio (F3)
+var build_overlay: bool = false
+var _f3_held: bool = false
 @export_range(0.0, 1.0) var minimum_support_ratio: float = 0.50
 @export var placement_surface_tolerance: float = 0.30
 var _diag: Dictionary = {}
@@ -326,6 +332,11 @@ func _process(_delta: float) -> void:
 			_rotate_build()
 		if Input.is_action_just_pressed("rotate_build_x"):
 			_rotate_build_x()
+		if Input.is_key_pressed(KEY_F3) and not _f3_held:
+			build_overlay = not build_overlay
+			if not build_overlay:
+				_clear_overlay_markers()
+		_f3_held = Input.is_key_pressed(KEY_F3)
 		crosshair.set_state(crosshair.State.BUILD)
 		_update_build_preview()
 		return
@@ -357,6 +368,7 @@ func _toggle_build() -> void:
 			_debug_markers_root = null
 			_debug_target_marker = null
 			_debug_actual_marker = null
+		_clear_overlay_markers()
 
 var _build_preview_root: Node3D = null
 
@@ -379,9 +391,9 @@ func _spawn_ghost() -> void:
 	ghost.visible = false
 	_get_build_preview_root().add_child(ghost)
 	ghost.global_position = aim_point
-	var col := ghost.get_node_or_null("CollisionShape3D")
-	if col:
-		col.disabled = true
+	# Disable ALL collision shapes (some pieces have several, e.g. stairs steps)
+	for col in ghost.find_children("*", "CollisionShape3D", true, false):
+		(col as CollisionShape3D).disabled = true
 	if _ghost_valid_mat == null:
 		_ghost_valid_mat = StandardMaterial3D.new()
 		_ghost_valid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -403,7 +415,9 @@ func _cycle_build_piece() -> void:
 		_spawn_ghost()
 
 func _rotate_build() -> void:
-	build_rotation += PI / 2.0
+	# Hold Shift for 15° fine steps (e.g. angling a center wall), otherwise 90°.
+	var step: float = BUILD_ROTATION_FINE_STEP if Input.is_key_pressed(KEY_SHIFT) else BUILD_ROTATION_STEP
+	build_rotation += step
 	if build_rotation >= TAU:
 		build_rotation -= TAU
 
@@ -465,6 +479,18 @@ func _grid_unregister(cell: Vector2i) -> void:
 func _grid_is_occupied(cell: Vector2i) -> bool:
 	return _grid_occupancy.has(cell)
 
+# A cell is blocked when it holds a REAL placed piece. The raft itself is
+# registered at (0,0) as a structural anchor but must NOT block placement —
+# the player builds the first Foundation ON the raft (aiming at the raft deck
+# should never snap the preview into the water).
+func _grid_is_blocked(cell: Vector2i) -> bool:
+	if not _grid_occupancy.has(cell):
+		return false
+	var occ: Node3D = _grid_occupancy[cell] as Node3D
+	if occ == null or not is_instance_valid(occ):
+		return false
+	return occ != _get_raft_node()
+
 # Get the cell that a support piece occupies.
 func _get_piece_cell(piece: Node3D) -> Vector2i:
 	return _world_to_grid(piece.global_position)
@@ -519,6 +545,19 @@ func _is_structurally_supported(piece: Node3D) -> bool:
 	# Raft is always supported
 	if piece.name.begins_with("Raft"):
 		return true
+	# A piece sitting ON the raft (or in a cardinal neighbor cell) is supported
+	# directly — the raft is located from the scene node, NOT _grid_occupancy,
+	# which is overwritten when the first Foundation is placed on the raft's
+	# cell (without this, that Foundation fails its own structural check and
+	# every later build returns NO STRUCTURAL SUPPORT).
+	var raft_sn: Node3D = _get_raft_node()
+	if raft_sn != null:
+		var raft_cell_sn: Vector2i = _world_to_grid(raft_sn.global_position)
+		var piece_cell_sn: Vector2i = _get_piece_cell(piece)
+		if piece_cell_sn == raft_cell_sn:
+			return true
+		if absi(piece_cell_sn.x - raft_cell_sn.x) + absi(piece_cell_sn.y - raft_cell_sn.y) == 1:
+			return true
 	# BFS from piece to find a path back to the raft — avoids infinite recursion
 	var visited: Dictionary = {}
 	var queue: Array[Vector2i] = []
@@ -858,6 +897,13 @@ func _find_reciprocal_socket(
 		support_local_dir = support_local_dir.normalized()
 	else:
 		support_local_dir = Vector3.FORWARD
+	# STAIRS STACKING: the reciprocal for a stair is always its Socket_Base — the
+	# diagonal sockets defeat the generic opposite-facing scoring, so pick it
+	# directly when the support is a stair.
+	if effective_support_name == "Stairs":
+		for s in new_piece_sockets:
+			if s != null and s.name == "Socket_Base" and s.is_compatible("Stairs"):
+				return s
 	for s in new_piece_sockets:
 		if s == null or not is_instance_valid(s):
 			continue
@@ -951,6 +997,17 @@ func _is_build_surface(node: Node3D) -> bool:
 		n = n.get_parent() as Node3D
 	return false
 
+# RIDs to exclude from wall-footprint support rays: the player, the preview
+# ghost, and the piece being edited must never block detection of the buildable
+# surface underneath the wall.
+func _support_ray_excludes() -> Array[RID]:
+	var ex: Array[RID] = [get_rid()]
+	if ghost != null and is_instance_valid(ghost):
+		ex.append(ghost.get_rid())
+	if _editing != null and is_instance_valid(_editing):
+		ex.append(_editing.get_rid())
+	return ex
+
 # Validate that a wall's bottom footprint is supported by build surfaces.
 # Uses center-point priority: if the center ray hits a valid surface, the wall
 # is valid. This prevents edge-floating-point misses from causing false INVALID.
@@ -968,8 +1025,7 @@ func _validate_wall_footprint(wall_xform: Transform3D) -> Dictionary:
 	var center_ray_e: Vector3 = bottom_center + Vector3.DOWN * 3.0
 	var center_q := PhysicsRayQueryParameters3D.create(center_ray_o, center_ray_e)
 	center_q.collision_mask = 1
-	if ghost != null and is_instance_valid(ghost):
-		center_q.exclude = [ghost.get_rid()]
+	center_q.exclude = _support_ray_excludes()
 	var center_hit := space_state.intersect_ray(center_q)
 	if center_hit:
 		var ch_body: Node3D = center_hit.collider as Node3D
@@ -1001,8 +1057,7 @@ func _validate_wall_footprint(wall_xform: Transform3D) -> Dictionary:
 			var ray_e: Vector3 = sample_pos + Vector3.DOWN * 3.0
 			var q := PhysicsRayQueryParameters3D.create(ray_o, ray_e)
 			q.collision_mask = 1
-			if ghost != null and is_instance_valid(ghost):
-				q.exclude = [ghost.get_rid()]
+			q.exclude = _support_ray_excludes()
 			var hit := space_state.intersect_ray(q)
 			if hit:
 				var hb: Node3D = hit.collider as Node3D
@@ -1032,6 +1087,7 @@ func _validate_wall_footprint(wall_xform: Transform3D) -> Dictionary:
 	_diag["center_supported"] = center_supported
 	_diag["sample_positions"] = _sample_positions
 	_diag["sample_supported"] = _sample_supported
+	_diag["footprint_cell_size"] = FOUNDATION_WIDTH * 0.5
 	return {"valid": valid, "support_ratio": support_ratio, "supported_count": supported_count, "total_count": total_count, "foundation_height": foundation_height}
 
 # Validate that a foundation's bottom footprint is supported.
@@ -1041,6 +1097,8 @@ func _validate_foundation_footprint(found_xform: Transform3D) -> Dictionary:
 	var sample_count: int = 3
 	var supported_count: int = 0
 	var total_count: int = 0
+	var _sample_positions: Array[Vector3] = []
+	var _sample_supported: Array[bool] = []
 	for ix in range(sample_count):
 		for iz in range(sample_count):
 			var tx: float = (float(ix) / float(sample_count - 1)) * 2.0 - 1.0 if sample_count > 1 else 0.0
@@ -1055,16 +1113,73 @@ func _validate_foundation_footprint(found_xform: Transform3D) -> Dictionary:
 				query.exclude = [ghost.get_rid()]
 			var result := space_state.intersect_ray(query)
 			total_count += 1
+			var sample_ok: bool = false
 			if result:
 				var hit_body: Node3D = result.collider as Node3D
 				if _is_build_surface(hit_body):
+					sample_ok = true
 					supported_count += 1
+			_sample_positions.append(sample_pos)
+			_sample_supported.append(sample_ok)
 	var support_ratio: float = float(supported_count) / float(total_count) if total_count > 0 else 0.0
 	var valid: bool = support_ratio >= minimum_support_ratio
 	_diag["footprint_total"] = total_count
 	_diag["footprint_supported"] = supported_count
 	_diag["footprint_ratio"] = support_ratio
+	_diag["sample_positions"] = _sample_positions
+	_diag["sample_supported"] = _sample_supported
+	_diag["footprint_cell_size"] = FOUNDATION_WIDTH * 0.5
 	return {"valid": valid, "support_ratio": support_ratio, "supported_count": supported_count, "total_count": total_count}
+
+# Validate that a roof's bottom corners are supported by build surfaces
+# (wall tops, other roofs, foundations). Samples a 3x3 grid on the roof's
+# bottom plane and records per-sample results for the build overlay.
+func _validate_roof_footprint(roof_xform: Transform3D) -> Dictionary:
+	var space_state := get_world_3d().direct_space_state
+	var sample_count: int = 3
+	var supported_count: int = 0
+	var total_count: int = 0
+	var _sample_positions: Array[Vector3] = []
+	var _sample_supported: Array[bool] = []
+	for ix in range(sample_count):
+		for iz in range(sample_count):
+			var tx: float = (float(ix) / float(sample_count - 1)) * 2.0 - 1.0 if sample_count > 1 else 0.0
+			var tz: float = (float(iz) / float(sample_count - 1)) * 2.0 - 1.0 if sample_count > 1 else 0.0
+			# Bottom plane of the roof (0.15 thick): sample at half thickness below
+			# center, inset 40% like the other footprint validators.
+			var local_off: Vector3 = Vector3(tx * 0.6, -0.075, tz * 0.6)
+			var sample_pos: Vector3 = roof_xform * local_off
+			var ray_origin: Vector3 = sample_pos + Vector3.UP * 1.0
+			var ray_end: Vector3 = sample_pos + Vector3.DOWN * 3.0
+			var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_end)
+			query.collision_mask = 1
+			if ghost != null and is_instance_valid(ghost):
+				query.exclude = [ghost.get_rid()]
+			var result := space_state.intersect_ray(query)
+			total_count += 1
+			var sample_ok: bool = false
+			if result:
+				var hit_body: Node3D = result.collider as Node3D
+				if _is_build_surface(hit_body):
+					sample_ok = true
+					supported_count += 1
+			_sample_positions.append(sample_pos)
+			_sample_supported.append(sample_ok)
+	# Support ratio from the actual per-cell measurements (matches the overlay
+	# grid labels) rather than a raw hit count — the roof overhangs its wall
+	# support, so outer cells honestly show partial/0% support.
+	var percents: Array = _overlay_sample_percents(_sample_positions, _sample_supported)
+	var pct_sum: float = 0.0
+	for p in percents:
+		pct_sum += p
+	var support_ratio: float = pct_sum / (percents.size() * 100.0) if percents.size() > 0 else 0.0
+	_diag["footprint_total"] = total_count
+	_diag["footprint_supported"] = supported_count
+	_diag["footprint_ratio"] = support_ratio
+	_diag["sample_positions"] = _sample_positions
+	_diag["sample_supported"] = _sample_supported
+	_diag["footprint_cell_size"] = 1.0
+	return {"valid": support_ratio >= minimum_support_ratio, "support_ratio": support_ratio, "supported_count": supported_count, "total_count": total_count}
 
 func _check_overlap(shape: Shape3D, xform: Transform3D, support: Node3D, extra_skip: Array[Node3D] = []) -> Array[Dictionary]:
 	var space_state := get_world_3d().direct_space_state
@@ -1173,6 +1288,18 @@ func _determine_aim_side(support: Node3D, aim_pos: Vector3) -> Vector2i:
 func _is_cell_structurally_supported(cell: Vector2i) -> bool:
 	var visited: Dictionary = {}
 	var queue: Array[Vector2i] = []
+	# The raft anchors the grid: the cell it occupies and every cardinal
+	# neighbor is directly supported by it (this lets the FIRST Foundation
+	# be placed on or against the raft itself). The raft is located from the
+	# scene node — NOT _grid_occupancy, which gets overwritten when the first
+	# Foundation is placed on the raft's cell.
+	var raft_node: Node3D = _get_raft_node()
+	if raft_node != null:
+		var raft_cell: Vector2i = _world_to_grid(raft_node.global_position)
+		if cell == raft_cell:
+			return true
+		if absi(cell.x - raft_cell.x) + absi(cell.y - raft_cell.y) == 1:
+			return true
 	# Start BFS from all occupied cardinal neighbors
 	var cardinal: Array[Vector2i] = [
 		cell + Vector2i(0, -1), cell + Vector2i(0, 1),
@@ -1392,9 +1519,10 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 					aim_collider = _fb_foundation
 					aim_distance = _bp_t
 					# else: no Foundation under crosshair — stay invalid (RED)
-	if (not aim_valid or effective_collider == null) and piece_name != "Wall":
-		# Walls handle the aim-less case themselves (deck-plane projection + RED
-		# ghost at the crosshair), so they must not bail out here.
+	if (not aim_valid or effective_collider == null) and piece_name != "Wall" \
+		and piece_name != "Roof" and piece_name != "Door" and piece_name != "Window":
+		# Walls, Roofs, Doors and Windows handle the aim-less case themselves
+		# (deck-plane projection + auto-snap), so they must not bail out here.
 		_diag["has_aim"] = false
 		_diag["invalid_reason"] = "NO AIM"
 		_diag["error_category"] = "AIM_ERROR"
@@ -1411,7 +1539,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	# Wall and Roof resolve their own support in their specific sections below.
 	# For them, skip the generic support check and let them handle it.
 	var support: Node3D = _find_support_piece(effective_collider)
-	if support == null and piece_name != "Wall" and piece_name != "Roof":
+	if support == null and piece_name != "Wall" and piece_name != "Roof" \
+		and piece_name != "Door" and piece_name != "Window":
 		_diag["invalid_reason"] = "INVALID SUPPORT"
 		_diag["error_category"] = "SUPPORT_ERROR"
 		return {"valid": false}
@@ -1420,8 +1549,10 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	else:
 		_diag["support_name"] = "PENDING"
 
-	# Step 3: Structural support (skip for Wall/Roof — they check their own support)
-	if support != null and piece_name != "Wall" and piece_name != "Roof":
+	# Step 3: Structural support (skip for Wall/Roof/Door/Window — they check
+	# their own support in their placement sections below)
+	if support != null and piece_name != "Wall" and piece_name != "Roof" \
+		and piece_name != "Door" and piece_name != "Window":
 		var supported: bool = _is_structurally_supported(support)
 		_diag["support_valid"] = supported
 		_diag["support_path"] = _get_support_path(support)
@@ -1489,7 +1620,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		if debug_building and debug_key != _last_debug_key:
 			print("=== FOUNDATION CANDIDATES (support=%s cell=%s) ===" % [str(_diag.get("support_name", "?")), str(support_cell)])
 		for c in candidates:
-			if _grid_is_occupied(c):
+			if _grid_is_blocked(c):
 				if debug_building and debug_key != _last_debug_key:
 					print("  [%s] REJECTED: OCCUPIED" % str(c))
 				continue
@@ -1704,6 +1835,9 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			print("  Ghost cell: %s match=%s" % [str(_diag.get("ghost_grid_cell", Vector2i.ZERO)), str(_diag.get("cell_match", false))])
 			print("  Height: raft=%.3f found=%.3f err=%.3fm" % [_diag.get("raft_deck_y", 0.0), _diag.get("foundation_top_y", 0.0), _diag.get("height_error", 0.0)])
 			print("============================")
+		# Footprint sampling for the build overlay (visual only — foundation
+		# validity itself is decided by the grid/occupancy checks above).
+		_validate_foundation_footprint(found_solved)
 		# Return with the connecting socket for _try_build
 		var connect_socket: BuildSocket = _find_connecting_socket(support, best_cell)
 		return {"valid": true, "socket": connect_socket, "transform": found_solved, "cell": best_cell, "support": support}
@@ -1714,7 +1848,10 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	#   - Aiming at a Wall/Door/Window       -> socket placement (wall-to-wall).
 	#   - Aiming at open water / no surface  -> RED ghost at the crosshair (deck height).
 	# ============================================================
-	if piece_name == "Wall":
+	# Door and Window are wall-sized pieces with wall sockets — they share the
+	# Wall solver so they join walls flush (collision touch = join, overlap =
+	# red) instead of embedding into a wall's Socket_Middle.
+	if piece_name == "Wall" or piece_name == "Door" or piece_name == "Window":
 		# ==== Aim: when the ray misses or hits a non-build object, project the
 		# crosshair onto the structural deck plane so the ghost follows the aim
 		# point instead of jumping to the raft. ====
@@ -1731,9 +1868,13 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				_bp_t_wall = (_deck_y_wall - _ro_wall.y) / _rd_wall.y
 			else:
 				_bp_t_wall = 10.0
-			if _bp_t_wall > 0.0 and _bp_t_wall < AIM_DISTANCE:
-				wall_aim = _ro_wall + _rd_wall * _bp_t_wall
-				wall_aim_normal = Vector3.UP
+			# Clamp: aiming up at the sky (t < 0) or far off the deck plane should
+			# NOT send the ghost to the horizon — keep the aim near the structure
+			# so the vertical drop can find the surface under the crosshair.
+			if _bp_t_wall <= 0.0 or _bp_t_wall >= AIM_DISTANCE:
+				_bp_t_wall = 10.0
+			wall_aim = _ro_wall + _rd_wall * _bp_t_wall
+			wall_aim_normal = Vector3.UP
 
 		var wall_foundation: Node3D = null
 		# P1: raycast hit — what the crosshair actually points at
@@ -1742,6 +1883,23 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			if _sn == "Foundation" or _sn == "Raft" or _sn == "Wall" \
 				or _sn == "Door" or _sn == "Window":
 				wall_foundation = support
+		# P2a: vertical drop at the (projected) aim — whatever build surface sits
+		# directly under the crosshair becomes the support. This covers grazing
+		# angles where the main aim ray passes just over the far edge of the deck.
+		if wall_foundation == null:
+			var _drop_deck_y: float = _get_structural_deck_y()
+			var _drop_q := PhysicsRayQueryParameters3D.create(
+				Vector3(wall_aim.x, _drop_deck_y + 4.0, wall_aim.z),
+				Vector3(wall_aim.x, _drop_deck_y - 4.0, wall_aim.z))
+			_drop_q.collision_mask = 1
+			var _drop_hit := get_world_3d().direct_space_state.intersect_ray(_drop_q)
+			if _drop_hit:
+				var _drop_piece: Node3D = _find_support_piece(_drop_hit.get("collider") as Node3D)
+				if _drop_piece != null:
+					var _dpn: String = _find_piece_name(_drop_piece)
+					if _dpn == "Foundation" or _dpn == "Raft" or _dpn == "Wall" \
+						or _dpn == "Door" or _dpn == "Window":
+						wall_foundation = _drop_piece
 		# P2: nearest surface to the (projected) aim — only when the crosshair is
 		#     close enough to snap (otherwise the ghost stays at the aim point).
 		if wall_foundation == null:
@@ -1762,23 +1920,53 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 									wall_foundation = child
 				if _best_d > WALL_SURFACE_SNAP_RANGE:
 					wall_foundation = null
-		# No surface within range — show the ghost AT the crosshair (deck height)
-		# in RED so the player always sees where the wall would go.
-		if wall_foundation == null:
-			var deck_y_fb: float = _get_structural_deck_y()
-			var _ghost_pos_fb: Vector3 = Vector3(wall_aim.x, deck_y_fb + 1.25, wall_aim.z)
-			solved = Transform3D(Basis(Vector3.UP, build_rotation), _ghost_pos_fb)
-			_diag["solved_pos"] = solved.origin
-			_diag["invalid_reason"] = "NO SUPPORT SURFACE"
-			return {"valid": false, "socket": null, "transform": solved, "support": null}
+		# No surface found near the aim: DO NOT reject yet — the wall's actual
+		# bottom FOOTPRINT may still rest on a foundation directly under the
+		# crosshair (e.g. the aim ray grazing over the deck edge). The shared
+		# footprint validation below samples the wall's real bottom; genuinely
+		# unsupported spots (open water, floating above) still come out INVALID
+		# there with NO SUPPORT SURFACE / INSUFFICIENT SUPPORT.
 		# Wall-to-wall: use socket-based placement when support is another wall/door/window
 		var _wsn: String = _find_piece_name(wall_foundation)
 		if _wsn == "Wall" or _wsn == "Door" or _wsn == "Window":
-			var _w2w_socket: BuildSocket = _find_best_socket(wall_foundation, "Wall", wall_aim, wall_aim_normal)
+			# SECOND-FLOOR STACKING: aiming at the upper part of a wall's face
+			# (top ~40%) places the new wall directly ON TOP (Socket_Top ->
+			# Socket_Base) instead of attaching to its side. The old trigger
+			# required aiming within 0.6m of the top edge, which is unreachable
+			# from standing eye height — so every stack attempt silently fell
+			# back to a SIDE attach that nested the new wall into the old one.
+			var _w2w_socket: BuildSocket = null
+			if _wsn == "Wall" or _wsn == "Door" or _wsn == "Window":
+				var _wall_sockets: Node3D = wall_foundation.get_node_or_null("BuildSockets")
+				if _wall_sockets != null:
+					var _wall_top: BuildSocket = _wall_sockets.get_node_or_null("Socket_Top") as BuildSocket
+					if _wall_top != null and _wall_top.is_compatible(piece_name):
+						var _wall_top_y: float = (_get_flat_support_transform(wall_foundation) * _wall_top.position).y
+						# Aim must be in the upper part of this wall's face: above the
+						# wall's mid-height AND within the stack tolerance of the top.
+						# Wall bottom from its own Socket_Base (the top socket's
+						# counterpart) — robust for stacked walls on any floor.
+						var _wall_base_s: BuildSocket = _wall_sockets.get_node_or_null("Socket_Base") as BuildSocket
+						var _wall_base_y: float = _wall_top_y
+						if _wall_base_s != null:
+							_wall_base_y = (_get_flat_support_transform(wall_foundation) * _wall_base_s.position).y
+						var _mid_y: float = (_wall_base_y + _wall_top_y) * 0.5
+						if wall_aim.y >= _mid_y and wall_aim.y >= _wall_top_y - 1.0 \
+							and not _wall_top.is_occupied:
+							_w2w_socket = _wall_top
+						elif wall_aim.y >= _mid_y and wall_aim.y >= _wall_top_y - 1.0 \
+							and _wall_top.is_occupied:
+							# Top already stacked — show RED instead of silently
+							# side-attaching into the wall below.
+							_diag["invalid_reason"] = "STACK OCCUPIED"
+							_diag["error_category"] = "COLLISION_ERROR"
+							return {"valid": false, "socket": null, "transform": Transform3D(), "support": wall_foundation}
+			if _w2w_socket == null:
+				_w2w_socket = _find_best_socket(wall_foundation, piece_name, wall_aim, wall_aim_normal)
 			if _w2w_socket != null:
-				var _wall_idx: int = BUILD_RECIPE_NAMES.find("Wall")
+				var _wall_idx: int = BUILD_RECIPE_NAMES.find(piece_name)
 				var _w2w_temp: Node3D = build_pieces[_wall_idx].instantiate()
-				var new_socket: BuildSocket = _find_reciprocal_socket(_w2w_socket, _w2w_temp, "Wall")
+				var new_socket: BuildSocket = _find_reciprocal_socket(_w2w_socket, _w2w_temp, _wsn)
 				if new_socket != null:
 					solved = _solve_socket_transform(_w2w_socket, new_socket.position, wall_foundation)
 					_diag["solved_pos"] = solved.origin
@@ -1827,26 +2015,49 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			# Foundation/Raft: edge-snapping placement
 		var _f_sn: String = _find_piece_name(wall_foundation)
 		if _f_sn == "Foundation" or _f_sn == "Raft":
-			var edge_name: String = _select_wall_edge(wall_foundation, wall_aim)
-			solved = _compute_wall_transform(wall_foundation, wall_aim)
-			_diag["solved_pos"] = solved.origin
-			_diag["wall_foundation"] = wall_foundation.name
-			_diag["wall_edge"] = edge_name
+			# CENTER placement: aiming in the middle zone of a deck piece places
+			# the wall upright in the deck CENTER (Foundation.Socket_Top / raft
+			# center) instead of snapping to the nearest edge.
+			var _flat_wf: Transform3D = _get_flat_support_transform(wall_foundation)
+			var _local_aim_wf: Vector3 = _flat_wf.affine_inverse() * wall_aim
+			var _center_zone: float = FOUNDATION_HALF_WIDTH * 0.5
+			if absf(_local_aim_wf.x) <= _center_zone and absf(_local_aim_wf.z) <= _center_zone:
+				var _deck_c: float = _get_structural_deck_y()
+				solved = Transform3D(
+					Basis(Vector3.UP, build_rotation),
+					Vector3(_flat_wf.origin.x, _deck_c + 1.25, _flat_wf.origin.z))
+				_diag["solved_pos"] = solved.origin
+				_diag["wall_foundation"] = wall_foundation.name
+				_diag["wall_edge"] = "CENTER"
+			else:
+				var edge_name: String = _select_wall_edge(wall_foundation, wall_aim)
+				solved = _compute_wall_transform(wall_foundation, wall_aim)
+				_diag["solved_pos"] = solved.origin
+				_diag["wall_foundation"] = wall_foundation.name
+				_diag["wall_edge"] = edge_name
 		else:
-			# Support is not Foundation/Raft — project to deck height at aim point
+			# Support is not Foundation/Raft (or none found) — project to deck
+			# height at the aim point; the footprint check decides validity.
 			var deck_y_f: float = _get_structural_deck_y()
 			var _f_pos: Vector3 = Vector3(wall_aim.x, deck_y_f + 1.25, wall_aim.z)
 			solved = Transform3D(Basis(Vector3.UP, build_rotation), _f_pos)
 			_diag["solved_pos"] = solved.origin
-			_diag["wall_foundation"] = wall_foundation.name
+			if wall_foundation != null:
+				_diag["wall_foundation"] = wall_foundation.name
+			else:
+				_diag["wall_foundation"] = "NONE"
 		# FOOTPRINT VALIDATION: sample 3x3 grid on wall bottom to check support
 		var fp_result := _validate_wall_footprint(solved)
 		_diag["footprint_total"] = fp_result["total_count"]
 		_diag["footprint_supported"] = fp_result["supported_count"]
 		_diag["footprint_ratio"] = fp_result["support_ratio"]
 		if not fp_result["valid"]:
-			_diag["invalid_reason"] = "INSUFFICIENT SUPPORT: %d/%d (%.0f%%)" % [fp_result["supported_count"], fp_result["total_count"], fp_result["support_ratio"] * 100.0]
-			_diag["error_category"] = "FOOTPRINT_ERROR"
+			if fp_result["supported_count"] <= 0:
+				_diag["invalid_reason"] = "NO SUPPORT SURFACE"
+				_diag["error_category"] = "SUPPORT_ERROR"
+			else:
+				_diag["invalid_reason"] = "INSUFFICIENT SUPPORT: %d/%d (%.0f%%)" % [fp_result["supported_count"], fp_result["total_count"], fp_result["support_ratio"] * 100.0]
+				_diag["error_category"] = "FOOTPRINT_ERROR"
 			return {"valid": false, "socket": null, "transform": solved, "support": wall_foundation}
 		# OVERLAP CHECK: reject if a wall already exists at this position
 		var _wall_overlap: bool = false
@@ -1867,25 +2078,134 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			_diag["error_category"] = "COLLISION_ERROR"
 			return {"valid": false, "socket": null, "transform": solved, "support": wall_foundation}
 		_diag["final"] = "VALID"
-		_diag["support_name"] = wall_foundation.name
+		if wall_foundation != null:
+			_diag["support_name"] = wall_foundation.name
+		else:
+			_diag["support_name"] = "NONE"
 		return {"valid": true, "socket": null, "transform": solved, "support": wall_foundation}
 
 	# ============================================================
 	# ROOF: TOP_ATTACHMENT — snap to Wall/structural top
 	# ============================================================
 	if piece_name == "Roof":
+		# ROOF AIM FALLBACK: when the aim ray misses (e.g. aiming just over the
+		# wall top into the sky, or at a gap), project the crosshair onto the
+		# structural deck plane so the wall-top auto-snap below can still find
+		# the nearest free Wall top. The roof is a 2x2 slab — the player should
+		# never need a pixel-perfect ray hit to place it.
+		if not aim_valid or effective_collider == null:
+			var _deck_y_r: float = _get_structural_deck_y()
+			var _ro_r: Vector3 = camera.global_position
+			var _rd_r: Vector3 = -camera.global_transform.basis.z
+			var _t_r: float = -1.0
+			if absf(_rd_r.y) > 0.001:
+				_t_r = (_deck_y_r - _ro_r.y) / _rd_r.y
+			else:
+				_t_r = 10.0
+			if _t_r <= 0.0 or _t_r >= AIM_DISTANCE:
+				_t_r = 10.0
+			effective_aim_point = _ro_r + _rd_r * _t_r
+			effective_aim_normal = Vector3.UP
+			effective_collider = null
+
 		# Find the wall or structural support the player is aiming at.
 		# The ray hit collider determines the support. Walk up hierarchy.
 		var roof_support: Node3D = null
 		var roof_target_socket: BuildSocket = null
 
-		# Method 1: Ray hit a Wall directly — find its Socket_Top
+		# ROOF-TO-ROOF: ray hit an existing Roof — attach the new roof to it
+		# (side-by-side expansion via the side sockets, or stacking on top via
+		# Socket_Top). This must run FIRST so aiming at a roof never falls
+		# through to the "search all walls" fallback and snaps to the wrong
+		# wall's top.
+		if support != null and _find_piece_name(support) == "Roof":
+			# Edge-aware socket choice: the roof is 2x2, so the aim point in the
+			# roof's flat space decides the intent. Aim near the CENTER -> stack
+			# on top (Socket_Top). Aim near an EDGE -> expand sideways through
+			# that edge's side socket. This matches how walls behave (upper face
+			# = stack, side = attach) and avoids requiring the player to hit the
+			# roof's 0.15m-thin side face.
+			var rr_socket: BuildSocket = null
+			var rr_flat: Transform3D = _get_flat_support_transform(support)
+			var rr_local: Vector3 = rr_flat.affine_inverse() * aim_point
+			var rr_sockets_node: Node3D = support.get_node_or_null("BuildSockets")
+			var rr_center_zone: float = 0.45  # fraction of half-width
+			if rr_sockets_node != null:
+				if absf(rr_local.x) <= rr_center_zone and absf(rr_local.z) <= rr_center_zone:
+					var rr_top: BuildSocket = rr_sockets_node.get_node_or_null("Socket_Top") as BuildSocket
+					if rr_top != null and not rr_top.is_occupied and rr_top.is_compatible("Roof"):
+						rr_socket = rr_top
+				else:
+					var rr_side_name: String = ""
+					if absf(rr_local.x) >= absf(rr_local.z):
+						rr_side_name = "Socket_East" if rr_local.x >= 0.0 else "Socket_West"
+					else:
+						rr_side_name = "Socket_North" if rr_local.z >= 0.0 else "Socket_South"
+					var rr_side: BuildSocket = rr_sockets_node.get_node_or_null(rr_side_name) as BuildSocket
+					if rr_side != null and not rr_side.is_occupied and rr_side.is_compatible("Roof"):
+						rr_socket = rr_side
+			if rr_socket == null:
+				# Aimed roof has no free socket for another roof — show RED
+				# instead of silently jumping to a different wall.
+				_diag["invalid_reason"] = "ROOF SLOT OCCUPIED"
+				_diag["error_category"] = "COLLISION_ERROR"
+				return {"valid": false, "socket": null, "transform": Transform3D(), "support": support}
+			var rr_idx: int = BUILD_RECIPE_NAMES.find("Roof")
+			var rr_temp: Node3D = build_pieces[rr_idx].instantiate()
+			var rr_new_socket: BuildSocket = _find_reciprocal_socket(rr_socket, rr_temp, "Roof")
+			if rr_new_socket == null:
+				rr_temp.queue_free()
+				_diag["invalid_reason"] = "MISSING ROOF SOCKET"
+				_diag["error_category"] = "TRANSFORM_ERROR"
+				return {"valid": false, "socket": rr_socket, "transform": Transform3D(), "support": support}
+			solved = _solve_socket_transform(rr_socket, rr_new_socket.position, support)
+			_diag["solved_pos"] = solved.origin
+			_diag["wall_foundation"] = support.name
+			_diag["target_socket_name"] = rr_socket.name
+			var rr_shape: Shape3D = _get_validation_shape(build_pieces[rr_idx])
+			var rr_overlap := _check_overlap(rr_shape, solved, support)
+			rr_temp.queue_free()
+			# Allow contact with walls/foundations (build surface), but flag
+			# overlap with OTHER roofs or non-build bodies.
+			var rr_filtered: Array[Dictionary] = []
+			for hit in rr_overlap:
+				var hit_body: Node3D = hit.get("collider") as Node3D
+				if hit_body == null or not is_instance_valid(hit_body):
+					continue
+				if _find_piece_name(hit_body) == "Roof":
+					rr_filtered.append(hit)
+					continue
+				var _is_build_rr: bool = false
+				var _wn_rr: Node = hit_body
+				while _wn_rr != null:
+					if _wn_rr.is_in_group("build_surface"):
+						_is_build_rr = true
+						break
+					_wn_rr = _wn_rr.get_parent()
+				if not _is_build_rr:
+					rr_filtered.append(hit)
+			if rr_filtered.size() > 0:
+				var hit_obj_rr: Node3D = rr_filtered[0].get("collider") as Node3D
+				var rr_obj_name: String = "?"
+				if hit_obj_rr != null and is_instance_valid(hit_obj_rr):
+					rr_obj_name = hit_obj_rr.name
+				_diag["invalid_reason"] = "OVERLAP: " + rr_obj_name
+				_diag["error_category"] = "COLLISION_ERROR"
+				_validate_roof_footprint(solved)
+				return {"valid": false, "socket": rr_socket, "transform": solved, "support": support}
+			_validate_roof_footprint(solved)
+			_diag["final"] = "VALID"
+			return {"valid": true, "socket": rr_socket, "transform": solved, "support": support}
+
+		# Method 1: Ray hit a Wall directly — use ITS Socket_Top. If the top is
+		# already occupied (e.g. a 2nd-floor wall), still target this wall so the
+		# placement goes RED instead of silently snapping the roof to a DIFFERENT
+		# wall the player wasn't aiming at.
 		if support != null and _find_piece_name(support) == "Wall":
 			var sockets_node := support.get_node_or_null("BuildSockets")
 			if sockets_node != null:
 				for s in sockets_node.get_children():
-					if s is BuildSocket and s.name == "Socket_Top" \
-						and not s.is_occupied and s.is_compatible("Roof"):
+					if s is BuildSocket and s.name == "Socket_Top" and s.is_compatible("Roof"):
 						roof_target_socket = s
 						roof_support = support
 						break
@@ -1911,7 +2231,9 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				walk = walk.get_parent() as Node3D
 
 		# Method 3: Ray didn't hit a Wall directly — search ALL built
-		# pieces for the nearest Wall with a free Socket_Top.
+		# pieces, but FIRST honor the wall the crosshair is actually over
+		# (its horizontal footprint contains the aim point). Roofs must go on
+		# the wall the player is aiming at — never silently jump to another.
 		# Walls are NOT in _grid_occupancy (only Foundations are), so
 		# we must search the BuiltPieces container where they live.
 		if roof_support == null:
@@ -1919,7 +2241,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			if raft_node != null:
 				var bp: Node3D = raft_node.get_node_or_null("BuiltPieces")
 				if bp != null:
-					var best_horiz_d: float = 4.0  # generous horizontal search
+					var aim_over_wall: Node3D = null
+					var aim_over_socket: BuildSocket = null
 					for child in bp.get_children():
 						if not (child is Node3D):
 							continue
@@ -1928,25 +2251,70 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 						var sn: Node3D = child.get_node_or_null("BuildSockets")
 						if sn == null:
 							continue
-						for s in sn.get_children():
-							if s is BuildSocket and s.name == "Socket_Top" \
-								and not s.is_occupied and s.is_compatible("Roof"):
-								var flat_sp: Vector3 = _get_flat_support_transform(child) * s.position
-								# Use horizontal distance (ignore Y) since the aim
-								# point may be on the Foundation surface far below
-								# the Wall top.
-								var dx: float = effective_aim_point.x - flat_sp.x
-								var dz: float = effective_aim_point.z - flat_sp.z
-								var horiz_d: float = sqrt(dx * dx + dz * dz)
-								if horiz_d < best_horiz_d:
-									best_horiz_d = horiz_d
-									roof_target_socket = s
-									roof_support = child
+						var wall_flat: Transform3D = _get_flat_support_transform(child)
+						var wall_local_aim: Vector3 = wall_flat.affine_inverse() * effective_aim_point
+						# Aim inside the wall's 2.0 x 0.2 footprint -> this is the aimed wall
+						if absf(wall_local_aim.x) <= 1.0 and absf(wall_local_aim.z) <= 0.15:
+							for s in sn.get_children():
+								if s is BuildSocket and s.name == "Socket_Top" and s.is_compatible("Roof"):
+									aim_over_socket = s
+									aim_over_wall = child
+									break
+						if aim_over_wall != null:
+							break
+					if aim_over_wall != null:
+						roof_target_socket = aim_over_socket
+						roof_support = aim_over_wall
+					else:
+						var best_horiz_d: float = 4.0  # generous horizontal search
+						for child in bp.get_children():
+							if not (child is Node3D):
+								continue
+							if _find_piece_name(child) != "Wall":
+								continue
+							var sn: Node3D = child.get_node_or_null("BuildSockets")
+							if sn == null:
+								continue
+							for s in sn.get_children():
+								if s is BuildSocket and s.name == "Socket_Top" \
+									and not s.is_occupied and s.is_compatible("Roof"):
+									var flat_sp: Vector3 = _get_flat_support_transform(child) * s.position
+									# Use horizontal distance (ignore Y) since the aim
+									# point may be on the Foundation surface far below
+									# the Wall top.
+									var dx: float = effective_aim_point.x - flat_sp.x
+									var dz: float = effective_aim_point.z - flat_sp.z
+									var horiz_d: float = sqrt(dx * dx + dz * dz)
+									if horiz_d < best_horiz_d:
+										best_horiz_d = horiz_d
+										roof_target_socket = s
+										roof_support = child
 
 		if roof_support == null or roof_target_socket == null:
 			_diag["invalid_reason"] = "NO VALID ROOF TARGET"
 			_diag["error_category"] = "SUPPORT_ERROR"
 			return {"valid": false}
+		# A roof needs the TOP of the piece it lands on. If the targeted top is
+		# taken by a stacked wall OR a roof, CLIMB to the topmost piece in that
+		# column and target ITS top (the roof belongs on the highest surface the
+		# player can see — roofs stack on roofs, walls stack on walls).
+		var roof_climb: int = 0
+		while roof_target_socket.is_occupied and roof_climb < 8:
+			var above: Node3D = roof_target_socket.occupying_piece as Node3D
+			roof_climb += 1
+			if above == null or not is_instance_valid(above):
+				break
+			var above_pn: String = _find_piece_name(above)
+			if above_pn != "Wall" and above_pn != "Roof":
+				break
+			var sn_above: Node3D = above.get_node_or_null("BuildSockets")
+			if sn_above == null:
+				break
+			var top_above: BuildSocket = sn_above.get_node_or_null("Socket_Top") as BuildSocket
+			if top_above == null or not top_above.is_compatible("Roof"):
+				break
+			roof_target_socket = top_above
+			roof_support = above
 
 		# Update roof hysteresis
 		_roof_last_support = roof_support
@@ -1989,21 +2357,21 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			ghost.visible = true
 
 		var roof_flat_target: Vector3 = _get_flat_support_transform(roof_support) * roof_target_socket.position
-		if ghost != null:
-			var ghost_sockets: Array[BuildSocket] = _get_all_sockets(ghost)
-			for gs in ghost_sockets:
-				if gs.name == roof_base_socket.name:
-					var actual_pos: Vector3 = gs.global_position
-					var socket_err: float = actual_pos.distance_to(roof_flat_target)
-					_diag["actual_socket_pos"] = actual_pos
-					_diag["socket_position_error"] = socket_err
-					_diag["socket_position_valid"] = socket_err <= 0.1
-					if socket_err > 0.1:
-						_diag["invalid_reason"] = "SOCKET MISMATCH: " + str(snappedf(socket_err, 0.001)) + "m"
-						_diag["error_category"] = "TRANSFORM_ERROR"
-						roof_temp.queue_free()
-						return {"valid": false}
-					break
+		# Verify socket alignment from the SOLVED transform — the live ghost's
+		# sockets read stale for AnimatableBody3D in the frame the transform is
+		# set (Jolt sync), which produced false SOCKET MISMATCH errors.
+		var actual_pos: Vector3 = solved * roof_base_socket.position
+		var socket_err: float = actual_pos.distance_to(roof_flat_target)
+		_diag["actual_socket_pos"] = actual_pos
+		_diag["socket_position_error"] = socket_err
+		_diag["socket_position_valid"] = socket_err <= 0.1
+		if socket_err > 0.1:
+			_diag["invalid_reason"] = "SOCKET MISMATCH: " + str(snappedf(socket_err, 0.001)) + "m"
+			_diag["error_category"] = "TRANSFORM_ERROR"
+			# Footprint sampling for the build overlay (samples the intended spot)
+			_validate_roof_footprint(solved)
+			roof_temp.queue_free()
+			return {"valid": false}
 
 		# Overlap check — exclude the support wall and foundations
 		var roof_overlap := _check_overlap(shape, solved, roof_support)
@@ -2032,10 +2400,14 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				_diag["overlap_object"] = "?"
 			_diag["invalid_reason"] = "OVERLAP: " + str(_diag.get("overlap_object", "?"))
 			_diag["error_category"] = "COLLISION_ERROR"
+			_validate_roof_footprint(solved)
 			roof_temp.queue_free()
 			return {"valid": false}
 
 		roof_temp.queue_free()
+		# Footprint sampling for the build overlay (visual only — the roof's
+		# validity is determined by the socket/overlap checks above).
+		_validate_roof_footprint(solved)
 		_diag["final"] = "VALID"
 		return {"valid": true, "socket": roof_target_socket, "transform": solved, "support": roof_support}
 
@@ -2043,7 +2415,17 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	# OTHER NON-FOUNDATION: Socket-based placement (Window, Door, etc.)
 	# ============================================================
 	# Step 4: Find target socket on the support
-	var socket: BuildSocket = _find_best_socket(support, piece_name, effective_aim_point, effective_aim_normal)
+	var socket: BuildSocket = null
+	# STAIRS STACKING: stairs attach to the TOP of the stair below, so a
+	# staircase can climb up to a second floor (or higher).
+	if piece_name == "Stairs" and support != null and _find_piece_name(support) == "Stairs":
+		var _s_sk: Node3D = support.get_node_or_null("BuildSockets")
+		if _s_sk != null:
+			var _s_top: BuildSocket = _s_sk.get_node_or_null("Socket_Top") as BuildSocket
+			if _s_top != null and not _s_top.is_occupied and _s_top.is_compatible("Stairs"):
+				socket = _s_top
+	if socket == null:
+		socket = _find_best_socket(support, piece_name, effective_aim_point, effective_aim_normal)
 	if socket == null:
 		_diag["invalid_reason"] = "NO SOCKET"
 		_diag["error_category"] = "SOCKET_ERROR"
@@ -2090,7 +2472,11 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		var ghost_sockets: Array[BuildSocket] = _get_all_sockets(ghost)
 		for gs in ghost_sockets:
 			if gs.name == new_piece_socket.name:
-				var actual_pos: Vector3 = gs.global_position
+				# Compute from the solved transform instead of reading the live ghost:
+				# a freshly-spawned AnimatableBody3D ghost doesn't reflect its new
+				# transform in global reads until the physics sync, which would
+				# falsely fail the alignment check on the first preview frame.
+				var actual_pos: Vector3 = (solved * gs.transform).origin
 				var socket_err: float = actual_pos.distance_to(flat_target_pos)
 				_diag["actual_socket_pos"] = actual_pos
 				_diag["socket_position_error"] = socket_err
@@ -2227,7 +2613,7 @@ func _update_build_preview() -> void:
 			if raft_fb != null:
 				var aim_cell_fb: Vector2i = _world_to_grid(aim_point)
 				fallback_xform = _compute_foundation_transform(aim_cell_fb)
-		elif piece_name == "Wall":
+		elif piece_name == "Wall" or piece_name == "Door" or piece_name == "Window":
 			# Find nearest Foundation/Raft/Wall and snap wall to its edge
 			var _wf_fb: Node3D = null
 			var _raft_fb: Node3D = _get_raft_node()
@@ -2304,6 +2690,8 @@ func _update_build_preview() -> void:
 	# Material already applied at the top of this function
 	if debug_building:
 		_update_debug_markers()
+	if build_overlay:
+		_update_overlay_markers()
 
 func _ensure_ghost_materials() -> void:
 	if _ghost_valid_mat == null:
@@ -2380,6 +2768,178 @@ func _update_debug_markers() -> void:
 			_debug_actual_marker.visible = false
 
 # ============================================================
+# BUILD OVERLAY — footprint samples + support ratio (F3)
+# ============================================================
+var _overlay_markers_root: Node3D = null
+var _overlay_cells: Array[MeshInstance3D] = []
+var _overlay_labels: Array[Label3D] = []
+var _overlay_mat_green: StandardMaterial3D = null
+var _overlay_mat_orange: StandardMaterial3D = null
+var _overlay_mat_red: StandardMaterial3D = null
+
+func _ensure_overlay_markers(count: int) -> void:
+	if _overlay_markers_root == null or not is_instance_valid(_overlay_markers_root):
+		_overlay_markers_root = Node3D.new()
+		_overlay_markers_root.name = "BuildOverlayMarkers"
+		get_tree().current_scene.add_child(_overlay_markers_root)
+		_overlay_cells.clear()
+		_overlay_labels.clear()
+	if _overlay_mat_green == null:
+		_overlay_mat_green = StandardMaterial3D.new()
+		_overlay_mat_green.albedo_color = Color(0.1, 1.0, 0.1, 0.65)
+		_overlay_mat_green.no_depth_test = true
+		_overlay_mat_green.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	if _overlay_mat_orange == null:
+		_overlay_mat_orange = StandardMaterial3D.new()
+		_overlay_mat_orange.albedo_color = Color(1.0, 0.65, 0.1, 0.65)
+		_overlay_mat_orange.no_depth_test = true
+		_overlay_mat_orange.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	if _overlay_mat_red == null:
+		_overlay_mat_red = StandardMaterial3D.new()
+		_overlay_mat_red.albedo_color = Color(1.0, 0.1, 0.1, 0.65)
+		_overlay_mat_red.no_depth_test = true
+		_overlay_mat_red.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	while _overlay_cells.size() < count:
+		var m := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(1.0, 0.04, 1.0)
+		m.mesh = box
+		# Cell box sits ON the sample point (bottom face at the sample height)
+		m.position = Vector3(0, 0.02, 0)
+		_overlay_markers_root.add_child(m)
+		_overlay_cells.append(m)
+		var lab := Label3D.new()
+		lab.font_size = 48
+		lab.outline_size = 10
+		lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		lab.no_depth_test = true
+		lab.pixel_size = 0.004
+		lab.position = Vector3(0, 0.18, 0)
+		lab.modulate = Color(1, 1, 1)
+		_overlay_markers_root.add_child(lab)
+		_overlay_labels.append(lab)
+
+func _clear_overlay_markers() -> void:
+	if _overlay_markers_root != null and is_instance_valid(_overlay_markers_root):
+		_overlay_markers_root.queue_free()
+	_overlay_markers_root = null
+	_overlay_cells.clear()
+	_overlay_labels.clear()
+
+# Support percentage for one sample point: measure the gap between the sample
+# height and the build surface directly below it (0% when nothing is found).
+func _overlay_sample_percent(pos: Vector3, fallback: float) -> float:
+	var space_state := get_world_3d().direct_space_state
+	var ray_origin: Vector3 = pos + Vector3.UP * 1.0
+	var ray_end: Vector3 = pos + Vector3.DOWN * 3.0
+	var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_end)
+	query.collision_mask = 1
+	query.exclude = _support_ray_excludes()
+	var hit := space_state.intersect_ray(query)
+	if hit:
+		var hb: Node3D = hit.collider as Node3D
+		if _is_build_surface(hb):
+			var gap: float = pos.y - hit.position.y
+			# Sample sits right on the surface -> 100%; gap up to 0.3m scales down.
+			var pct: float = clampf(1.0 - (gap - 0.02) / 0.3, 0.0, 1.0)
+			if pct >= 0.99:
+				return 100.0
+			return pct * 100.0
+	return 0.0 if fallback < 0.5 else 100.0
+
+# Per-cell support percentage for every recorded sample position. Used by both
+# the overlay grid labels and the HUD ratio so they always agree.
+func _overlay_sample_percents(positions: Array, supported: Array) -> Array:
+	var out: Array = []
+	for i in positions.size():
+		var is_sup: bool = bool(supported[i]) if i < supported.size() else false
+		out.append(_overlay_sample_percent(positions[i], 100.0 if is_sup else 0.0))
+	return out
+
+func _update_overlay_markers() -> void:
+	if _overlay_markers_root != null and is_instance_valid(_overlay_markers_root):
+		for m in _overlay_cells:
+			m.visible = false
+		for l in _overlay_labels:
+			l.visible = false
+	if not build_mode or not build_overlay:
+		return
+	var positions: Array = _diag.get("sample_positions", [])
+	var supported: Array = _diag.get("sample_supported", [])
+	if positions.is_empty():
+		return
+	# INVALID resolves leave the ghost at its fallback spot (e.g. deck height)
+	# while the recorded samples came from a different solve — recenter the
+	# grid on the ghost's VISIBLE position so the overlay always shows where
+	# the player actually sees the preview. Valid resolves already sample the
+	# correct solve position, so no offset (the ghost may report a stale
+	# transform for AnimatableBody3D in the same frame).
+	var offset: Vector3 = Vector3.ZERO
+	if not build_valid and ghost != null and is_instance_valid(ghost) and positions.size() > 0:
+		var sample_origin: Vector3 = positions[0]
+		var first_in_ghost_local: Vector3 = ghost.global_transform.affine_inverse() * sample_origin
+		if first_in_ghost_local.length() < 3.0:
+			offset = ghost.global_position - sample_origin
+	var _overlay_percents: Array = _overlay_sample_percents(positions, supported)
+	_ensure_overlay_markers(positions.size())
+	var cell_size: float = float(_diag.get("footprint_cell_size", FOUNDATION_WIDTH * 0.5))
+	for i in positions.size():
+		var m: MeshInstance3D = _overlay_cells[i]
+		var lab: Label3D = _overlay_labels[i]
+		m.global_position = positions[i] + offset
+		# Reorient the cell box so it lies flat on the surface (axis-aligned
+		# on X/Z, no pitch/roll — grid stays level even over waves)
+		m.global_basis = Basis(Vector3.UP, 0.0)
+		(m.mesh as BoxMesh).size = Vector3(cell_size, 0.04, cell_size)
+		var percents: Array = _overlay_percents
+		var pct: float = 0.0
+		if i < percents.size():
+			pct = percents[i]
+		# Cell COLOR follows the placement verdict (green = will build, red =
+		# won't), so the overlay never contradicts the build system. The % label
+		# still shows the actual surface coverage under that cell.
+		if build_valid:
+			m.set_surface_override_material(0, _overlay_mat_green)
+		else:
+			m.set_surface_override_material(0, _overlay_mat_red)
+		m.visible = true
+		lab.global_position = positions[i] + Vector3.UP * 0.22
+		lab.text = "%d%%" % int(roundf(pct))
+		lab.visible = true
+
+func _overlay_hud_text() -> String:
+	if not build_mode or not build_overlay:
+		return ""
+	var d: String = ""
+	var positions: Array = _diag.get("sample_positions", [])
+	var supported: Array = _diag.get("sample_supported", [])
+	var tot: int = positions.size()
+	var force_red: bool = not build_valid and str(_diag.get("invalid_reason", "")) not in ["", "NO SUPPORT SURFACE", "INSUFFICIENT SUPPORT"]
+	d += "\n--- BUILD OVERLAY ---"
+	if tot > 0:
+		if force_red:
+			var sup: int = int(_diag.get("footprint_supported", 0))
+			d += "\nSamples: %d/%d supported (%.0f%%)  [placement %s]" % [sup, tot, float(_diag.get("footprint_ratio", 0.0)) * 100.0, str(_diag.get("invalid_reason", "?"))]
+		else:
+			var percents: Array = _overlay_sample_percents(positions, supported)
+			var sum: float = 0.0
+			for p in percents:
+				sum += p
+			var avg: float = sum / percents.size() if percents.size() > 0 else 0.0
+			d += "\nCoverage: %.0f%%  (%d cells, 100%% = fully on surface)" % [avg, tot]
+	else:
+		d += "\nNo footprint samples for this piece"
+	if _diag.has("center_supported"):
+		d += "\nCenter ray: " + _yn(_diag.get("center_supported", false))
+	if _diag.has("bottom_height") and _diag.has("foundation_height"):
+		d += "\nBottom: %.3f  Surface: %.3f" % [_diag.get("bottom_height", 0.0), _diag.get("foundation_height", 0.0)]
+	if _diag.has("wall_edge") and str(_diag.get("wall_edge", "")) != "":
+		d += "\nEdge/Socket: " + str(_diag.get("wall_edge", "?"))
+	if _diag.has("wall_foundation"):
+		d += "\nSurface piece: " + str(_diag.get("wall_foundation", "?"))
+	return d
+
+# ============================================================
 # BUILD SYSTEM — TRY BUILD (CONFIRM)
 # ============================================================
 func _try_build() -> void:
@@ -2387,7 +2947,10 @@ func _try_build() -> void:
 		return
 	var piece_name: String = BUILD_RECIPE_NAMES[selected_piece_index]
 	# Walls use direct transform, no socket required
-	if piece_name != "Wall" and _ghost_target_socket == null:
+	# Walls, Doors and Windows use the direct ghost transform (no socket
+	# required) — they are wall-sized pieces placed by the shared Wall solver.
+	if piece_name != "Wall" and piece_name != "Door" and piece_name != "Window" \
+		and _ghost_target_socket == null:
 		return
 	if not Inventory.can_afford(piece_name):
 		return
@@ -2395,6 +2958,11 @@ func _try_build() -> void:
 		return
 	var scene: PackedScene = build_pieces[selected_piece_index]
 	var piece: Node3D = scene.instantiate()
+	# Give every placed piece a unique name — Godot auto-renames duplicate
+	# children to "@AnimatableBody3D@n" (class name based), which breaks the
+	# name-based piece detection (_find_piece_name etc.) for every piece after
+	# the first of its type.
+	piece.name = "%s_%d" % [piece_name, piece.get_instance_id()]
 	# ALWAYS parent under the actual raft — NOT the socket's parent_raft.
 	# When building from a Foundation, get_parent_raft() returns the Foundation
 	# (it is in build_surface group). Parenting there causes the piece local
@@ -2409,11 +2977,15 @@ func _try_build() -> void:
 		container = Node3D.new()
 		container.name = "BuiltPieces"
 		raft.add_child(container)
-	# Disable collision BEFORE adding to tree to prevent pushing the player
-	var piece_col: CollisionShape3D = piece.get_node_or_null("CollisionShape3D") as CollisionShape3D
-	if piece_col != null:
-		piece_col.disabled = true
-	container.add_child(piece)
+	# Disable ALL collision shapes BEFORE adding to tree to prevent pushing the
+	# player (some pieces have several, e.g. stairs steps)
+	var piece_cols: Array[Node] = piece.find_children("*", "CollisionShape3D", true, false)
+	for _pc in piece_cols:
+		(_pc as CollisionShape3D).disabled = true
+	# Set the piece's transform BEFORE add_child so the physics body enters the
+	# space already placed. Setting global_transform right after add would be
+	# overwritten by the physics sync for script-animated bodies (e.g. the
+	# Door's _physics_process), snapping the piece back to the raft origin.
 	# Use the EXACT candidate cell from preview — never recompute from
 	# world position, which can drift between preview and E press frames.
 	var cell: Vector2i = _ghost_cell
@@ -2430,11 +3002,12 @@ func _try_build() -> void:
 		var raft_local_basis: Basis = Basis(Vector3.UP, build_rotation)
 		piece.transform = Transform3D(raft_local_basis, raft_local_pos)
 	else:
-		# Wall/other: use the ghost's preview transform directly
-		piece.global_transform = _ghost_transform
+		# Wall/other: use the ghost's preview transform, converted to raft-local
+		piece.transform = raft.global_transform.affine_inverse() * _ghost_transform
+	container.add_child(piece)
 	# Re-enable collision after physics frame settles (prevents pushing player)
-	if piece_col != null:
-		piece_col.set_deferred("disabled", false)
+	for _pc in piece_cols:
+		(_pc as CollisionShape3D).set_deferred("disabled", false)
 	piece.add_to_group("build_surface")
 	# Link sockets if available (walls use direct transform, no socket)
 	if _ghost_target_socket != null:
@@ -2485,18 +3058,19 @@ func _link_reciprocal_socket(new_piece: Node3D, parent_socket: BuildSocket) -> v
 			best = s
 	if best != null:
 		var parent_piece_of_socket := parent_socket.get_parent_piece()
-		best.occupy(parent_piece_of_socket if parent_piece_of_socket != null else new_piece)
-
-# ============================================================
+		best.occupy(parent_piece_of_socket if parent_piece_of_socket != null else new_piece)# ============================================================
 # BUILD SYSTEM — EDIT SYSTEM
 # ============================================================
 const RECIPE_REFUND := {
 	"Foundation": {"Wood": 5},
 	"Wall": {"Wood": 8, "Rope": 1},
+	"Roof": {"Wood": 8, "Rope": 1},
 	"Stairs": {"Wood": 6, "Rope": 1},
 	"Door": {"Wood": 4, "Rope": 1},
 	"Window": {"Wood": 3, "Plastic": 1},
 }
+
+
 
 # Walk up the node hierarchy to find a node with BuildSockets (a building piece).
 func _find_editable_target(collider: Node3D) -> Node3D:
@@ -2807,32 +3381,39 @@ func _remove_editing() -> void:
 func _set_edit_color(mat: StandardMaterial3D) -> void:
 	if _editing == null:
 		return
-	for child in _editing.get_children():
-		if child is MeshInstance3D:
-			child.set_surface_override_material(0, mat)
+	var stack: Array[Node] = _editing.get_children()
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is MeshInstance3D:
+			(n as MeshInstance3D).set_surface_override_material(0, mat)
+		for c in n.get_children():
+			stack.append(c)
 
 func _apply_building_color(obj: Node3D) -> void:
-	if obj.name.begins_with("Door"):
-		for child in obj.get_children():
-			if child is MeshInstance3D:
-				child.set_surface_override_material(0, null)
+	if obj.name.begins_with("Door") or obj.name.begins_with("Window"):
+		var reset_stack: Array[Node] = obj.get_children()
+		while not reset_stack.is_empty():
+			var n: Node = reset_stack.pop_back()
+			if n is MeshInstance3D:
+				(n as MeshInstance3D).set_surface_override_material(0, null)
+			for c in n.get_children():
+				reset_stack.append(c)
 		return
 	var building_name := obj.name
-	if building_name.begins_with("Window"):
-		for child in obj.get_children():
-			if child is MeshInstance3D:
-				child.set_surface_override_material(0, null)
-		return
 	var color := Color(0.72, 0.53, 0.30)
 	if building_name.begins_with("Wall"):
 		color = Color(0.62, 0.43, 0.22)
 	elif building_name.begins_with("Stairs"):
 		color = Color(0.55, 0.38, 0.20)
-	for child in obj.get_children():
-		if child is MeshInstance3D:
+	var stack: Array[Node] = obj.get_children()
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is MeshInstance3D:
 			var mat := StandardMaterial3D.new()
 			mat.albedo_color = color
-			child.set_surface_override_material(0, mat)
+			(n as MeshInstance3D).set_surface_override_material(0, mat)
+		for c in n.get_children():
+			stack.append(c)
 
 # ============================================================
 # BUILD SYSTEM — SCENE VALIDATION
@@ -2915,8 +3496,11 @@ func _update_hud() -> void:
 			text += "\nCost: OK"
 		else:
 			text += "\nCost: NEED MORE"
-		text += "\nR/Y=Rotate  Tab=Switch  P=Place  B=Exit"
-		if debug_building and _diag.size() > 0:
+		text += "\nR/Y=Rotate(90°)  Shift+R=15°  Tab=Switch  P=Place  B=Exit"
+		text += "\nF3=Overlay " + ("ON" if build_overlay else "OFF")
+		if build_overlay:
+			text += _overlay_hud_text()
+		elif debug_building and _diag.size() > 0:
 			text += _format_debug_hud()
 		else:
 			# Always show footprint info and reason when available

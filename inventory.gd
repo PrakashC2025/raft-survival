@@ -12,6 +12,7 @@ var infinite: bool = false
 const RECIPES := {
 	"Foundation":      {"Wood": 5},
 	"Wall":            {"Wood": 8, "Rope": 1},
+	"Roof":            {"Wood": 8, "Rope": 1},
 	"Stairs":          {"Wood": 6, "Rope": 1},
 	"Door":            {"Wood": 4, "Rope": 1},
 	"Window":          {"Wood": 3, "Plastic": 1},

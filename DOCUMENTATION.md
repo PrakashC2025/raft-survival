@@ -62,7 +62,7 @@ Double-click E on a placed piece -> move / rotate / remove it (X refunds)
 - **Single Aim Source:** One raycast from the camera center powers all interactions.
 - **Grid-Cell Foundation:** Foundations snap to a structural grid. Only Foundations (and the raft) live in the occupancy grid; walls/roofs/doors/windows are edge or socket attachments.
 - **Edge-Based Wall:** Walls attach to Foundation edges. Crosshair determines which edge and position.
-- **Top-Attachment Roof:** Roofs snap to Wall tops automatically when aiming at a Wall.
+- **Top-Attachment Roof:** Roofs snap to Wall tops automatically when aiming at a Wall — and to other Roofs: aiming at a roof's **edge** expands the roof sideways (flush, like walls), aiming at its **center** stacks a second roof on top.
 - **Group-Based Overlap:** All build pieces join the `"build_surface"` group. Overlap detection excludes group members hierarchically.
 - **Flat Transform Solver:** All placement math uses the support's *flat* transform (position + Y-rotation only, no wave tilt) so placed buildings are always level, never tilted by waves.
 - **Debug-by-default:** `player._ready()` sets `Inventory.infinite = true` and grants 999 Wood / Rope / Plastic.
@@ -92,8 +92,8 @@ project_root/
 ├── wall.tscn                    # 2x2.5x0.2m — Socket_Base/Top/Middle + 4 sides
 ├── roof.tscn                    # 2x0.15x2m — Socket_Base/Top + 4 edge sockets
 ├── stairs.tscn                  # 5-step staircase — Socket_Base/Top + 4 edges
-├── door.tscn / door.gd          # Swinging door + interact Area3D
-├── window.tscn                  # 1.5x1.5x0.1m transparent pane
+├── door.tscn / door.gd          # Wall-sized door: static frame + hinged leaf
+├── window.tscn                  # Wall-sized panel with plus-shaped opening
 ├── raft_extension.tscn          # Placeholder (no sockets/script yet)
 ├── bonfire.tscn                 # Placeholder (no physics body/script yet)
 └── icon.svg
@@ -113,7 +113,7 @@ Defined in `project.godot` (`[input]`). `rope_*` actions are **created at runtim
 | `interact` | E | Pickup debris / Toggle door / Double-click = pick up piece for editing |
 | `build` | B | Toggle build mode / Cancel edit |
 | `cycle_build` | Tab | Cycle: Foundation→Wall→Roof→Stairs→Door→Window |
-| `rotate_build` | R **and** Y | Rotate build (90°) |
+| `rotate_build` | R **and** Y | Rotate build 90° (hold **Shift** for 15° fine steps) |
 | `rotate_build_x` | X | Rotate on X axis (**edit mode only** — X is shadowed by `remove_build` in edit mode) |
 | `place_build` | P | Place building / Confirm edit |
 | `remove_build` | X | Remove building (edit mode) + refund |
@@ -121,8 +121,9 @@ Defined in `project.godot` (`[input]`). `rope_*` actions are **created at runtim
 | `rope_throw` | Q (runtime) | Hold to charge, release to throw hook |
 | `rope_pull` | F (runtime) | Reel hook / hooked debris |
 | `rope_cancel` | Right-click (runtime) | Cancel throw / release debris |
+| **F3** (runtime) | Toggle the build overlay (footprint samples + support ratio) |
 
-> **Note:** `rotate_build` binds both R and Y. `rotate_build_x` binds X, but in edit mode X is consumed by `remove_build` first (checked earlier in `_process`), so the X-axis rotation is effectively unreachable via keyboard right now.
+> **Note:** `rotate_build` binds both R and Y; holding **Shift** while rotating uses 15° steps instead of 90° (handy for angling walls placed in a foundation's center). `rotate_build_x` binds X, but in edit mode X is consumed by `remove_build` first (checked earlier in `_process`), so the X-axis rotation is effectively unreachable via keyboard right now. **F3** toggles the build overlay in build mode (see below).
 
 ---
 
@@ -183,10 +184,10 @@ Main (Node3D)
 │       ├── Crosshair (Control) [crosshair.gd]
 │       └── InventoryHUD (Label, created at runtime by player._create_hud)
 └── DebrisSpawner (Node3D) [debris_spawner.gd]
-    └── (runtime instances of debris.tscn)
+	└── (runtime instances of debris.tscn)
 ```
 
-Runtime-created nodes: `BuildPreviewRoot` (ghost preview parent), `BuildDebugMarkers` (debug spheres, only when `debug_building`).
+Runtime-created nodes: `BuildPreviewRoot` (ghost preview parent), `BuildDebugMarkers` (debug spheres, only when `debug_building`), `BuildOverlayMarkers` (footprint-sample spheres, only while the F3 build overlay is on).
 
 ---
 
@@ -228,7 +229,10 @@ AIM_DISTANCE = 60.0, PICKUP_RANGE = 5.0, NEARBY_PICKUP_RANGE = 2.0
 BUILD_RECIPE_NAMES = ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
 BUILD_SCENES = [foundation.tscn, wall.tscn, roof.tscn, stairs.tscn, door.tscn, window.tscn]
 SOCKET_SNAP_RADIUS = 2.5
-WALL_SURFACE_SNAP_RANGE = 3.0    # wall ghost snaps to a surface within this 2D distance
+WALL_SURFACE_SNAP_RANGE = 4.0    # wall ghost snaps to a surface within this 2D distance
+WALL_STACK_AIM_TOLERANCE = 0.6   # aiming this close to a wall's top stacks a 2nd floor wall
+BUILD_ROTATION_STEP = PI/2        # R/Y rotate 90°
+BUILD_ROTATION_FINE_STEP = PI/12  # hold Shift for 15° fine steps (e.g. angling a center wall)
 
 FOUNDATION_WIDTH = 2.0, FOUNDATION_DEPTH = 2.0, FOUNDATION_THICKNESS = 0.30
 FOUNDATION_HALF_WIDTH = 1.0, FOUNDATION_HALF_DEPTH = 1.0, FOUNDATION_HALF_HEIGHT = 0.15
@@ -239,7 +243,7 @@ FOUNDATION_HALF_WIDTH = 1.0, FOUNDATION_HALF_DEPTH = 1.0, FOUNDATION_HALF_HEIGHT
 ```gdscript
 var build_mode: bool = false
 var ghost: Node3D = null
-var build_rotation: float = 0.0      # 90° steps around Y
+var build_rotation: float = 0.0      # 90° steps around Y (15° with Shift)
 var build_rotation_x: float = 0.0    # X-axis rotation (edit mode)
 var build_valid: bool = false
 var _ghost_valid_mat / _ghost_invalid_mat  # green/red, alpha 0.85, unshaded, no_depth_test
@@ -251,6 +255,8 @@ var _ghost_valid_mat / _ghost_invalid_mat  # green/red, alpha 0.85, unshaded, no
 var _grid_occupancy: Dictionary = {}  # raft-relative Vector2i -> Node3D (Foundations + Raft only)
 var _raft_node: Node3D = null
 ```
+
+The raft registers itself at cell (0,0) as the structural anchor, but it does **not** block placement: `_grid_is_blocked()` ignores the raft entry (only real placed pieces block a cell), and `_is_cell_structurally_supported()` treats the raft's own cell and its four cardinal neighbors as directly supported — located from the scene node, not `_grid_occupancy` (which gets overwritten when the first Foundation is placed on the raft). So aiming at the raft deck places the FIRST Foundation **on the raft** (cell 0,0, overlay shows 100% coverage) and then expands around it, instead of snapping the preview into the water beside it.
 
 ### Edit System State
 
@@ -294,10 +300,10 @@ Two independent wave implementations must agree:
 
 ```gdscript
 func get_height(world_pos: Vector3) -> float:
-    var h := sin(world_pos.x * 0.4 + _time * wave_speed) \
-        + sin(world_pos.z * 0.3 + _time * wave_speed * 0.8) \
-        + 0.5 * sin((world_pos.x + world_pos.z) * 0.7 + _time * 1.7)
-    return global_position.y + h * wave_height * 0.33
+	var h := sin(world_pos.x * 0.4 + _time * wave_speed) \
+		+ sin(world_pos.z * 0.3 + _time * wave_speed * 0.8) \
+		+ 0.5 * sin((world_pos.x + world_pos.z) * 0.7 + _time * 1.7)
+	return global_position.y + h * wave_height * 0.33
 ```
 
 `wave_height = 0.4`, `wave_speed = 1.2` (exports). Max wave amplitude ~0.33m. The node registers in the `"ocean"` group so any runtime-instanced node (debris, etc.) can find it across scene boundaries.
@@ -380,7 +386,7 @@ angular_velocity = (sin(t*0.5)*0.2, rot_speed, cos(t*0.4)*0.2)
 
 ```
 IDLE -> THROWING -> EXTENDED -> REELING -> RETURNING -> IDLE
-                  \-> HOOKED -> REELING -/
+				  \-> HOOKED -> REELING -/
 Cancel from any active state -> RETURNING
 ```
 
@@ -425,18 +431,23 @@ See [§4](#4-autoloads) for the recipe table.
 
 ## 13. Door System
 
+The Door is now a **wall-sized piece** (2×2.5×0.2 — same collision box as Wall) with a **static frame and a hinged leaf**. It shares the Wall placement solver (see §15), so it joins neighboring walls flush — collision touch = join, overlapping another wall = red `OVERLAPPING WALL` — and never embeds into a wall.
+
 `door.gd` on `AnimatableBody3D`:
 
 ```gdscript
 func toggle() -> void:  # called via "toggle" in collider check on E
-    is_open = !is_open
-    _target_rotation = deg_to_rad(open_angle) if is_open else 0.0
-# _physics_process: rotation.y = lerp_angle(rotation.y, _target_rotation, delta * swing_speed)
+	is_open = !is_open
+	_target_rotation = deg_to_rad(open_angle) if is_open else 0.0
+	_swinging = true
+# _physics_process: only the LEAF swings (LeafPivot.rotation.y), like a real
+#   door — the frame stays fixed. Rotating a child pivot (not the body root)
+#   also avoids the AnimatableBody3D placement-reset bug entirely.
 ```
 
 - `open_angle = 90°`, `swing_speed = 4.0`.
 - Node config: `collision_layer = 1`, `collision_mask = 5` (bits 1+3). Extra `IntractZone` Area3D (1.8×2.5×1.8) for interaction detection.
-- Meshes: frame (left/right/top), panel, handle, 2 hinges.
+- Node tree: `FrameLeft/Right/Top` (static frame meshes) + `LeafPivot` (hinged at x=-0.7) containing the leaf panel, handle, and 2 hinges.
 
 ---
 
@@ -469,9 +480,35 @@ SampleMarker                          (buoyancy sample point, registered with ra
 CollisionShape3D (Box 2x2.5x0.2) + MeshInstance3D
 BuildSockets/
   Socket_Base    (0, -1.25, 0)  WALL_BASE  accepts [Foundation, Wall, Door, Window]
-  Socket_Top     (0,  1.25, 0)  WALL_TOP   accepts [Wall, Foundation, Roof]
-  Socket_Middle  (0,  0,    0)  WALL_SIDE  accepts [Door, Window]
-  Socket_North/South/East/West  WALL_SIDE  accepts [Wall]
+  Socket_Top     (0,  1.25, 0)  WALL_TOP   accepts [Wall, Door, Window, Foundation, Roof]
+  Socket_North/South/East/West  WALL_SIDE  accepts [Wall, Door, Window]
+SampleMarker
+```
+
+> **Door/Window sockets** mirror the Wall layout exactly (same positions and
+> accepts lists) so all three tile interchangeably — side-by-side joins, second-
+> floor stacking, and roof placement all work. The old `Socket_Middle`
+> (accepts `[Door, Window]`) was removed: it embedded doors/windows into the
+> middle of a wall, which caused the nesting/overflow the player reported.
+
+### Door (`door.tscn`) — AnimatableBody3D, 2x2.5x0.2
+
+```
+CollisionShape3D (Box 2x2.5x0.2) + static frame meshes + LeafPivot (leaf + handle + hinges)
+BuildSockets/  Socket_Base / Socket_Top / Socket_North/South/East/West  (same as Wall)
+SampleMarker
+```
+
+### Window (`window.tscn`) — AnimatableBody3D, 2x2.5x0.2
+
+Wall-sized panel with a **plus-shaped opening in the center** (4 wall corner
+blocks + translucent glass cross). Sockets identical to Wall so it attaches to
+walls flush, stacks, and rotates with R/Y like any wall piece.
+
+```
+CollisionShape3D (Box 2x2.5x0.2)
+CornerTL/TR/BL/BR (0.7x0.95x0.2 wall blocks) + GlassV/GlassH (plus-shaped glass)
+BuildSockets/  Socket_Base / Socket_Top / Socket_North/South/East/West  (same as Wall)
 SampleMarker
 ```
 
@@ -480,21 +517,28 @@ SampleMarker
 ```
 CollisionShape3D (Box 2x0.15x2) + MeshInstance3D
 BuildSockets/
-  Socket_Base    (0, -0.075, 0)  WALL_TOP (type 3)  accepts [Wall]
+  Socket_Base    (0, -0.075, 0)  WALL_TOP (type 3)  accepts [Wall, Roof]
   Socket_Top     (0,  0.075, 0)  WALL_TOP          accepts [Roof]
-  Socket_North/South/East/West   FOUNDATION_EDGE   accepts [Foundation]
+  Socket_North/South/East/West   FOUNDATION_EDGE   accepts [Foundation, Roof]
 SampleMarker
 ```
 
 ### Stairs (`stairs.tscn`) — AnimatableBody3D, 5 steps
 
 ```
-CollisionShape3D (Box 2x0.2x2) + Step01..Step05 (Box 2x0.2x0.4 rising: (0,0.2i,0.4i))
+Stepped collision: CollisionShape3D + CollisionStep02..05 (Box 2x0.2x0.4 each,
+  matching Step01..05 so the stairs are actually climbable)
+Step01..Step05 (Box 2x0.2x0.4 rising: (0,0.2i,0.4i))
 BuildSockets/
-  Socket_Base (0, -0.1, 0.6)  FOUNDATION_EDGE  accepts [Foundation]
-  Socket_Top  (0,  0.9, 1.6)  FOUNDATION_EDGE  accepts [Foundation]
+  Socket_Base (0, -0.1, 0.6)  FOUNDATION_EDGE  accepts [Foundation, Stairs]
+  Socket_Top  (0,  0.9, 1.6)  FOUNDATION_EDGE  accepts [Foundation, Stairs]
   Socket_North/South/East/West                 accepts [Foundation]
 SampleMarker
+
+Stairs STACK on stairs: aiming at a placed stair attaches the next stair to its
+  Socket_Top (always used when support is Stairs), so a staircase climbs up to
+  a second floor — each stacked stair rises 1.0m. The reciprocal is pinned to
+  Socket_Base (the diagonal sockets defeat the generic opposite-facing scoring).
 ```
 
 ### Door (`door.tscn`) — AnimatableBody3D, collision 1.0x2.0x0.12
@@ -563,14 +607,14 @@ RopeSystem._physics_process:
 Player._process:
   _update_hud()
   PRIORITY 1 — EDIT MODE (if _editing):
-    P = confirm, X = remove+refund, B = cancel
-    R = rotate (90°), then follow preview every frame
+	P = confirm, X = remove+refund, B = cancel
+	R = rotate (90°), then follow preview every frame
   E double-click detection (works in AND out of build mode)
   PRIORITY 2 — BUILD MODE:
-    B = toggle, Tab = cycle piece, P = place, R = rotate
-    _update_build_preview() every frame
+	B = toggle, Tab = cycle piece, P = place, R = rotate
+	_update_build_preview() every frame
   PRIORITY 3 — NORMAL:
-    _handle_pickup() (E) + crosshair state (ITEM when aiming debris/door)
+	_handle_pickup() (E) + crosshair state (ITEM when aiming debris/door)
 ```
 
 ### Build Preview Flow
@@ -579,10 +623,10 @@ Player._process:
 _update_build_preview():
   _ensure_ghost_materials()
   _resolve_placement(piece_name, aim_point)
-    Foundation: structural build-plane ray -> grid cell -> candidate scoring
-    Wall:       actual ray hit -> edge/wall-to-wall/socket -> footprint 3x3
-    Roof:       Socket_Top of Wall (3 search methods)
-    Door/Window/Other: best socket + reciprocal + gap check
+	Foundation: structural build-plane ray -> grid cell -> candidate scoring
+	Wall:       actual ray hit -> center/edge/wall-to-wall/stack -> footprint 3x3
+	Roof:       Socket_Top of Wall (3 search methods)
+	Door/Window/Other: best socket + reciprocal + gap check
   _apply_ghost_material(valid)        # BEFORE visibility (never flashes wrong color)
   valid  -> ghost.global_transform = solved, visible (GREEN)
   invalid-> fallback transform (per-piece), visible (RED), diag reason set
@@ -600,7 +644,7 @@ _update_build_preview():
 | BUILDING | B | NOT BUILDING (frees ghost) |
 | BUILDING | P (valid + affordable) | Piece placed under raft/BuiltPieces |
 | BUILDING | Tab | Cycle piece (respawns ghost) |
-| BUILDING | R / Y | Rotate 90° |
+| BUILDING | R / Y (Shift = 15°) | Rotate 90° (fine steps with Shift) |
 
 ### Edit Mode (piece pickup)
 
@@ -627,6 +671,18 @@ REELING -> (within 1.5m) collect -> RETURNING -> IDLE
 
 All placement is computed by `_resolve_placement(piece_name, hit_point)` in `player.gd`, which fills a `_diag` dictionary (visible in the HUD when `debug_building`).
 
+Structural support finds the raft from the **scene node** (`_get_raft_node()`), never `_grid_occupancy` — placing the first Foundation on the raft overwrites the raft's grid entry, so grid-based raft lookups would make every later build fail with `NO STRUCTURAL SUPPORT`.
+
+### Build Overlay (F3)
+
+While in build mode, **F3** toggles an on-screen overlay that visualizes the placement footprint validation:
+
+- A **grid of flat cells** rendered in 3D at each footprint sample position, with a floating **% label** per cell — the percentage is how much of that cell's column is supported by the build surface directly below. Every piece type samples its footprint: walls and foundations use their 3×3 bottom grid, roofs sample their bottom plane too (`_validate_roof_footprint`).
+- **Cell color follows the placement verdict**, so the overlay never contradicts the build system: **green** wherever P would build (even if the surface coverage is 0%, e.g. a Foundation expanding over water on grid support), **red** wherever the placement is invalid (overlapping wall, no support, etc.). The % label still shows the honest surface coverage under each cell.
+- The grid **follows the ghost preview**, and on invalid resolves it recenters onto the ghost's visible position.
+- A **HUD block** with either `Coverage: NN% (N cells, 100% = fully on surface)` (valid placements) or `Samples: X/Y supported (NN%) [placement REASON]` (collision-invalid), plus the center-ray result, bottom vs. surface height, the resolved edge/socket, and the surface piece. This works independently of `debug_building`.
+- Markers are cleared when the overlay is toggled off or build mode is exited. The ghost's collision is excluded from the support rays, so the markers always show the real surface beneath the preview.
+
 ### Aim Resolution
 
 - **Foundation:** ray is intersected with the structural build plane (`deck_y = raft_flat.y + 0.15`); if the ray misses or hits a non-build object, a plane fallback resolves the exact aim cell (looks up the Foundation under the crosshair among 9 neighboring cells).
@@ -637,11 +693,11 @@ All placement is computed by `_resolve_placement(piece_name, hit_point)` in `pla
 
 ```
 Candidate cells: aim cell, aim-side cell, support's cardinal+diagonal neighbors,
-                 and neighbors of ALL occupied cells (gap filling).
+				 and neighbors of ALL occupied cells (gap filling).
 Scoring: -dist, +100 if exact aim cell, +5 aimed direction, +2 per supporting neighbor, -3 diagonal-only
 Reject: occupied, structurally unsupported (BFS to raft), >6m from aim
 Transform: _compute_foundation_transform(cell)  # THE single authoritative cell->world formula
-           local = (cell.x*W, 0, cell.y*D), world = flat_raft * local, yaw = build_rotation
+		   local = (cell.x*W, 0, cell.y*D), world = flat_raft * local, yaw = build_rotation
 Validation pipeline (any failure => INVALID with reason):
   1. Size: collision box must equal 2x0.3x2 (±0.01) AND mesh AABB must match
   2. Height: foundation top (origin.y + 0.15) must equal structural deck Y (±0.01)
@@ -651,31 +707,63 @@ Validation pipeline (any failure => INVALID with reason):
   6. Footprint: 4 shrunken corner cells must not overlap occupied cells (touching is valid)
 ```
 
-### Wall — Edge Attachment
+### Wall / Door / Window — Edge Attachment
+
+Door and Window are **wall-sized pieces** (2x2.5x0.2) that share this solver
+with Wall: same sockets, same footprint validation, same overlap rejection.
+They join walls flush (collision touch = join; overlap = RED `OVERLAPPING
+WALL`) and can be stacked on and rotated like any wall piece.
 
 The wall ghost follows the crosshair **everywhere**. When the aim ray misses or hits a non-build object, the crosshair is projected onto the structural deck plane (`deck_y + 1.25`) so the ghost never jumps to the raft.
 
 ```
 Aim: ray hit (build surface) OR deck-plane projection of the crosshair.
 Support selection: P1 ray-hit (Foundation/Raft/Wall/Door/Window)
-                   P2 nearest surface to the projected aim, only if within
-                      WALL_SURFACE_SNAP_RANGE (3m)
-                   P3 none -> RED ghost AT the crosshair (deck height, invalid)
+				   P2a vertical drop at the projected aim — the build surface
+					   directly UNDER the crosshair becomes the support (covers
+					   grazing angles where the main ray passes over the deck edge)
+				   P2 nearest surface to the projected aim, only if within
+					  WALL_SURFACE_SNAP_RANGE (4m)
+				   P3 none -> DO NOT reject yet: fall through to the shared
+					  FOOTPRINT validation below — the wall's real bottom may
+					  still rest on a surface under the crosshair even when the
+					  aim ray grazes past it. Genuinely unsupported spots
+					  (open water, floating above) still come out INVALID.
 If support is Wall/Door/Window  -> WALL-TO-WALL socket placement:
-    _find_best_socket (score = alignment*10 - dist, radius 2.5m)
-    -> reciprocal -> _solve_socket_transform -> overlap (skips foundation below)
-If support is Foundation/Raft  -> EDGE placement:
-    _select_wall_edge: perpendicular distance to the 4 edge lines;
-                       corner tie-break (within 0.25m) uses camera direction dot edge normal
-    _compute_wall_transform:
-        edge_angle = 90° for East/West sockets (wall runs along the edge)
-        wall SLIDES along the edge to follow the crosshair:
-            along = local_aim.dot(edge_axis) - socket_local.dot(edge_axis)
-            clamped to ±(FOUNDATION_HALF_WIDTH - 0.1) so corners work
-        wall Socket_Base offset (0, -1.25, 0) rotated by total angle
-Footprint validation: center-point ray (mask 1, 1m above / 3m below, tolerance 0.3m)
-    + 3x3 grid samples inset 40% from edges; valid if center supported
-    OR support ratio >= minimum_support_ratio (0.50)
+	STACKING first: aiming at the upper part of a Wall/Door/Window face
+		places the new piece DIRECTLY ON TOP (Socket_Top -> Socket_Base),
+		so 2nd/3rd/... floors stack recursively. Blocked if Socket_Top occupied.
+	else _find_best_socket (score = alignment*10 - dist, radius 2.5m)
+	-> reciprocal -> _solve_socket_transform -> overlap (skips foundation below)
+If support is Foundation/Raft  -> EDGE or CENTER placement:
+	CENTER: aiming in the middle zone of a deck piece (|local| <= half width / 2,
+		i.e. the central 1x1m of a 2x2 tile) places the wall UPRIGHT in the deck
+		CENTER (Foundation.Socket_Top / raft center) instead of snapping to an edge.
+	else EDGE placement:
+		_select_wall_edge: perpendicular distance to the 4 edge lines;
+						   corner tie-break (within 0.25m) uses camera direction dot edge normal
+		_compute_wall_transform:
+			edge_angle = 90° for East/West sockets (wall runs along the edge)
+			wall SLIDES along the edge to follow the crosshair:
+				along = local_aim.dot(edge_axis) - socket_local.dot(edge_axis)
+				clamped to ±(FOUNDATION_HALF_WIDTH - 0.1) so corners work
+			wall Socket_Base offset (0, -1.25, 0) rotated by total angle
+Footprint validation (_validate_wall_footprint):
+	- support rays use collision mask 1 and EXCLUDE the player RID, the preview
+	  ghost RID, and the piece being edited, so the preview can never block
+	  detection of the surface underneath it
+	- center-point ray (1m above / 3m below, tolerance 0.3m) is the highest-
+	  priority check; it can validate the wall alone
+	- + 3x3 grid samples inset 40% from edges; a column counts as supported if
+	  ANY of its depth samples hit (so the over-water half of an edge wall
+	  doesn't invalidate it)
+	- valid if center supported OR support ratio >= minimum_support_ratio (0.50)
+	- INVALID reasons: NO SUPPORT SURFACE (0 columns hit) or
+	  INSUFFICIENT SUPPORT: X/Y (some but < 50%)
+	- the ghost follows the crosshair everywhere; a wall sitting on a
+	  foundation (center, edges, corners, rotated) validates GREEN, while
+	  open water / floating-above stays RED
+	(stacked walls validate via the wall below; center walls via the deck)
 Overlap: scan BuiltPieces for Wall/Door/Window within 0.5m horizontally
 ```
 
@@ -684,13 +772,26 @@ Rotation: R toggles build_rotation in 90° steps (180° flip for a wall = two pr
 ### Roof — Top Attachment
 
 ```
-Method 1: Ray hits Wall -> free Socket_Top
+Method 0 (ROOF-TO-ROOF): Ray hits an existing Roof -> attach to it
+  Aim point in the roof's flat space decides the intent:
+	center zone (|x|,|z| <= 0.45 of half-width) -> Socket_Top (stack on top)
+	otherwise -> the side socket matching the aim direction (side expansion)
+  -> Reciprocal socket on the new roof (Socket_Base for stacking, opposite
+	 side socket for expansion)
+  -> Solve: RoofRoot = TargetSocket * inverse(RoofSocketLocal)
+  -> Overlap: shape query, other Roofs / non-build bodies block; walls and
+	 foundations (build_surface group) are allowed contact
+  No free socket on the aimed roof -> RED "ROOF SLOT OCCUPIED" (never jumps
+  to a different wall)
+Method 1: Ray hits Wall -> Socket_Top
 Method 2: Walk up 5 ancestors -> Wall with free Socket_Top
 Method 3: Search ALL BuiltPieces walls for nearest free Socket_Top (<=4m horizontal)
   -> Find reciprocal: Roof.Socket_Base
   -> Solve: RoofRoot = TargetSocket * inverse(RoofSocketLocal)  [_solve_socket_transform]
   -> Verify ghost socket error <= 0.1m
   -> Overlap: shape query with build_surface-group bodies filtered out
+CLIMB: if the targeted top is occupied by a Wall OR a Roof, climb to the
+  topmost piece in that column and target ITS top (roofs stack on roofs)
 Hysteresis: _roof_last_support remembers the last Wall used (reset on piece cycle)
 ```
 
@@ -698,16 +799,24 @@ Hysteresis: _roof_last_support remembers the last Wall used (reset on piece cycl
 
 ```
 _find_best_socket(support, piece, aim, normal):
-    skip occupied / incompatible / >2.5m sockets
-    score = socket_dir.dot(aim_dir) * 10 - distance
+	skip occupied / incompatible / >2.5m sockets
+	score = socket_dir.dot(aim_dir) * 10 - distance
+	(Stairs support: Socket_Top is used directly, no scoring)
 _find_reciprocal_socket(new_piece, support_name):
-    type-compat bonus +10 (FOUNDATION_EDGE<->EDGE, FOUNDATION_TOP<->WALL_BASE,
-    WALL_TOP<->WALL_BASE, WALL_SIDE<->WALL_SIDE, FOUNDATION_TOP<->DOOR/WINDOW_SLOT, WALL_TOP<->WALL_TOP)
-    +50 if opposite-facing (full 3D direction, so vertical sockets work)
-    -100 if same-direction
+	type-compat bonus +10 (FOUNDATION_EDGE<->EDGE, FOUNDATION_TOP<->WALL_BASE,
+	WALL_TOP<->WALL_BASE, WALL_SIDE<->WALL_SIDE, FOUNDATION_TOP<->DOOR/WINDOW_SLOT, WALL_TOP<->WALL_TOP)
+	+50 if opposite-facing (full 3D direction, so vertical sockets work)
+	-100 if same-direction
+	(Stairs support: reciprocal pinned to Socket_Base)
 Solve: _solve_socket_transform (flat, Y-rotation only)
 Verify: socket error <= 0.05m, edge gap |gap| < 0.05m (negative = penetration)
+  — socket alignment is computed from the SOLVED transform (solved * socket),
+	not the live ghost, because a freshly-spawned AnimatableBody3D ghost reads
+	stale transforms until the physics sync
 Overlap: filtered by build_surface group + anything below solved.origin.y - 1.0
+
+Doors and windows attach to ANY wall's Socket_Middle — including stacked
+  second-floor walls — so openings work on every level.
 ```
 
 ### Placement (confirm — `_try_build`)
@@ -715,11 +824,19 @@ Overlap: filtered by build_surface group + anything below solved.origin.y - 1.0
 ```
 Requires build_valid; walls skip the socket requirement.
 Inventory.can_afford + Inventory.craft.
-Instantiate scene -> parent under raft's BuiltPieces (ALWAYS the raft root,
-  never the socket's parent piece — keeps local transforms raft-relative).
-Collision disabled before add, re-enabled deferred (prevents pushing the player).
+Instantiate scene -> rename to "<Piece>_<instance_id>" (unique per placement —
+  Godot auto-renames duplicate children to "@ClassName@n", which breaks the
+  name-based piece detection for every piece after the first of its type)
+  -> parent under raft's BuiltPieces (ALWAYS the raft root, never the socket's
+  parent piece — keeps local transforms raft-relative).
+ALL collision shapes disabled before add, re-enabled deferred (prevents pushing
+  the player; stairs have 5 stepped colliders).
+Transform set BEFORE add_child (raft-local for all pieces): a physics body then
+  enters the space already placed — setting global_transform right after add is
+  overwritten by the physics sync for script-animated bodies (e.g. the Door's
+  _physics_process), which used to snap doors back to the raft origin.
 Foundation: transform from exact cell formula (uses _ghost_cell, never recomputed).
-Others: use the ghost preview transform directly.
+Others: ghost preview transform converted to raft-local.
 Add to "build_surface" group.
 Occupy target socket + link reciprocal socket (nearest socket within 0.35m).
 Register Foundation cell in grid; register SampleMarker/F1 as raft buoyancy sample.
@@ -743,7 +860,7 @@ Register Foundation cell in grid; register SampleMarker/F1 as raft buoyancy samp
 
 **Confirm (P):** re-enable collision, restore color, re-register at the new cell, re-link sockets.
 
-**Remove (X):** unregister, free referencing sockets, refund via `RECIPE_REFUND` (same costs as recipes, minus Roof which is not refundable — Roof is absent from `RECIPE_REFUND`), free the piece.
+**Remove (X):** unregister, free referencing sockets, refund via `RECIPE_REFUND` (same costs as recipes), free the piece.
 
 **Cancel (B):** restore original transform + cell + sockets, restore color.
 

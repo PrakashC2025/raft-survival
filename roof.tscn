@@ -26,7 +26,7 @@ mesh = SubResource("BoxMesh_ybjjv")
 position = Vector3(0, -0.075, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 3
-accepts = Array[String](["Wall"])
+accepts = Array[String](["Wall", "Roof"])
 
 [node name="Socket_Top" type="Marker3D" parent="BuildSockets"]
 position = Vector3(0, 0.075, 0)
@@ -38,25 +38,25 @@ accepts = Array[String](["Roof"])
 position = Vector3(0, 0, 1)
 script = ExtResource("1_buildsocket")
 socket_type = 0
-accepts = Array[String](["Foundation"])
+accepts = Array[String](["Foundation", "Roof"])
 
 [node name="Socket_South" type="Marker3D" parent="BuildSockets"]
 position = Vector3(0, 0, -1)
 script = ExtResource("1_buildsocket")
 socket_type = 0
-accepts = Array[String](["Foundation"])
+accepts = Array[String](["Foundation", "Roof"])
 
 [node name="Socket_East" type="Marker3D" parent="BuildSockets"]
 position = Vector3(1, 0, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 0
-accepts = Array[String](["Foundation"])
+accepts = Array[String](["Foundation", "Roof"])
 
 [node name="Socket_West" type="Marker3D" parent="BuildSockets"]
 position = Vector3(-1, 0, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 0
-accepts = Array[String](["Foundation"])
+accepts = Array[String](["Foundation", "Roof"])
 
 [node name="SampleMarker" type="Marker3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)

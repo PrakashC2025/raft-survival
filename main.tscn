@@ -75,7 +75,6 @@ spring_length = 0.0
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
 current = true
 
-
 [node name="RopeSystem" type="Node3D" parent="Player" unique_id=987654321]
 script = ExtResource("9_rope")
 
