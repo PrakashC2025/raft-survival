@@ -5,12 +5,18 @@ signal player_died
 const MAX_VALUE := 100.0
 @export var hunger_drain_rate: float = 0.4
 @export var thirst_drain_rate: float = 0.6
+## Stat drain is OFF until food/water sources exist (no eatables drop yet) —
+## set this true (or the drain rates) when adding consumables so survivors
+## actually need to eat and drink.
+@export var enabled := false
 
 var health: float = 100.0
 var hunger: float = 100.0
 var thirst: float = 100.0
 
 func _process(delta: float) -> void:
+	if not enabled:
+		return
 	hunger = clampf(hunger - hunger_drain_rate * delta, 0.0, MAX_VALUE)
 	thirst = clampf(thirst - thirst_drain_rate * delta, 0.0, MAX_VALUE)
 	stat_changed.emit("hunger", hunger)

@@ -34,6 +34,8 @@ uniform vec3 atm_sun_partial_mie_phase = vec3(0.36, 1.64, 1.6);
 
 group_uniforms moon;
 uniform vec4 moon_color: source_color = vec4(1.0);
+uniform float moon_intensity = 1.0;
+uniform float moon_glow_intensity = 1.0;
 uniform sampler2D moon_texture: source_color, repeat_disable;
 uniform vec3 moon_texture_alignment = vec3(7.0, 1.4, 4.8);
 uniform bool moon_texture_flip_u;
@@ -347,6 +349,11 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 
 	vec3 scatter = calc_atmospheric_scatter(sr, sm, mu.xy, angle_mult.xyz);
 	col.rgb += scatter.rgb;
+	// Minimum night glow (project addition): once the sun is well below the
+	// horizon the sky keeps a faint deep-blue ambient so dusk/night never
+	// read as a pure black void and the horizon stays visible.
+	float night_lift = 1.0 - smoothstep(-0.30, -0.02, sun_pos.y);
+	col.rgb += vec3(0.016, 0.024, 0.055) * night_lift;
 
 	// Sun
 	vec3 sun_disk = calc_disk_mask(world_pos, sun_pos, sun_disk_size) * sun_disk_color.rgb * scatter.rgb;
@@ -360,6 +367,12 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	float moon_ndotl = clamp(dot(moon_normal, sun_pos), 0.0, 1.0);
 	vec3 moon_tex = sample_moon_texture(moon_normal);
 	vec3 moon_output = moon_mask * moon_ndotl * exp2(1.0) * moon_tex * moon_color.rgb;
+	moon_output *= moon_intensity;
+	// Soft luminous halo around the moon so it reads as a bright, attractive
+	// disc against the night sky (added uniformly by the project for feel).
+	float moon_ang = max(0.0, 1.0 - dot(moon_pos, world_pos));
+	float halo = exp2(-moon_ang / max(moon_size * moon_size * 3.0, 1e-4));
+	moon_output += moon_color.rgb * (moon_intensity * moon_glow_intensity) * halo * 0.1 * (1.0 - moon_mask);
 	float moonMask = (1.0 - moon_mask);
 
 	// Deep space
