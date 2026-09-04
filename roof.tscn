@@ -2,23 +2,66 @@
 
 [ext_resource type="Script" uid="uid://b73vh4kl4v0mu" path="res://build_socket.gd" id="1_buildsocket"]
 
+[ext_resource type="Shader" path="res://wood_planks.gdshader" id="2_wood"]
+
 [sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
 size = Vector3(2, 0.15, 2)
 
-[sub_resource type="StandardMaterial3D" id="mat_roof"]
-albedo_color = Color(0.50, 0.34, 0.18, 1)
+[sub_resource type="ShaderMaterial" id="mat_roof"]
+shader = ExtResource("2_wood")
+shader_parameter/base_color = Color(0.50, 0.34, 0.18, 1)
+shader_parameter/seam_color = Color(0.30, 0.20, 0.11, 1)
+shader_parameter/half_x = 1.0
+shader_parameter/half_y = 0.075
+shader_parameter/half_z = 1.0
+shader_parameter/plank_width = 0.25
+shader_parameter/seam_width = 0.006
+
+[sub_resource type="ShaderMaterial" id="mat_seam"]
+shader = ExtResource("2_wood")
+shader_parameter/base_color = Color(0.30, 0.21, 0.12, 1)
+shader_parameter/seam_color = Color(0.24, 0.16, 0.09, 1)
+shader_parameter/half_x = 1.0
+shader_parameter/half_y = 0.075
+shader_parameter/half_z = 1.0
+shader_parameter/plank_width = 0.25
+shader_parameter/seam_width = 0.006
 
 [sub_resource type="BoxMesh" id="BoxMesh_ybjjv"]
 material = SubResource("mat_roof")
 size = Vector3(2, 0.15, 2)
 
-[node name="Roof" type="AnimatableBody3D" unique_id=2024638497]
+[sub_resource type="BoxMesh" id="BoxMesh_seam_x"]
+material = SubResource("mat_seam")
+size = Vector3(2, 0.005, 0.03)
+
+[sub_resource type="BoxMesh" id="BoxMesh_seam_z"]
+material = SubResource("mat_seam")
+size = Vector3(0.03, 0.005, 2)
+
+[node name="Roof" type="StaticBody3D" unique_id=2024638497]
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=18223137]
 shape = SubResource("BoxShape3D_ybjjv")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=223086880]
 mesh = SubResource("BoxMesh_ybjjv")
+
+[node name="SeamNorth" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0775, 0.985)
+mesh = SubResource("BoxMesh_seam_x")
+
+[node name="SeamSouth" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0775, -0.985)
+mesh = SubResource("BoxMesh_seam_x")
+
+[node name="SeamEast" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.985, 0.0775, 0)
+mesh = SubResource("BoxMesh_seam_z")
+
+[node name="SeamWest" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.985, 0.0775, 0)
+mesh = SubResource("BoxMesh_seam_z")
 
 [node name="BuildSockets" type="Node3D" parent="."]
 
@@ -57,6 +100,30 @@ position = Vector3(-1, 0, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 0
 accepts = Array[String](["Foundation", "Roof"])
+
+[node name="Socket_StairsNorth" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0.075, 1)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Stairs"])
+
+[node name="Socket_StairsSouth" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, 0.075, -1)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Stairs"])
+
+[node name="Socket_StairsEast" type="Marker3D" parent="BuildSockets"]
+position = Vector3(1, 0.075, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Stairs"])
+
+[node name="Socket_StairsWest" type="Marker3D" parent="BuildSockets"]
+position = Vector3(-1, 0.075, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Stairs"])
 
 [node name="SampleMarker" type="Marker3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)

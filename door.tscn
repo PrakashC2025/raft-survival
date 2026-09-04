@@ -4,11 +4,26 @@
 
 [ext_resource type="Script" uid="uid://dlxq1qxbon1af" path="res://door.gd" id="1_ba8gm"]
 
-[sub_resource type="BoxShape3D" id="door_shape"]
-size = Vector3(2, 2.5, 0.2)
+[ext_resource type="Shader" path="res://wood_planks.gdshader" id="2_wood"]
 
-[sub_resource type="StandardMaterial3D" id="mat_frame"]
-albedo_color = Color(0.62, 0.43, 0.22, 1)
+[sub_resource type="BoxShape3D" id="col_frame_post"]
+size = Vector3(0.3, 2.15, 0.2)
+
+[sub_resource type="BoxShape3D" id="col_frame_top"]
+size = Vector3(2.0, 0.35, 0.2)
+
+[sub_resource type="BoxShape3D" id="col_leaf"]
+size = Vector3(1.4, 2.15, 0.06)
+
+[sub_resource type="ShaderMaterial" id="mat_frame"]
+shader = ExtResource("2_wood")
+shader_parameter/base_color = Color(0.62, 0.43, 0.22, 1)
+shader_parameter/seam_color = Color(0.30, 0.20, 0.11, 1)
+shader_parameter/half_x = 0.15
+shader_parameter/half_y = 1.075
+shader_parameter/half_z = 0.1
+shader_parameter/plank_width = 0.5
+shader_parameter/seam_width = 0.006
 
 [sub_resource type="BoxMesh" id="mesh_frame_left"]
 material = SubResource("mat_frame")
@@ -18,12 +33,29 @@ size = Vector3(0.3, 2.15, 0.2)
 material = SubResource("mat_frame")
 size = Vector3(0.3, 2.15, 0.2)
 
+[sub_resource type="ShaderMaterial" id="mat_frame_top"]
+shader = ExtResource("2_wood")
+shader_parameter/base_color = Color(0.62, 0.43, 0.22, 1)
+shader_parameter/seam_color = Color(0.30, 0.20, 0.11, 1)
+shader_parameter/half_x = 1.0
+shader_parameter/half_y = 0.175
+shader_parameter/half_z = 0.1
+shader_parameter/plank_width = 0.25
+shader_parameter/seam_width = 0.006
+
 [sub_resource type="BoxMesh" id="mesh_frame_top"]
-material = SubResource("mat_frame")
+material = SubResource("mat_frame_top")
 size = Vector3(2.0, 0.35, 0.2)
 
-[sub_resource type="StandardMaterial3D" id="mat_leaf"]
-albedo_color = Color(0.55, 0.38, 0.20, 1)
+[sub_resource type="ShaderMaterial" id="mat_leaf"]
+shader = ExtResource("2_wood")
+shader_parameter/base_color = Color(0.55, 0.38, 0.20, 1)
+shader_parameter/seam_color = Color(0.28, 0.18, 0.10, 1)
+shader_parameter/half_x = 0.7
+shader_parameter/half_y = 1.075
+shader_parameter/half_z = 0.03
+shader_parameter/plank_width = 0.35
+shader_parameter/seam_width = 0.006
 
 [sub_resource type="BoxMesh" id="mesh_leaf"]
 material = SubResource("mat_leaf")
@@ -47,13 +79,22 @@ size = Vector3(0.08, 0.04, 0.02)
 [sub_resource type="BoxShape3D" id="interact_shape"]
 size = Vector3(1.8, 2.5, 1.8)
 
-[node name="Door" type="AnimatableBody3D" unique_id=1935146148]
+[node name="Door" type="StaticBody3D" unique_id=1935146148]
 collision_layer = 1
 collision_mask = 5
 script = ExtResource("1_ba8gm")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
-shape = SubResource("door_shape")
+[node name="ColFrameLeft" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.85, -0.175, 0)
+shape = SubResource("col_frame_post")
+
+[node name="ColFrameRight" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.85, -0.175, 0)
+shape = SubResource("col_frame_post")
+
+[node name="ColFrameTop" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.075, 0)
+shape = SubResource("col_frame_top")
 
 [node name="FrameLeft" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.85, -0.175, 0)
@@ -69,6 +110,14 @@ mesh = SubResource("mesh_frame_top")
 
 [node name="LeafPivot" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7, -0.175, 0)
+
+[node name="LeafBody" type="StaticBody3D" parent="LeafPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.7, 0, 0.03)
+collision_layer = 1
+collision_mask = 5
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="LeafPivot/LeafBody"]
+shape = SubResource("col_leaf")
 
 [node name="Leaf" type="MeshInstance3D" parent="LeafPivot"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.7, 0, 0.03)

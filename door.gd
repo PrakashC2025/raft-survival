@@ -1,4 +1,4 @@
-extends AnimatableBody3D
+extends StaticBody3D
 class_name Door
 @export var open_angle: float = 90.0
 @export var swing_speed: float = 4.0

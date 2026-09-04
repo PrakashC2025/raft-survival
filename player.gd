@@ -12,6 +12,13 @@ const WATER_JUMP_VELOCITY := 12.0
 const DIVE_VELOCITY := -6.0
 const GRAVITY := 9.8
 const MOUSE_SENSITIVITY := 0.003
+# Max riser height the player can auto-step onto while walking (stairs/curbs).
+# Must stay below wall height (2.5) so full walls still block.
+const MAX_STEP_HEIGHT := 0.55
+const STEP_PROBE_FORWARD := 0.35
+# Max rise per physics frame when auto-climbing stairs — lifts a riser across
+# several frames (smooth) instead of teleporting the body up in one pop.
+const STEP_RISE_PER_FRAME := 0.05
 
 # Swimming
 const SWIM_UP_CONTINUOUS := 5.0
@@ -28,6 +35,10 @@ const MAX_SWIM_DEPTH := 30.0
 const AIM_DISTANCE := 60.0
 const PICKUP_RANGE := 5.0
 const NEARBY_PICKUP_RANGE := 2.0
+# Climb out of the ocean: horizontal reach to the deck edge + how far onto
+# the deck the player lands (kept small so the board feels natural).
+const CLIMB_OUT_RANGE := 2.2
+const CLIMB_LAND_INSET := 0.45
 
 # Build
 const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
@@ -60,15 +71,42 @@ var _roof_last_support: Node3D = null  # last support wall for roof hysteresis
 # NODE REFERENCES
 # ============================================================
 @onready var cam_pivot: Node3D = $CamPivot
+@onready var spring_arm: SpringArm3D = $CamPivot/SpringArm3D
 @onready var camera: Camera3D = $CamPivot/SpringArm3D/Camera3D
 @onready var crosshair: Control = $CanvasLayer/Crosshair
 @onready var rope_system: RopeSystem = $RopeSystem
+@onready var _body_visual: Node3D = $Body
+
+# Camera mode: 0 = first person (default), 1 = third person follow.
+# Capsule height is 1.8 (full height incl. caps in Godot 4.7), so the origin
+# sits at the capsule CENTRE (feet 0.9 below). The CamPivot sits at the eye
+# (origin + 0.9) so pitch rotates around the eyes, never through the deck.
+var cam_mode := CAM_FPS
+const CAM_FPS := 0
+const CAM_TPS := 1
+const CAM_MODE_COUNT := 2
+const TPS_DIST := 3.0        # third person camera distance behind the player
 
 var ocean: Ocean = null
 
 @export var build_pieces: Array[PackedScene] = []
 var selected_piece_index: int = 0
 var build_mode: bool = false
+
+# Active inventory selection (hotbar slot 0..5 -> item name). The hotbar is
+# inventory slots 0..5; tapping a slot in normal mode selects its item here.
+var active_slot_index: int = 0
+var active_item: String = "Rope"
+
+# Auto-save (debounced): writes the inventory + state to user:// after the
+# last change, and on quit/pause so closing the game never loses progress.
+var _save_pending := false
+var _save_timer := 0.0
+const SAVE_DELAY := 1.0
+var _hand_item: Node3D = null
+var _hand_time := 0.0       # accumulated seconds, drives held-item sway
+var _fist_node: Node3D = null
+var _step_climb := 0.0  # current smooth auto-climb progress (stairs/curbs)
 var ghost: Node3D = null
 var build_rotation: float = 0.0
 var build_rotation_x: float = 0.0
@@ -136,16 +174,35 @@ func _ready() -> void:
 	rope_system.camera = camera
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	camera.current = true
+	_apply_camera_mode(true)
 	if build_pieces.is_empty():
 		for scene_path in BUILD_SCENES:
 			var scene = load(scene_path) as PackedScene
 			if scene:
 				build_pieces.append(scene)
 	Inventory.infinite = true
-	Inventory.add("Wood", 999)
-	Inventory.add("Rope", 999)
-	Inventory.add("Plastic", 999)
+	# Continue (menu loaded a save) keeps whatever was stored; New Game (no
+	# save, empty bag) starts with Rope in hotbar slot 1 per the mobile spec.
+	if Inventory.is_empty():
+		Inventory.place_at(0, "Rope", 1)
 	_create_hud()
+	active_slot_index = int(Inventory.loaded_meta.get("active_slot", 0))
+	active_slot_index = clampi(active_slot_index, 0, Inventory.HOTBAR_COUNT - 1)
+	active_item = Inventory.slot_item(active_slot_index)
+	Inventory.changed.connect(_refresh_active_item)
+	Inventory.changed.connect(_queue_save)
+	floor_snap_length = 0.18
+	# Resume day time from the save (Continue) — otherwise leave the scene's
+	# configured start time (noon).
+	if Inventory.loaded_meta.has("game_time"):
+		var sky3d: Node = get_parent().get_node_or_null("Sky3D")
+		if sky3d != null:
+			sky3d.set("current_time", float(Inventory.loaded_meta.get("game_time", 12.0)))
+	_update_hand_item()
+	# Rebuild the saved structure after a Continue (New Game has an empty
+	# meta so this is a no-op). Deferred so the raft is fully in the tree.
+	call_deferred("_restore_built_pieces")
+	_queue_save()
 	if debug_building:
 		for i in BUILD_SCENES.size():
 			var scene: PackedScene = load(BUILD_SCENES[i]) as PackedScene
@@ -169,7 +226,42 @@ func add_look_input(rel: Vector2, sens: float = MOUSE_SENSITIVITY) -> void:
 		return
 	rotate_y(-rel.x * sens)
 	cam_pivot.rotate_x(-rel.y * sens)
-	cam_pivot.rotation.x = clamp(cam_pivot.rotation.x, -1.4, 1.4)
+	cam_pivot.rotation.x = clamp(cam_pivot.rotation.x, -_look_pitch_limit(), 1.4)
+
+# ============================================================
+# CAMERA MODES — first person (hands + no body) / third person (follow)
+# ============================================================
+func cycle_camera_mode() -> void:
+	cam_mode = (cam_mode + 1) % CAM_MODE_COUNT
+	_apply_camera_mode()
+	var names := ["FIRST PERSON", "THIRD PERSON"]
+	_hud_toast(names[cam_mode])
+
+## Switch mode and sync all rig state. `initial` skips the toast (called from
+## _ready before the HUD is fully laid out).
+func _apply_camera_mode(_initial: bool = false) -> void:
+	# FPS: only the viewmodel hands are drawn (hide the full body so the
+	# player never sees their own back/head while looking around).
+	# TPS: the spring arm pulls the camera behind/above; draw the body.
+	if _body_visual != null:
+		_body_visual.visible = cam_mode == CAM_TPS
+	_set_viewmodel_visible(cam_mode == CAM_FPS)
+	if spring_arm != null:
+		spring_arm.spring_length = TPS_DIST if cam_mode == CAM_TPS else 0.0
+	# In TPS the eye camera looks back at the player, so restrict how far the
+	# view can pitch (the aim ray still uses the camera transform).
+
+func _set_viewmodel_visible(v: bool) -> void:
+	if camera == null or not is_instance_valid(camera):
+		return
+	var hand := camera.get_node_or_null("HandPivot") as Node3D
+	if hand != null:
+		hand.visible = v
+
+## Look down range differs per mode: FPS can look to the deck; TPS stops
+## before the follow camera would bury into it.
+func _look_pitch_limit() -> float:
+	return 1.2 if cam_mode == CAM_FPS else 0.45
 
 # ============================================================
 # CENTRAL AIM SYSTEM
@@ -214,8 +306,12 @@ func _physics_process(delta: float) -> void:
 		_update_swimming(delta, direction, water_y, sprinting)
 	else:
 		_update_land(delta, direction, sprinting)
+		_try_step_up()
 	move_and_slide()
 	_update_swimming_state(water_y, has_ocean)
+	# Held-item sway: accumulate time and pose the hand visual (idle + walk).
+	_hand_time += delta
+	_update_hand_sway(delta)
 
 func _update_swimming_state(water_y: float, has_ocean: bool) -> void:
 	was_swimming = is_swimming
@@ -271,18 +367,72 @@ func _update_swimming(delta: float, direction: Vector3, water_y: float, sprintin
 	if depth > MAX_SWIM_DEPTH:
 		velocity.y = move_toward(velocity.y, 0.0, SWIM_DECELERATION * delta)
 
-# ============================================================
-# E PICKUP (debris / toggle only — build placement uses P)
-# ============================================================
+# Walk up small steps (stairs / curbs) without jumping — mobile friendly.
+# Runs right before move_and_slide: if walking into an obstacle that is lower
+# than MAX_STEP_HEIGHT, lift the body onto it so the slide can carry it over.
+func _try_step_up() -> void:
+	if is_swimming or not is_on_floor():
+		_step_climb = 0.0
+		return
+	var horiz := Vector3(velocity.x, 0.0, velocity.z)
+	var speed := horiz.length()
+	if speed < 0.5:
+		_step_climb = 0.0
+		return
+	var motion := horiz.normalized() * (speed * get_physics_process_delta_time() + STEP_PROBE_FORWARD)
+	var params := PhysicsTestMotionParameters3D.new()
+	var result := PhysicsTestMotionResult3D.new()
+	params.from = global_transform
+	params.motion = motion
+	# Free to move at current height — normal walking, nothing to step over.
+	if not PhysicsServer3D.body_test_motion(get_rid(), params, result):
+		_step_climb = 0.0
+		return
+	# Blocked ahead: find how much lift clears the obstacle (stairs risers up to
+	# MAX_STEP_HEIGHT). Tall walls (2.5 m) stay blocked at every probe height.
+	# Small remaining lifts resolve in one smooth step; large ones are spread
+	# over several frames (STEP_RISE_PER_FRAME) so stair risers don't pop the
+	# camera 0.5 m in a single frame — the "shaking" when climbing stairs.
+	var needed := -1.0
+	for h in [0.06, 0.12, 0.18, 0.26, 0.38, MAX_STEP_HEIGHT]:
+		var tf := global_transform.translated(Vector3(0.0, h, 0.0))
+		params.from = tf
+		params.motion = motion
+		if not PhysicsServer3D.body_test_motion(get_rid(), params, result):
+			needed = h
+			break
+	if needed < 0.0:
+		_step_climb = 0.0
+		return
+	# Continue the climb toward `needed`, capped per frame for smoothness.
+	var step := clampf(needed - _step_climb, 0.0, STEP_RISE_PER_FRAME)
+	if step <= 0.001:
+		_step_climb = 0.0  # reached target last frame — next frame moves forward
+		return
+	global_position.y += step
+	_step_climb += step
+	if _step_climb >= needed - 0.001:
+		_step_climb = 0.0
 func _handle_pickup() -> void:
 	if not Input.is_action_just_pressed("interact"):
+		return
+	# Boarding the raft from the water takes priority over pickups: when the
+	# player is swimming right next to the raft/foundation, E climbs them out
+	# (the mobile CLIMB button calls climb_out() directly — same result).
+	if is_swimming and can_climb_out():
+		climb_out()
 		return
 	if aim_valid and aim_collider != null:
 		if aim_collider.is_in_group("debris") and aim_distance <= PICKUP_RANGE:
 			_collect_debris(aim_collider)
 			return
-		if "toggle" in aim_collider:
-			aim_collider.toggle()
+		# The Door's swinging leaf is its own StaticBody3D, so walk up the
+		# tree to find the piece root that owns the togglable script (Door).
+		var toggler: Node = aim_collider
+		while toggler != null and not ("toggle" in toggler):
+			toggler = toggler.get_parent()
+		if toggler != null:
+			toggler.toggle()
 			return
 	if aim_collider == null or not aim_collider.is_in_group("debris"):
 		for d in get_tree().get_nodes_in_group("debris"):
@@ -304,7 +454,11 @@ func _collect_debris(debris: Node3D) -> void:
 # BUILD SYSTEM — PROCESS & INPUT
 # ============================================================
 func _process(_delta: float) -> void:
+	_tick_save(_delta)
 	_update_hud()
+	# Quick-save (F5) works in every mode — snapshots slot "quick".
+	if Input.is_action_just_pressed("quick_save"):
+		quick_save()
 	# --- PRIORITY 1: Edit Mode ---
 	if _editing != null:
 		if Input.is_action_just_pressed("place_build"):
@@ -419,6 +573,442 @@ func _cycle_build_piece() -> void:
 	_roof_last_support = null
 	if build_mode:
 		_spawn_ghost()
+
+## Mobile hotbar quick-select: pick a build piece directly and enter build
+## mode (or switch the current piece if already building).
+func select_piece_for_build(index: int) -> void:
+	if build_pieces.is_empty() or _editing != null:
+		return
+	if not build_mode:
+		_toggle_build()
+		if not build_mode:
+			return
+	selected_piece_index = posmod(index, build_pieces.size())
+	_roof_last_support = null
+	_spawn_ghost()
+
+## Mobile normal-mode hotbar tap: select inventory slot 0..5 as the active
+## item (building pieces live in Build Mode and go through
+## select_piece_for_build instead). Empty taps clear the selection.
+func select_hotbar_slot(index: int) -> void:
+	if _editing != null:
+		return
+	active_slot_index = clampi(index, 0, Inventory.HOTBAR_COUNT - 1)
+	active_item = Inventory.slot_item(active_slot_index)
+
+
+func _refresh_active_item() -> void:
+	active_item = Inventory.slot_item(clampi(active_slot_index, 0, Inventory.HOTBAR_COUNT - 1))
+	_update_hand_item()
+
+
+# ============================================================
+# AUTO-SAVE — debounced write on change + save on quit/background
+# ============================================================
+func _queue_save() -> void:
+	_save_pending = true
+	_save_timer = SAVE_DELAY
+
+
+## Build the state meta (selected slot + time of day + the built structure)
+## and write it to the given slot ("main" autosave or "quick" quick-save).
+func _write_save(slot: String) -> void:
+	var meta := {"active_slot": active_slot_index}
+	var sky3d: Node = get_parent().get_node_or_null("Sky3D")
+	if sky3d != null and sky3d.get("current_time") != null:
+		meta["game_time"] = float(sky3d.get("current_time"))
+	# The built structure lives under the raft's BuiltPieces — without this the
+	# save file holds only inventory and Continue returns an empty raft.
+	meta["built"] = _serialize_built_pieces()
+	Inventory.save_game(meta, slot)
+
+
+func _flush_save() -> void:
+	_write_save("main")
+
+
+## Manual quick-save (desktop F5 / mobile SAVE chip in the bag panel).
+## Writes a second snapshot slot that the main menu offers under "QUICK SAVE".
+func quick_save() -> void:
+	_write_save("quick")
+	_hud_toast("QUICK-SAVED")
+
+
+func _hud_toast(text: String) -> void:
+	var hud: Node = get_node_or_null("CanvasLayer/SurvivalHUD")
+	if hud != null and hud.has_method("show_toast"):
+		hud.call("show_toast", text)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED \
+			or what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		_flush_save()
+
+
+# ============================================================
+# BUILT STRUCTURE PERSISTENCE — the placed pieces are saved with the game
+# ============================================================
+## Serialize every piece under the raft's BuiltPieces into a compact array:
+## each entry is the piece TYPE ("Foundation", "Wall", ...) plus its 12-float
+## raft-local Transform3D (basis 9 + origin 3). Local transforms are stable
+## because the raft only bobs on Y (its rotation is always identity).
+func _serialize_built_pieces() -> Array:
+	var raft: Node3D = _get_raft_node()
+	if raft == null:
+		return []
+	var container: Node = raft.get_node_or_null("BuiltPieces")
+	if container == null:
+		return []
+	var out: Array = []
+	for piece in container.get_children():
+		if not (piece is Node3D) or not is_instance_valid(piece):
+			continue
+		var pname: String = _find_piece_name(piece as Node3D)
+		if pname == "" or pname == "Raft":
+			continue
+		var t := (piece as Node3D).transform
+		var b := t.basis
+		out.append({
+			"t": pname,
+			"x": [
+				b.x.x, b.x.y, b.x.z,
+				b.y.x, b.y.y, b.y.z,
+				b.z.x, b.z.y, b.z.z,
+				t.origin.x, t.origin.y, t.origin.z,
+			],
+		})
+	return out
+
+
+## Rebuild the saved structure after a Continue. Runs deferred so the whole
+## scene (raft included) is ready; each piece is instantiated from its scene,
+## given the saved raft-local transform, collisions enabled, registered in the
+## occupancy grid + buoyancy samples, and sockets re-linked best-effort.
+func _restore_built_pieces() -> void:
+	var built: Array = Inventory.loaded_meta.get("built", [])
+	if built.is_empty():
+		return
+	var raft: Node3D = _get_raft_node()
+	if raft == null:
+		return
+	var container: Node = raft.get_node_or_null("BuiltPieces")
+	if container == null:
+		container = Node3D.new()
+		container.name = "BuiltPieces"
+		raft.add_child(container)
+	var restored: Array = []
+	for entry in built:
+		if not (entry is Dictionary):
+			continue
+		var pname: String = str(entry.get("t", ""))
+		var idx := BUILD_RECIPE_NAMES.find(pname)
+		if idx < 0:
+			continue
+		var scene: PackedScene = build_pieces[idx]
+		if scene == null:
+			continue
+		var piece: Node3D = scene.instantiate()
+		piece.name = "%s_%d" % [pname, piece.get_instance_id()]
+		var floats: Array = entry.get("x", [])
+		if floats.size() == 12:
+			var tb := Basis(
+				Vector3(floats[0], floats[1], floats[2]),
+				Vector3(floats[3], floats[4], floats[5]),
+				Vector3(floats[6], floats[7], floats[8]))
+			piece.transform = Transform3D(tb, Vector3(floats[9], floats[10], floats[11]))
+		# Disable collision before adding (same as _try_build) so the body
+		# never pushes the player on load.
+		var cols: Array[Node] = piece.find_children("*", "CollisionShape3D", true, false)
+		for c in cols:
+			(c as CollisionShape3D).disabled = true
+		container.add_child(piece)
+		for c in cols:
+			(c as CollisionShape3D).set_deferred("disabled", false)
+		piece.add_to_group("build_surface")
+		restored.append(piece)
+		# Grid occupancy (foundations are grid-registered; walls/doors/etc are
+		# edge attachments and do not occupy a grid cell).
+		if pname == "Foundation":
+			_grid_register(_world_to_grid(piece.global_position), piece)
+		# Buoyancy sample so the raft's float height covers the rebuilt deck.
+		var sample: Node = piece.get_node_or_null("SampleMarker")
+		if sample == null:
+			sample = piece.get_node_or_null("F1")
+		if sample != null and raft.has_method("register_sample_point"):
+			raft.register_sample_point(sample)
+	# Best-effort socket re-link: every socket occupies the piece sitting at
+	# its horizontal position (covers raft edge->Foundation, Foundation
+	# Socket_Top->Wall/Door/Window, Stairs sockets, ...).
+	_relink_restored_sockets(raft, restored)
+	print("[SAVE] Restored %d built piece(s) from %s" % [restored.size(), str(Inventory.loaded_meta.get("loaded_slot", "main"))])
+
+
+func _relink_restored_sockets(raft: Node3D, restored: Array) -> void:
+	for s in _get_all_sockets(raft):
+		var parent: Node3D = s.get_parent_piece()
+		if parent == null:
+			parent = raft
+		var flat: Transform3D = _get_flat_support_transform(parent)
+		var ws: Vector3 = flat * s.position
+		var best: Node3D = null
+		var best_d: float = 0.45
+		for p in restored:
+			if p == parent or not is_instance_valid(p):
+				continue
+			var d: float = Vector2(p.global_position.x - ws.x, p.global_position.z - ws.z).length()
+			if d < best_d:
+				best_d = d
+				best = p
+		if best != null:
+			s.occupy(best)
+
+
+# In _process (exists below): when _save_pending, count down and flush.
+func _tick_save(delta: float) -> void:
+	if not _save_pending:
+		return
+	_save_timer -= delta
+	if _save_timer <= 0.0:
+		_save_pending = false
+		_flush_save()
+
+
+# ============================================================
+# HELD ITEM VISUAL — the selected hotbar item appears in the fist
+# ============================================================
+func _update_hand_item() -> void:
+	if _fist_node == null or not is_instance_valid(_fist_node):
+		_fist_node = get_node_or_null("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist") as Node3D
+		if _fist_node == null:
+			return
+	if _hand_item == null or not is_instance_valid(_hand_item):
+		_hand_item = Node3D.new()
+		_hand_item.name = "HandItem"
+		_fist_node.add_child(_hand_item)
+	# Remove any old visuals
+	for c in _hand_item.get_children():
+		c.queue_free()
+	_hand_item.position = Vector3.ZERO
+	_hand_item.rotation = Vector3.ZERO
+	if active_item == "":
+		return
+	# Each item is composed from primitives placed in a NATURAL HAND POSE around
+	# the fist (offsets below are fist-local: +X right, +Y up, -Z forward).
+	match active_item:
+		"Rope":
+			var coil := _hand_mat(Color(0.78, 0.6, 0.35))
+			var cyl := CylinderMesh.new()
+			cyl.top_radius = 0.13
+			cyl.bottom_radius = 0.13
+			cyl.height = 0.05
+			var i3 := 0
+			for ly in [-0.055, 0.005, 0.065]:
+				var xf := Transform3D(Basis(Vector3.UP, float(i3) * TAU / 3.0), Vector3(0, ly, -0.24))
+				_hand_part(cyl, coil, xf)
+				i3 += 1
+			var knot := _hand_mat(Color(0.9, 0.8, 0.52))
+			var ks := SphereMesh.new()
+			ks.radius = 0.045
+			ks.height = 0.09
+			_hand_part(ks, knot, Transform3D(Basis.IDENTITY, Vector3(0, 0.115, -0.24)))
+		"Wood":
+			var wood := _hand_mat(Color(0.62, 0.43, 0.22))
+			var log_cyl := CylinderMesh.new()
+			log_cyl.top_radius = 0.05
+			log_cyl.bottom_radius = 0.07
+			log_cyl.height = 0.55
+			var along_z := Basis(Vector3(1, 0, 0), PI / 2.0)  # cylinder Y axis -> Z
+			_hand_part(log_cyl, wood, Transform3D(along_z, Vector3(0, -0.01, -0.24)))
+			var bark := _hand_mat(Color(0.42, 0.28, 0.14))
+			var cap := CylinderMesh.new()
+			cap.top_radius = 0.06
+			cap.bottom_radius = 0.06
+			cap.height = 0.02
+			_hand_part(cap, bark, Transform3D(along_z, Vector3(0, -0.01, 0.045)))
+			_hand_part(cap, bark, Transform3D(along_z, Vector3(0, -0.01, -0.525)))
+		"Plastic":
+			var body := _hand_mat(Color(0.42, 0.78, 0.92), 0.35)
+			var bot := CapsuleMesh.new()
+			bot.radius = 0.055
+			bot.height = 0.3
+			_hand_part(bot, body, Transform3D(Basis.IDENTITY, Vector3(0.02, -0.16, -0.25)))
+			var neck := _hand_mat(Color(0.25, 0.45, 0.55), 0.4)
+			var nk := CylinderMesh.new()
+			nk.top_radius = 0.028
+			nk.bottom_radius = 0.028
+			nk.height = 0.08
+			_hand_part(nk, neck, Transform3D(Basis.IDENTITY, Vector3(0.02, 0.07, -0.25)))
+		"Metal":
+			var steel := _hand_mat(Color(0.74, 0.76, 0.8), 0.3, 0.9)
+			var rod := CylinderMesh.new()
+			rod.top_radius = 0.035
+			rod.bottom_radius = 0.035
+			rod.height = 0.5
+			var along_z2 := Basis(Vector3(1, 0, 0), PI / 2.0)
+			_hand_part(rod, steel, Transform3D(along_z2, Vector3(0, 0.0, -0.22)))
+			var tip := _hand_mat(Color(0.5, 0.52, 0.56), 0.3, 0.9)
+			var tc := CylinderMesh.new()
+			tc.top_radius = 0.036
+			tc.bottom_radius = 0.036
+			tc.height = 0.02
+			_hand_part(tc, tip, Transform3D(along_z2, Vector3(0, 0.0, 0.035)))
+			_hand_part(tc, tip, Transform3D(along_z2, Vector3(0, 0.0, -0.475)))
+		"Stone":
+			var rock := _hand_mat(Color(0.55, 0.55, 0.58), 1.0)
+			var s1 := SphereMesh.new()
+			s1.radius = 0.105
+			s1.height = 0.21
+			_hand_part(s1, rock, Transform3D(Basis.IDENTITY, Vector3(0, -0.02, -0.19)))
+			var s2 := SphereMesh.new()
+			s2.radius = 0.075
+			s2.height = 0.15
+			_hand_part(s2, rock, Transform3D(Basis(Vector3.UP, 0.7), Vector3(0.08, -0.07, -0.15)))
+		"Barrel":
+			var wood2 := _hand_mat(Color(0.55, 0.28, 0.2))
+			var bar := CylinderMesh.new()
+			bar.top_radius = 0.1
+			bar.bottom_radius = 0.1
+			bar.height = 0.17
+			_hand_part(bar, wood2, Transform3D(Basis.IDENTITY, Vector3(0, -0.14, -0.22)))
+			var band := _hand_mat(Color(0.18, 0.11, 0.08), 0.7)
+			var bw := CylinderMesh.new()
+			bw.top_radius = 0.108
+			bw.bottom_radius = 0.108
+			bw.height = 0.03
+			_hand_part(bw, band, Transform3D(Basis.IDENTITY, Vector3(0, -0.2, -0.22)))
+			_hand_part(bw, band, Transform3D(Basis.IDENTITY, Vector3(0, -0.08, -0.22)))
+		_:
+			return
+
+
+func _hand_mat(color: Color, rough: float = 0.6, metal: float = 0.0) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.roughness = rough
+	m.metallic = metal
+	# A whisper of self-light keeps the held item readable at dusk/night on
+	# small screens (cheap for a tiny mesh; scene lights still dominate by day).
+	if metal > 0.5:
+		m.emission_enabled = false
+	else:
+		m.emission_enabled = true
+		m.emission = color * 0.09
+	return m
+
+
+func _hand_part(mesh: Mesh, mat: StandardMaterial3D, xform: Transform3D) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.transform = xform
+	_hand_item.add_child(mi)
+
+
+## Subtle idle + walk sway for the held item (mobile juice, no camera shake).
+func _update_hand_sway(_delta: float) -> void:
+	if _hand_item == null or not is_instance_valid(_hand_item):
+		return
+	if _hand_item.get_child_count() == 0:
+		return
+	var speed_h := Vector2(velocity.x, velocity.z).length()
+	var amp: float = clampf(speed_h / maxf(WALK_SPEED, 0.01), 0.0, 1.3)
+	var bob := sin(_hand_time * 9.5) * 0.016 * amp + sin(_hand_time * 1.6) * 0.006
+	var sway := sin(_hand_time * 1.3) * 0.02 + sin(_hand_time * 4.7) * 0.012 * amp
+	var roll := sin(_hand_time * 0.9) * 0.012 + cos(_hand_time * 4.7) * 0.01 * amp
+	_hand_item.position = Vector3(0.0, bob, 0.0)
+	_hand_item.rotation = Vector3(0.0, sway, roll)
+
+
+## Mirror of the E-key interaction test, so the mobile HAND button lights up
+## exactly when pressing it would actually do something (same as _handle_pickup):
+##   - aimed at debris within the pickup range, or
+##   - aimed at a togglable (door), or
+##   - any debris within the nearby pickup range (the "reach out and grab it"
+##     case — in real life you only take debris that is within your pickable
+##     range, and the E key collects those even without precise aiming).
+func can_interact_now() -> bool:
+	if aim_valid and aim_collider != null:
+		var c := aim_collider
+		if c.is_in_group("debris") and aim_distance <= PICKUP_RANGE:
+			return true
+		var n: Node = c
+		while n != null:
+			if "toggle" in n:
+				return true
+			n = n.get_parent()
+	# Nearby debris the E key would collect without aiming.
+	for d in get_tree().get_nodes_in_group("debris"):
+		if d is Node3D and is_instance_valid(d) and d.get("collected") != true:
+			if global_position.distance_to(d.global_position) <= NEARBY_PICKUP_RANGE:
+				return true
+	return false
+
+# ============================================================
+# CLIMB OUT OF THE OCEAN — board the raft / foundation from the water
+# ============================================================
+## Nearest build surface (raft or any foundation) whose deck edge is within
+## CLIMB_OUT_RANGE horizontally and whose deck sits above the water line —
+## i.e. a real ledge the swimmer can pull themselves onto. Returns null when
+## no climbable surface is near.
+func _nearest_climb_surface() -> Node3D:
+	var best: Node3D = null
+	var best_d: float = CLIMB_OUT_RANGE
+	var oc := _get_ocean()
+	var water_y: float = oc.get_height(global_position) if oc != null else -INF
+	for s in get_tree().get_nodes_in_group("build_surface"):
+		if s == null or not is_instance_valid(s) or not (s is Node3D):
+			continue
+		# Only the raft itself and Foundations are deck ledges you can pull
+		# yourself onto from the water (walls/roofs are not climb targets).
+		if not (s.name.begins_with("Raft") or s.name.begins_with("Foundation")):
+			continue
+		# Deck top = flat origin + half thickness (raft and foundations are
+		# both 0.3 thick boxes; this matches how the player walks on them).
+		var flat: Transform3D = _get_flat_support_transform(s)
+		var deck_top: float = flat.origin.y + FOUNDATION_HALF_HEIGHT
+		if deck_top < water_y - 0.05:
+			continue  # submerged — nothing to climb onto
+		# Horizontal distance from the player to the deck footprint.
+		var local: Vector3 = flat.affine_inverse() * global_position
+		var hx := clampf(local.x, -FOUNDATION_HALF_WIDTH, FOUNDATION_HALF_WIDTH)
+		var hz := clampf(local.z, -FOUNDATION_HALF_DEPTH, FOUNDATION_HALF_DEPTH)
+		var d: float = Vector2(local.x - hx, local.z - hz).length()
+		if d < best_d:
+			best_d = d
+			best = s
+	return best
+
+## True while swimming AND next to a climbable deck — the mobile CLIMB button
+## only appears then (never on land, never in open water).
+func can_climb_out() -> bool:
+	return is_swimming and _nearest_climb_surface() != null
+
+## Pull the player out of the water onto the nearest deck edge. Used by the
+## mobile CLIMB button and by E while swimming. Lands the capsule a small
+## step onto the deck (not teetering on the exact edge) and zeroes the swim
+## velocity so the player immediately walks normally.
+func climb_out() -> void:
+	var surface := _nearest_climb_surface()
+	if surface == null:
+		return
+	var flat: Transform3D = _get_flat_support_transform(surface)
+	var deck_top: float = flat.origin.y + FOUNDATION_HALF_HEIGHT
+	var local: Vector3 = flat.affine_inverse() * global_position
+	# Land inside the edge so the player stands on the deck, not at the lip.
+	var land_x := clampf(local.x, -(FOUNDATION_HALF_WIDTH - CLIMB_LAND_INSET),
+		FOUNDATION_HALF_WIDTH - CLIMB_LAND_INSET)
+	var land_z := clampf(local.z, -(FOUNDATION_HALF_DEPTH - CLIMB_LAND_INSET),
+		FOUNDATION_HALF_DEPTH - CLIMB_LAND_INSET)
+	var target: Vector3 = flat * Vector3(land_x, 0.0, land_z)
+	# Capsule centre sits just above the deck top (human-sized capsule: total
+	# height 1.8m = radius 0.3 + height 1.2, centred on the body origin, so the
+	# standing centre is 0.9m above the surface) — gravity settles the last cm.
+	target.y = deck_top + 0.95
+	global_position = target
+	velocity = Vector3.ZERO
+	is_swimming = false
+	was_swimming = false
 
 func _rotate_build() -> void:
 	# Hold Shift for 15° fine steps (e.g. angling a center wall), otherwise 90°.
@@ -644,6 +1234,15 @@ func _get_all_sockets(root: Node) -> Array[BuildSocket]:
 		for c in n.get_children():
 			stack.append(c)
 	return result
+
+## True when the crosshair is aimed at (or above) a roof's TOP face — i.e. the
+## player is standing on it / looking down at it, so walls may mount it.
+func _is_roof_top_aim(roof: Node3D, aim_world: Vector3) -> bool:
+	if roof == null or _find_piece_name(roof) != "Roof":
+		return false
+	var flat: Transform3D = _get_flat_support_transform(roof)
+	var local: Vector3 = flat.affine_inverse() * aim_world
+	return local.y >= 0.03
 
 func _find_support_piece(collider: Node3D) -> Node3D:
 	if collider == null:
@@ -875,7 +1474,9 @@ func _wall_edge_slot_taken(cand: Transform3D, edge_axis: Vector3, deck: Node3D) 
 		var d: Vector2 = Vector2(cand.origin.x - w.global_position.x, cand.origin.z - w.global_position.z)
 		var along: float = d.dot(ax)
 		var perp: Vector2 = d - ax * along
-		if absf(along) < 1.9 and perp.length() < 0.5:
+		# Only walls on the SAME floor level conflict — a second-floor wall above
+		# a first-floor wall (separated by a roof) may share x/z harmlessly.
+		if absf(along) < 1.9 and perp.length() < 0.5 and absf(cand.origin.y - w.global_position.y) < 1.7:
 			return true
 	return false
 
@@ -1055,12 +1656,33 @@ func _get_validation_shape(piece_scene: PackedScene) -> Shape3D:
 	if col != null and col.shape != null:
 		shape = col.shape.duplicate()
 	else:
-		var bs := BoxShape3D.new()
-		bs.size = Vector3(1, 1, 1)
-		shape = bs
+		# Door has no directly-named full panel (its colliders are frame posts +
+		# a swing leaf under LeafBody) — use its largest descendant box, which
+		# for a closed door is the 1.4x2.15x0.06 leaf.
+		shape = _largest_descendant_box(temp)
+		if shape == null:
+			var bs := BoxShape3D.new()
+			bs.size = Vector3(1, 1, 1)
+			shape = bs
 	temp.queue_free()
 	_shape_cache[piece_scene] = shape
 	return shape
+
+# Largest-volume BoxShape3D anywhere under the piece (covers split-collider
+# pieces like the Door whose shapes live under child bodies/pivots).
+func _largest_descendant_box(piece: Node3D) -> BoxShape3D:
+	var best: BoxShape3D = null
+	var best_v: float = 0.0
+	for c: Node in piece.find_children("*", "CollisionShape3D", true, false):
+		var cs := c as CollisionShape3D
+		if cs == null or not (cs.shape is BoxShape3D):
+			continue
+		var b := cs.shape as BoxShape3D
+		var v: float = b.size.x * b.size.y * b.size.z
+		if v > best_v:
+			best_v = v
+			best = b
+	return best
 
 # ============================================================
 # BUILD SYSTEM — FOOTPRINT VALIDATION
@@ -1530,6 +2152,159 @@ func _verify_foundation_connection(
 	return 10.0
 
 
+# ============================================================
+# ROOF PLANE TILE — foundation-style continuous roof tiling
+# ============================================================
+# If a roof chain exists near the crosshair, return a placement for the roof
+# in the adjacent free cell at that same height (any of the 4 directions).
+# Returns an EMPTY dict when no chain/cell applies (caller falls through to
+# the wall-top search); otherwise a final resolved placement dict (valid or
+# red-blocked) like the other roof branches.
+func _resolve_roof_plane_tile(aim_pos: Vector3, _gh: Node3D) -> Dictionary:
+	var raft_node: Node3D = _get_raft_node()
+	if raft_node == null:
+		return {}
+	var bp: Node3D = raft_node.get_node_or_null("BuiltPieces")
+	if bp == null:
+		return {}
+	var roofs: Array = []
+	for child in bp.get_children():
+		if child is Node3D and _find_piece_name(child) == "Roof":
+			roofs.append(child)
+	if roofs.is_empty():
+		return {}
+	# Nearest roof chain piece to the crosshair (any level — the aim's level is
+	# implied by whichever roof is closest in 2D).
+	var anchor: Node3D = null
+	var best_d := INF
+	for r in roofs:
+		var rp: Node3D = r as Node3D
+		var d := Vector2(aim_pos.x - rp.global_position.x, aim_pos.z - rp.global_position.z).length()
+		if d < best_d:
+			best_d = d
+			anchor = rp
+	if anchor == null or best_d > 6.0:
+		return {}
+	var plane_y: float = anchor.global_position.y
+	# Work in the anchor's own rotated (yaw-only) frame so roof chains tile
+	# along their real axes no matter how the wall chain underneath is rotated.
+	var anchor_flat: Transform3D = _get_flat_support_transform(anchor)
+	var inv_basis: Basis = anchor_flat.basis.inverse()
+	var aim_local: Vector3 = inv_basis * (aim_pos - anchor.global_position)
+	var lx := aim_local.x
+	var lz := aim_local.z
+	# Aiming basically over the anchor roof's own centre — the roof-to-roof /
+	# wall-top branches decide that cell (stack top, RED, etc.) when hit.
+	if absf(lx) < 0.55 and absf(lz) < 0.55:
+		return {}
+	var cell_tol: float = 1.05  # half tile (1.0) + small tolerance
+	# Aim over an ALREADY roofed cell at this level -> RED, exactly like
+	# foundations never extend from an occupied cell the crosshair is on.
+	# (The anchor itself is covered: aim on its surface beyond the 0.55 zone.)
+	for r in roofs:
+		var rp: Node3D = r as Node3D
+		if absf(rp.global_position.y - plane_y) > 0.6:
+			continue
+		var ro: Vector3 = inv_basis * (rp.global_position - anchor.global_position)
+		if absf(ro.x - lx) <= cell_tol and absf(ro.z - lz) <= cell_tol:
+			_diag["invalid_reason"] = "ROOF SLOT OCCUPIED"
+			_diag["error_category"] = "COLLISION_ERROR"
+			_diag["solved_pos"] = rp.global_position
+			_diag["wall_foundation"] = rp.name
+			var occ_tf := Transform3D(Basis(Vector3.UP, anchor.global_rotation.y), rp.global_position)
+			return {"valid": false, "socket": null, "transform": occ_tf, "support": anchor}
+	# New cell: one tile (2m) beyond the anchor along the dominant LOCAL axis,
+	# at the same height — foundation-style extension in all 4 directions.
+	var local_step := Vector3.ZERO
+	if absf(lx) >= absf(lz):
+		local_step = Vector3(2.0 if lx >= 0.0 else -2.0, 0.0, 0.0)
+	else:
+		local_step = Vector3(0.0, 0.0, 2.0 if lz >= 0.0 else -2.0)
+	var new_center: Vector3 = anchor.global_position + (anchor_flat.basis * local_step)
+	new_center.y = plane_y
+	var fail_transform := Transform3D(Basis(Vector3.UP, anchor.global_rotation.y), new_center)
+	# Target cell occupied by another roof at this level already?
+	for r in roofs:
+		var rp: Node3D = r as Node3D
+		if absf(rp.global_position.y - plane_y) > 0.6:
+			continue
+		var ro: Vector3 = inv_basis * (rp.global_position - anchor.global_position)
+		if absf(ro.x - local_step.x) <= cell_tol and absf(ro.z - local_step.z) <= cell_tol:
+			_diag["invalid_reason"] = "ROOF SLOT OCCUPIED"
+			_diag["error_category"] = "COLLISION_ERROR"
+			_diag["solved_pos"] = new_center
+			_diag["wall_foundation"] = anchor.name
+			return {"valid": false, "socket": null, "transform": fail_transform, "support": anchor}
+	# Find the anchor's side socket facing the new cell (free + compatible).
+	var side_socket: BuildSocket = null
+	var snode: Node3D = anchor.get_node_or_null("BuildSockets")
+	if snode != null:
+		var face_dir := (new_center - anchor.global_position).normalized()
+		var best_side := -1.0
+		for s in snode.get_children():
+			if not (s is BuildSocket):
+				continue
+			var bs: BuildSocket = s as BuildSocket
+			if bs.is_occupied or not bs.is_compatible("Roof"):
+				continue
+			if bs.name != "Socket_North" and bs.name != "Socket_South" \
+				and bs.name != "Socket_East" and bs.name != "Socket_West":
+				continue
+			var ws: Vector3 = anchor_flat * bs.position
+			var dot := Vector3(ws.x - anchor.global_position.x, 0.0, ws.z - anchor.global_position.z).normalized().dot(face_dir)
+			if dot > best_side:
+				best_side = dot
+				side_socket = bs
+	if side_socket == null:
+		return {}
+	var new_piece_idx_r: int = BUILD_RECIPE_NAMES.find("Roof")
+	var temp_r: Node3D = build_pieces[new_piece_idx_r].instantiate()
+	var recip_r: BuildSocket = _find_reciprocal_socket(side_socket, temp_r, "Roof")
+	var solved_r := Transform3D()
+	if recip_r != null:
+		solved_r = _solve_socket_transform(side_socket, recip_r.position, anchor)
+	else:
+		solved_r = Transform3D(Basis(Vector3.UP, anchor.global_rotation.y), new_center)
+	temp_r.queue_free()
+	_diag["solved_pos"] = solved_r.origin
+	_diag["wall_foundation"] = anchor.name
+	_diag["target_socket_name"] = side_socket.name
+	_diag["roof_plane_tile"] = true
+	# Physics overlap sanity: ignore build bodies and the edge-touching anchor;
+	# anything else genuinely inside the cell makes this RED.
+	var shape_r: Shape3D = _get_validation_shape(build_pieces[new_piece_idx_r])
+	var overlap_r := _check_overlap(shape_r, solved_r, anchor)
+	var bad_hit := false
+	for hit in overlap_r:
+		var hb: Node3D = hit.get("collider") as Node3D
+		if hb == null or not is_instance_valid(hb):
+			continue
+		var is_build := false
+		var wn: Node = hb
+		while wn != null:
+			if wn.is_in_group("build_surface"):
+				is_build = true
+				break
+			wn = wn.get_parent()
+		if is_build:
+			# Only other roofs matter — and only if they truly overlap (the
+			# anchor and neighbours only touch edge-to-edge at 2m).
+			if _find_piece_name(hb) == "Roof":
+				var od := Vector2(solved_r.origin.x - hb.global_position.x, solved_r.origin.z - hb.global_position.z).length()
+				if od < 1.5:
+					bad_hit = true
+					break
+			continue
+		bad_hit = true
+		break
+	if bad_hit:
+		_diag["invalid_reason"] = "ROOF SLOT OCCUPIED"
+		_diag["error_category"] = "COLLISION_ERROR"
+		return {"valid": false, "socket": side_socket, "transform": solved_r, "support": anchor}
+	_diag["final"] = "VALID"
+	return {"valid": true, "socket": side_socket, "transform": solved_r, "support": anchor}
+
+
 func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	_diag = {}
 	_diag["piece"] = piece_name
@@ -1962,11 +2737,13 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			wall_aim_normal = Vector3.UP
 
 		var wall_foundation: Node3D = null
-		# P1: raycast hit — what the crosshair actually points at
+		# P1: raycast hit — what the crosshair actually points at. A Roof counts
+		# as a wall host ONLY when aimed at its top face (standing on it) — a
+		# roof seen from below is a ceiling, not a floor to build on.
 		if support != null:
 			var _sn: String = _find_piece_name(support)
 			if _sn == "Foundation" or _sn == "Raft" or _sn == "Wall" \
-				or _sn == "Door" or _sn == "Window":
+				or _sn == "Door" or _sn == "Window" or _is_roof_top_aim(support, wall_aim):
 				wall_foundation = support
 		# P2a: vertical drop at the (projected) aim — whatever build surface sits
 		# directly under the crosshair becomes the support. This covers grazing
@@ -1983,7 +2760,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				if _drop_piece != null:
 					var _dpn: String = _find_piece_name(_drop_piece)
 					if _dpn == "Foundation" or _dpn == "Raft" or _dpn == "Wall" \
-						or _dpn == "Door" or _dpn == "Window":
+						or _dpn == "Door" or _dpn == "Window" or _is_roof_top_aim(_drop_piece, wall_aim):
 						wall_foundation = _drop_piece
 		# P2: nearest surface to the (projected) aim — only when the crosshair is
 		#     close enough to snap (otherwise the ghost stays at the aim point).
@@ -2154,9 +2931,34 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 									_wf_fb_target = _wfb_child
 			if _wf_fb_target != null:
 				wall_foundation = _wf_fb_target
-			# Foundation/Raft: edge-snapping placement
 		var _f_sn: String = _find_piece_name(wall_foundation)
-		if _f_sn == "Foundation" or _f_sn == "Raft":
+		if _f_sn == "Roof" and _is_roof_top_aim(wall_foundation, wall_aim):
+			# ROOF TOP: a roof aimed from above is a second-floor deck — walls,
+			# doors and windows snap to its edges (and center) exactly like on a
+			# Foundation, standing on the roof's TOP face. A roof seen from below
+			# (or at its side) is a ceiling and falls through to the deck-plane
+			# projection, where the footprint check keeps it invalid.
+			var _flat_roof: Transform3D = _get_flat_support_transform(wall_foundation)
+			var _roof_local_aim: Vector3 = _flat_roof.affine_inverse() * wall_aim
+			var _roof_top_y: float = _flat_roof.origin.y + 0.075
+			var _center_zone_r: float = FOUNDATION_HALF_WIDTH * 0.5
+			if absf(_roof_local_aim.x) <= _center_zone_r and absf(_roof_local_aim.z) <= _center_zone_r:
+				solved = Transform3D(
+					Basis(Vector3.UP, build_rotation),
+					Vector3(_flat_roof.origin.x, _roof_top_y + 1.25, _flat_roof.origin.z))
+				_diag["solved_pos"] = solved.origin
+				_diag["wall_foundation"] = wall_foundation.name
+				_diag["wall_edge"] = "CENTER"
+			else:
+				var roof_edge: String = _select_wall_edge(wall_foundation, wall_aim)
+				solved = _solve_wall_edge_tile(wall_foundation, wall_aim, roof_edge)
+				# Roof edge sockets sit on the slab's MID plane (roof tiling);
+				# lift the wall onto the TOP face so its bottom rests flush.
+				solved.origin.y += 0.075
+				_diag["solved_pos"] = solved.origin
+				_diag["wall_foundation"] = wall_foundation.name
+				_diag["wall_edge"] = roof_edge
+		elif _f_sn == "Foundation" or _f_sn == "Raft":
 			# CENTER placement: aiming in the middle zone of a deck piece places
 			# the wall upright in the deck CENTER (Foundation.Socket_Top / raft
 			# center) instead of snapping to the nearest edge.
@@ -2212,7 +3014,9 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 						var _wn: String = _find_piece_name(_w)
 						if _wn == "Wall" or _wn == "Door" or _wn == "Window":
 							var _wd: float = Vector3(solved.origin.x - _w.global_position.x, 0.0, solved.origin.z - _w.global_position.z).length()
-							if _wd < 0.5:
+							# Vertical guard: walls on different floors (e.g. above/below
+							# a roof) share x/z but are never a conflict.
+							if _wd < 0.5 and absf(solved.origin.y - _w.global_position.y) < 1.7:
 								_wall_overlap = true
 								break
 		if _wall_overlap:
@@ -2307,15 +3111,20 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			var rr_shape: Shape3D = _get_validation_shape(build_pieces[rr_idx])
 			var rr_overlap := _check_overlap(rr_shape, solved, support)
 			rr_temp.queue_free()
-			# Allow contact with walls/foundations (build surface), but flag
-			# overlap with OTHER roofs or non-build bodies.
+			# Allow contact with walls/foundations (build surface). Roofs tile
+			# flush edge-to-edge exactly like walls (2m grid, 2m roof), so a
+			# neighbour roof that only touches the footprint is VALID — only a
+			# roof whose centre is actually inside this cell (true overlap,
+			# incl. epsilon overlaps from socket float error) is RED.
 			var rr_filtered: Array[Dictionary] = []
 			for hit in rr_overlap:
 				var hit_body: Node3D = hit.get("collider") as Node3D
 				if hit_body == null or not is_instance_valid(hit_body):
 					continue
 				if _find_piece_name(hit_body) == "Roof":
-					rr_filtered.append(hit)
+					var od_rr := Vector2(solved.origin.x - hit_body.global_position.x, solved.origin.z - hit_body.global_position.z).length()
+					if od_rr < 1.5:
+						rr_filtered.append(hit)
 					continue
 				var _is_build_rr: bool = false
 				var _wn_rr: Node = hit_body
@@ -2339,11 +3148,14 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			_diag["final"] = "VALID"
 			return {"valid": true, "socket": rr_socket, "transform": solved, "support": support}
 
-		# Method 1: Ray hit a Wall directly — use ITS Socket_Top. If the top is
+		# Method 1: Ray hit a Wall/Door/Window directly — use ITS Socket_Top
+		# (doors and windows tile like walls, so a roof must rest on their tops
+		# too — a doorway in the wall ring can't leave a hole). If the top is
 		# already occupied (e.g. a 2nd-floor wall), still target this wall so the
 		# placement goes RED instead of silently snapping the roof to a DIFFERENT
 		# wall the player wasn't aiming at.
-		if support != null and _find_piece_name(support) == "Wall":
+		var _spn1: String = _find_piece_name(support) if support != null else ""
+		if support != null and (_spn1 == "Wall" or _spn1 == "Door" or _spn1 == "Window"):
 			var sockets_node := support.get_node_or_null("BuildSockets")
 			if sockets_node != null:
 				for s in sockets_node.get_children():
@@ -2353,13 +3165,14 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 						break
 
 		# Method 2: Ray hit something on top of a wall (e.g. another roof)
-		# Walk up to find a Wall ancestor with Socket_Top
+		# Walk up to find a Wall/Door/Window ancestor with Socket_Top
 		if roof_support == null and support != null:
 			var walk: Node3D = support
 			for _i in range(5):
 				if walk == null:
 					break
-				if _find_piece_name(walk) == "Wall":
+				var wpn: String = _find_piece_name(walk)
+				if wpn == "Wall" or wpn == "Door" or wpn == "Window":
 					var sn := walk.get_node_or_null("BuildSockets")
 					if sn != null:
 						for s in sn.get_children():
@@ -2371,6 +3184,17 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				if roof_support != null:
 					break
 				walk = walk.get_parent() as Node3D
+
+		# PLANE-FILL (foundation-style continuous tiling): if no wall top was
+		# targeted directly but a roof chain exists near the crosshair, fill the
+		# adjacent free 2x2 cell at that roof's height — in ANY of the 4
+		# directions, exactly like foundations tile out across the water. This
+		# lets the player roof a whole area from one wall-top anchor without
+		# pixel-perfectly hitting each wall's top.
+		if roof_support == null:
+			var _pf_res := _resolve_roof_plane_tile(effective_aim_point, ghost)
+			if not _pf_res.is_empty():
+				return _pf_res
 
 		# Method 3: Ray didn't hit a Wall directly — search ALL built
 		# pieces, but FIRST honor the wall the crosshair is actually over
@@ -2388,7 +3212,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 					for child in bp.get_children():
 						if not (child is Node3D):
 							continue
-						if _find_piece_name(child) != "Wall":
+						var cpn: String = _find_piece_name(child)
+						if cpn != "Wall" and cpn != "Door" and cpn != "Window":
 							continue
 						var sn: Node3D = child.get_node_or_null("BuildSockets")
 						if sn == null:
@@ -2412,7 +3237,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 						for child in bp.get_children():
 							if not (child is Node3D):
 								continue
-							if _find_piece_name(child) != "Wall":
+							var cpn2: String = _find_piece_name(child)
+							if cpn2 != "Wall" and cpn2 != "Door" and cpn2 != "Window":
 								continue
 							var sn: Node3D = child.get_node_or_null("BuildSockets")
 							if sn == null:
@@ -2436,10 +3262,13 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			_diag["invalid_reason"] = "NO VALID ROOF TARGET"
 			_diag["error_category"] = "SUPPORT_ERROR"
 			return {"valid": false}
-		# A roof needs the TOP of the piece it lands on. If the targeted top is
-		# taken by a stacked wall OR a roof, CLIMB to the topmost piece in that
-		# column and target ITS top (the roof belongs on the highest surface the
-		# player can see — roofs stack on roofs, walls stack on walls).
+		# A roof needs the TOP of the piece it lands on. When the aimed top is
+		# taken by a STACKED WALL (a wall-over-wall column), CLIMB to the
+		# topmost wall and target ITS top — the roof belongs on the highest
+		# wall surface. A roof already sitting on the top means this cell is
+		# roofed: stop here so the check below goes RED (a roof never stacks
+		# onto the roof that already covers the same cell — that was how
+		# double roofs ended up overlapping in the same spot).
 		var roof_climb: int = 0
 		while roof_target_socket.is_occupied and roof_climb < 8:
 			var above: Node3D = roof_target_socket.occupying_piece as Node3D
@@ -2447,7 +3276,9 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			if above == null or not is_instance_valid(above):
 				break
 			var above_pn: String = _find_piece_name(above)
-			if above_pn != "Wall" and above_pn != "Roof":
+			if above_pn == "Roof":
+				break
+			if above_pn != "Wall" and above_pn != "Door" and above_pn != "Window":
 				break
 			var sn_above: Node3D = above.get_node_or_null("BuildSockets")
 			if sn_above == null:
@@ -2457,6 +3288,13 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				break
 			roof_target_socket = top_above
 			roof_support = above
+		# The aimed top is still occupied (e.g. an existing roof already covers
+		# that cell, or the climb chain ended on a taken top) — show RED at the
+		# aimed spot instead of silently moving the roof somewhere else.
+		if roof_target_socket.is_occupied:
+			_diag["invalid_reason"] = "ROOF SLOT OCCUPIED"
+			_diag["error_category"] = "COLLISION_ERROR"
+			return {"valid": false, "socket": roof_target_socket, "transform": Transform3D(), "support": roof_support}
 
 		# Update roof hysteresis
 		_roof_last_support = roof_support
@@ -2491,6 +3329,38 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		# Solve: RoofRoot * RoofSocketLocal = TargetSocket
 		# RoofRoot = TargetSocket * inverse(RoofSocketLocal)
 		solved = _solve_socket_transform(roof_target_socket, roof_base_socket.position, roof_support)
+
+		# CELL-CENTRED ROOF TILES (foundation behaviour): a roof is a 2x2 slab
+		# that covers one whole deck CELL and rests flush on the wall ring around
+		# it — exactly like a Foundation covers its grid cell. The plain
+		# socket solve centres the tile ON the wall line (the cell boundary), so
+		# every roof ended up straddling its wall: half over the room and half
+		# over the neighbouring cell or open water, and side-by-side tiles
+		# overlapped it. When the roof lands on a Wall/Door/Window top, shift
+		# the solved tile 1.0m (half a tile) off the wall line onto the deck
+		# cell the crosshair is aiming at. The Y stays flush on the wall tops
+		# and further tiles chain cell-to-cell (2.0m) like foundations instead
+		# of overlapping.
+		var roof_support_pn: String = _find_piece_name(roof_support)
+		var roof_centered: bool = false
+		if roof_support_pn == "Wall" or roof_support_pn == "Door" or roof_support_pn == "Window":
+			var rs_flat: Transform3D = _get_flat_support_transform(roof_support)
+			var thick := Vector3(rs_flat.basis.z.x, 0.0, rs_flat.basis.z.z)
+			if thick.length() > 0.05:
+				thick = thick.normalized()
+				var top_world: Vector3 = rs_flat * roof_target_socket.position
+				var cand_a := Vector2(top_world.x + thick.x, top_world.z + thick.z)
+				var cand_b := Vector2(top_world.x - thick.x, top_world.z - thick.z)
+				var aim_xz := Vector2(effective_aim_point.x, effective_aim_point.z)
+				if aim_xz.distance_to(cand_a) <= aim_xz.distance_to(cand_b):
+					solved.origin.x = cand_a.x
+					solved.origin.z = cand_a.y
+				else:
+					solved.origin.x = cand_b.x
+					solved.origin.z = cand_b.y
+				roof_centered = true
+				_diag["roof_cell_centered"] = true
+				_diag["wall_top_world"] = top_world
 		_diag["solved_pos"] = solved.origin
 
 		# Apply to ghost and verify socket alignment
@@ -2499,30 +3369,49 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			ghost.visible = true
 
 		var roof_flat_target: Vector3 = _get_flat_support_transform(roof_support) * roof_target_socket.position
-		# Verify socket alignment from the SOLVED transform — the live ghost's
-		# sockets read stale for AnimatableBody3D in the frame the transform is
-		# set (Jolt sync), which produced false SOCKET MISMATCH errors.
 		var actual_pos: Vector3 = solved * roof_base_socket.position
 		var socket_err: float = actual_pos.distance_to(roof_flat_target)
 		_diag["actual_socket_pos"] = actual_pos
 		_diag["socket_position_error"] = socket_err
-		_diag["socket_position_valid"] = socket_err <= 0.1
-		if socket_err > 0.1:
-			_diag["invalid_reason"] = "SOCKET MISMATCH: " + str(snappedf(socket_err, 0.001)) + "m"
-			_diag["error_category"] = "TRANSFORM_ERROR"
-			# Footprint sampling for the build overlay (samples the intended spot)
-			_validate_roof_footprint(solved)
-			roof_temp.queue_free()
-			return {"valid": false}
+		if roof_centered:
+			# A cell-centred roof deliberately sits 1.0m off the wall line, so its
+			# Socket_Base no longer coincides with the wall top socket. What must
+			# match is the HEIGHT: the tile's bottom face rests flush on the wall
+			# tops around the cell (the socket solve already puts it there — this
+			# check keeps a bad solve from sneaking through).
+			var flush_err: float = absf((solved.origin.y - 0.075) - roof_flat_target.y)
+			_diag["socket_position_valid"] = flush_err <= 0.05
+			if flush_err > 0.05:
+				_diag["invalid_reason"] = "ROOF HEIGHT MISMATCH: %.3fm" % flush_err
+				_diag["error_category"] = "TRANSFORM_ERROR"
+				_validate_roof_footprint(solved)
+				roof_temp.queue_free()
+				return {"valid": false}
+		else:
+			# Verify socket alignment from the SOLVED transform — the live ghost's
+			# sockets read stale for AnimatableBody3D in the frame the transform is
+			# set (Jolt sync), which produced false SOCKET MISMATCH errors.
+			_diag["socket_position_valid"] = socket_err <= 0.1
+			if socket_err > 0.1:
+				_diag["invalid_reason"] = "SOCKET MISMATCH: " + str(snappedf(socket_err, 0.001)) + "m"
+				_diag["error_category"] = "TRANSFORM_ERROR"
+				# Footprint sampling for the build overlay (samples the intended spot)
+				_validate_roof_footprint(solved)
+				roof_temp.queue_free()
+				return {"valid": false}
 
-		# Overlap check — exclude the support wall and foundations
+		# Overlap check: the roof may TOUCH any build piece (the wall ring it
+		# rests on and the deck below are allowed contact), but another ROOF
+		# genuinely occupying the same cell — or any non-build body — makes the
+		# placement RED. This is what stops two roof tiles from landing in the
+		# same spot (the old filter skipped every build body, so doubled roofs
+		# z-fighting over one room passed as valid).
 		var roof_overlap := _check_overlap(shape, solved, roof_support)
 		var roof_filtered: Array[Dictionary] = []
 		for hit in roof_overlap:
 			var hit_body: Node3D = hit.get("collider") as Node3D
 			if hit_body == null or not is_instance_valid(hit_body):
 				continue
-			# Exclude ANY build-system body via group check
 			var _is_build_roof: bool = false
 			var _wn_r: Node = hit_body
 			while _wn_r != null:
@@ -2531,6 +3420,12 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 					break
 				_wn_r = _wn_r.get_parent()
 			if _is_build_roof:
+				# Other roofs conflict only when they truly overlap the tile;
+				# edge-to-edge neighbours 2.0m apart merely touch.
+				if _find_piece_name(hit_body) == "Roof":
+					var _od: float = Vector2(solved.origin.x - hit_body.global_position.x, solved.origin.z - hit_body.global_position.z).length()
+					if _od < 1.5:
+						roof_filtered.append(hit)
 				continue
 			roof_filtered.append(hit)
 		_diag["overlap_valid"] = roof_filtered.size() == 0
@@ -3164,6 +4059,9 @@ func _try_build() -> void:
 		sample = piece.get_node_or_null("F1")
 	if sample != null and raft.has_method("register_sample_point"):
 		raft.register_sample_point(sample)
+	# Persist the new structure (with infinite resources, craft() never emits
+	# `changed`, so the autosave would otherwise never fire for buildings).
+	_queue_save()
 	if debug_building:
 		print("[BUILD] === PRE-BUILD SNAPSHOT ===")
 		print("  Preview cell: %s" % str(_ghost_cell))
@@ -3253,10 +4151,10 @@ func _start_edit(target: Node3D) -> void:
 	_edit_valid = false
 	_edit_candidate_transform = target.global_transform
 	_edit_candidate_cell = _edit_original_cell
-	# Disable collision so the piece doesn't block itself
-	var col := target.get_node_or_null("CollisionShape3D")
-	if col:
-		col.disabled = true
+	# Disable ALL collision shapes so the piece doesn't block itself while it is
+	# dragged (a Door's leaf collider lives on its own child body).
+	for c: Node in target.find_children("*", "CollisionShape3D", true, false):
+		(c as CollisionShape3D).disabled = true
 	# Unregister from grid — its cell is now free for candidate evaluation
 	_grid_unregister(_edit_original_cell)
 	# Free sockets this piece occupies
@@ -3309,7 +4207,6 @@ func _update_edit_follow() -> void:
 		edit_aim = _editing.global_position
 	# Shared variables for both branches
 	var new_xform: Transform3D = Transform3D()
-	var col: CollisionShape3D = null
 	# --- Foundation: grid-based placement with neighbor search ---
 	if piece_name == "Foundation":
 		var aim_cell: Vector2i = _world_to_grid(edit_aim)
@@ -3343,9 +4240,13 @@ func _update_edit_follow() -> void:
 			return
 		new_xform = _compute_foundation_transform(best_cell)
 		# Overlap check — exclude editing piece itself
-		col = _editing.get_node_or_null("CollisionShape3D") as CollisionShape3D
-		if col != null and col.shape != null:
-			var hits := _check_overlap(col.shape, new_xform, _editing)
+		var ovl: Shape3D = _largest_descendant_box(_editing) if piece_name == "Door" else null
+		if ovl == null:
+			var _col0 := _editing.get_node_or_null("CollisionShape3D") as CollisionShape3D
+			if _col0 != null:
+				ovl = _col0.shape
+		if ovl != null:
+			var hits := _check_overlap(ovl, new_xform, _editing)
 			if hits.size() > 0:
 				_edit_valid = false
 				_set_edit_color(_ghost_invalid_mat)
@@ -3393,9 +4294,13 @@ func _update_edit_follow() -> void:
 	var new_basis: Basis = flat_xform.basis.rotated(Vector3.UP, build_rotation)
 	new_xform = Transform3D(new_basis, new_pos)
 	# Overlap check — exclude editing piece
-	col = _editing.get_node_or_null("CollisionShape3D") as CollisionShape3D
-	if col != null and col.shape != null:
-		var hits := _check_overlap(col.shape, new_xform, _editing)
+	var ovl2: Shape3D = _largest_descendant_box(_editing) if piece_name == "Door" else null
+	if ovl2 == null:
+		var _col1 := _editing.get_node_or_null("CollisionShape3D") as CollisionShape3D
+		if _col1 != null:
+			ovl2 = _col1.shape
+	if ovl2 != null:
+		var hits := _check_overlap(ovl2, new_xform, _editing)
 		if hits.size() > 0:
 			_edit_valid = false
 			_set_edit_color(_ghost_invalid_mat)
@@ -3412,9 +4317,8 @@ func _confirm_edit() -> void:
 		return
 	if not _edit_valid:
 		return
-	var col := _editing.get_node_or_null("CollisionShape3D")
-	if col:
-		col.disabled = false
+	for c: Node in _editing.find_children("*", "CollisionShape3D", true, false):
+		(c as CollisionShape3D).disabled = false
 	_apply_building_color(_editing)
 	# Register at new grid cell
 	var new_cell: Vector2i = _world_to_grid(_editing.global_position)
@@ -3433,6 +4337,7 @@ func _confirm_edit() -> void:
 				socket.occupy(_editing)
 				_link_reciprocal_socket(_editing, socket)
 	_editing = null
+	_queue_save()
 	# If still in build mode, restore ghost visibility
 	if build_mode and ghost != null:
 		ghost.visible = true
@@ -3445,9 +4350,8 @@ func _cancel_edit() -> void:
 		return
 	# Restore original transform
 	_editing.global_transform = _edit_original_transform
-	var col := _editing.get_node_or_null("CollisionShape3D")
-	if col:
-		col.disabled = false
+	for c: Node in _editing.find_children("*", "CollisionShape3D", true, false):
+		(c as CollisionShape3D).disabled = false
 	_apply_building_color(_editing)
 	# Re-register at original grid cell
 	_grid_register(_edit_original_cell, _editing)
@@ -3478,6 +4382,7 @@ func _cancel_edit() -> void:
 	# Clear edit state
 	_editing = null
 	_edit_valid = false
+	_queue_save()
 	# If still in build mode, restore ghost visibility
 	if build_mode and ghost != null:
 		ghost.visible = true
@@ -3515,6 +4420,7 @@ func _remove_editing() -> void:
 	_editing.queue_free()
 	_editing = null
 	_edit_valid = false
+	_queue_save()
 	# If still in build mode, restore ghost visibility
 	if build_mode and ghost != null:
 		ghost.visible = true
@@ -3574,6 +4480,12 @@ func _validate_build_scene(scene: PackedScene, scene_name: String) -> void:
 		errors.append("No MeshInstance3D found")
 	var col := inst.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	if col == null:
+		# The Door's colliders live under ColFrame* / LeafBody (no directly-named
+		# full panel) — any descendant CollisionShape3D satisfies the check.
+		var desc: Array = inst.find_children("*", "CollisionShape3D", true, false)
+		if desc.size() > 0:
+			col = desc[0] as CollisionShape3D
+	if col == null:
 		errors.append("No CollisionShape3D found")
 	elif col.shape == null:
 		errors.append("CollisionShape3D has no shape")
@@ -3610,9 +4522,24 @@ func _create_hud() -> void:
 	_hud_label.size = Vector2(400, 400)
 	_hud_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	$CanvasLayer.add_child(_hud_label)
+	_hud_label.visible = not _mobile_ui_active()
+
+## True when the mobile touch UI is active (Android/iOS/web-mobile or the
+## desktop F10 preview). The desktop dev label is replaced by the graphical
+## mobile HUD then, so it must not stack on top of it.
+func _mobile_ui_active() -> bool:
+	if OS.has_feature("android") or OS.has_feature("ios") or OS.has_feature("mobile"):
+		return true
+	var mc: Node = get_node_or_null("CanvasLayer/MobileControls")
+	return mc != null and bool(mc.get("force_show")) == true
 
 func _update_hud() -> void:
 	if _hud_label == null:
+		return
+	var want_label: bool = not _mobile_ui_active()
+	if _hud_label.visible != want_label:
+		_hud_label.visible = want_label
+	if not want_label:
 		return
 	var text := ""
 	for item_name in Inventory.items:

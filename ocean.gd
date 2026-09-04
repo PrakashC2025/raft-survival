@@ -3,29 +3,47 @@ class_name Ocean
 
 # ============================================================
 # OCEAN — day/night driver
-# Reads the Sky3D sun/moon state each frame and pushes
+# Reads the Sky3D SkyDome's sun/moon state each frame and pushes
 # time-of-day uniforms to the ocean shader (main.gdshader).
-# get_height() (buoyancy/waves/collision) is unchanged.
+# get_height() MUST mirror the shader's vertex wave formula exactly
+# (see _WAVES below) so buoyancy matches the visible waves.
 # ============================================================
 
 # --- Time-of-day water palette (tune in the inspector) ---
 # TRUE LINEAR HDR colors — the shader uniforms are deliberately NOT
 # source_color (that hint silently converts pushed colors sRGB->linear and
-# darkens the water ~3x). The scene uses ACES tonemapping (mode 3). Tuned so
-# the final displayed ocean is a bright Raft-style blue:
-#   day (0.05, 0.18, 0.40) -> ~sRGB (0.23, 0.55, 0.76)
-#   night (0.012, 0.04, 0.12) -> ~sRGB (0.06, 0.20, 0.44) navy
-# (verified empirically against the real ACES+sRGB pipeline).
-@export var day_color := Color(0.05, 0.22, 0.46)
-@export var twilight_color := Color(0.06, 0.07, 0.22)
-@export var night_color := Color(0.012, 0.04, 0.12)
-@export var sparkle_strength := 1.0
+# darkens the water ~3x). The scene uses ACES tonemapping (mode 3, white 6.0).
+# The values below were calibrated by rendering the real pipeline and reading
+# back the displayed colors, targeting a deep open-ocean look: medium cobalt
+# at the horizon, deep navy in the foreground/troughs, blue-cyan crests:
+#   day (0.11, 0.40, 0.58)      -> ~sRGB #075D91-ish mid sea
+#   horizon (0.035, 0.42, 0.60) -> cobalt toward the horizon (low red)
+#   deep (0.05, 0.20, 0.28)     -> near-black navy foreground/troughs
+#   night (0.022, 0.06, 0.145)  -> dark navy, never black
+@export var day_color := Color(0.024, 0.20, 0.42)
+@export var twilight_color := Color(0.02, 0.15, 0.34)
+@export var night_color := Color(0.014, 0.08, 0.20)
+@export var deep_color := Color(0.012, 0.09, 0.20)
+@export var horizon_color := Color(0.05, 0.44, 0.66)
+@export var crest_color := Color(0.21, 0.52, 0.65)
+@export var foam_color := Color(1.0, 1.12, 1.32)
+@export var haze_color := Color(0.5, 0.66, 0.82)
+@export var sparkle_strength := 0.35
 
 # Dev-only time keys. F3 is the build overlay, so the debug keys use F5-F9.
 @export var dev_time_keys := true
 
-@export var wave_height := 0.4
-@export var wave_speed := 1.2
+# --- Underwater veil (display-space 2D colors) ---
+@export_range(0.0, 1.2) var under_alpha_max := 0.78
+@export var under_top_color := Color(0.10, 0.42, 0.66)
+@export var under_bottom_color := Color(0.008, 0.045, 0.12)
+
+var _under_layer: CanvasLayer = null
+var _under_rect: ColorRect = null
+var _under_mat: ShaderMaterial = null
+
+@export var wave_height := 0.32
+@export var wave_speed := 0.45
 var _time := 0.0
 
 var _sky3d: Node = null
@@ -44,6 +62,15 @@ var _last_moon := 0.0
 var _sun_elev := 1.0
 var _moon_elev := -1.0
 
+const _UNDER_SHADER := "
+shader_type canvas_item;
+uniform vec4 top_col : source_color;
+uniform vec4 bottom_col : source_color;
+void fragment() {
+	COLOR = mix(bottom_col, top_col, UV.y);
+}
+"
+
 func _ready() -> void:
 	# Groups work across scene-file boundaries (unlike %UniqueName), so any
 	# runtime-instanced node (debris, etc.) can always find this node.
@@ -54,7 +81,13 @@ func _ready() -> void:
 	if _sky3d == null:
 		_sky3d = get_node_or_null("../../Sky3D")
 	if _sky3d != null:
-		_sky = _sky3d.get("sky") as Node  # SkyDome node
+		# The SkyDome child carries the live sun/moon transforms the addon
+		# recomputes each time tick. (Reading it by node path, not the "sky"
+		# property — that property is not bound in this scene and was silently
+		# null, which froze the water at day colors forever.)
+		_sky = _sky3d.get_node_or_null("SkyDome") as Node
+		if _sky == null:
+			_sky = _sky3d.get("sky") as Node
 		_sun_light = _sky3d.get_node_or_null("SunLight") as DirectionalLight3D
 		_moon_light = _sky3d.get_node_or_null("MoonLight") as DirectionalLight3D
 		_env = _sky3d.get("environment") as Environment
@@ -64,6 +97,11 @@ func _ready() -> void:
 		_mat.set_shader_parameter("water_day_color", day_color)
 		_mat.set_shader_parameter("water_twilight_color", twilight_color)
 		_mat.set_shader_parameter("water_night_color", night_color)
+		_mat.set_shader_parameter("water_deep_color", deep_color)
+		_mat.set_shader_parameter("water_horizon_color", horizon_color)
+		_mat.set_shader_parameter("water_crest_color", crest_color)
+		_mat.set_shader_parameter("water_foam_color", foam_color)
+		_mat.set_shader_parameter("water_haze_color", haze_color)
 		_mat.set_shader_parameter("sparkle_strength", sparkle_strength)
 		# Keep the visual waves and the buoyancy sample (get_height below) on the
 		# same amplitude so the raft rides the visible waves instead of shaking
@@ -95,6 +133,7 @@ func _process(delta: float) -> void:
 	var moon_factor := night * moon_up
 	_push_factors(night, twilight, moon_factor)
 	_update_debug_hud(night, twilight, moon_factor)
+	_update_underwater()
 
 func _push_factors(night: float, twilight: float, moon_factor: float) -> void:
 	_last_night = night
@@ -134,6 +173,49 @@ func _unhandled_input(event: InputEvent) -> void:
 func _force_time(hour: float) -> void:
 	_sky3d.set("current_time", hour)
 
+# ---------------------------------------------------------------- underwater
+# Lightweight camera-underwater look: when the view dips below the wave
+# surface a blue veil fades in (darker with depth). Pure 2D overlay — no
+# gameplay rendering changes — with a smooth cross-fade at the surface.
+func _update_underwater() -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		if _under_layer != null:
+			_under_layer.visible = false
+		return
+	var water_level := get_height(cam.global_position)
+	var depth := water_level - cam.global_position.y
+	var amt := clampf(depth / 1.4, 0.0, 1.0)
+	amt = amt * amt * (3.0 - 2.0 * amt)  # smoothstep-like ramp
+	if amt <= 0.001:
+		if _under_layer != null:
+			_under_layer.visible = false
+		return
+	_ensure_underwater()
+	_under_layer.visible = true
+	var alpha := under_alpha_max * (0.35 + 0.65 * amt)
+	var top := Color(under_top_color.r, under_top_color.g, under_top_color.b, alpha)
+	var bottom := Color(under_bottom_color.r, under_bottom_color.g, under_bottom_color.b, alpha * 1.15)
+	_under_mat.set_shader_parameter("top_col", top)
+	_under_mat.set_shader_parameter("bottom_col", bottom)
+
+func _ensure_underwater() -> void:
+	if _under_layer != null:
+		return
+	_under_layer = CanvasLayer.new()
+	_under_layer.name = "_OceanUnderwaterVei"
+	_under_layer.layer = 90
+	_under_layer.visible = false
+	add_child(_under_layer)
+	_under_mat = ShaderMaterial.new()
+	_under_mat.shader = Shader.new()
+	_under_mat.shader.code = _UNDER_SHADER
+	_under_rect = ColorRect.new()
+	_under_rect.material = _under_mat
+	_under_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_under_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_under_layer.add_child(_under_rect)
+
 func _ensure_debug_label() -> void:
 	if _label != null:
 		return
@@ -165,9 +247,47 @@ func _update_debug_hud(night: float, twilight: float, moon_factor: float) -> voi
 	if text != _label.text:
 		_label.text = text
 
+# Wave-field constants. MUST stay identical to main.gdshader's vertex wave
+# formula (same dirs/freqs/amps/speeds) so buoyancy matches the visible waves.
+const _WAVES := [
+	[Vector2(1.0, 0.15), 0.085, 1.0, 0.5],
+	[Vector2(-0.4, 0.92), 0.17, 0.8, 0.9],
+	[Vector2(0.8, -0.5), 0.34, 0.45, 1.3],
+	[Vector2(-0.75, -0.65), 0.62, 0.2, 1.6],
+]  # [dir, freq, amp, time_speed]
+
+# Organic-field constants. MUST stay identical to main.gdshader's meander and
+# swell-envelope so buoyancy follows the same warped surface (see vertex()).
+const _M1_DIR := Vector2(0.21, 0.98)
+const _M2_DIR := Vector2(0.85, -0.53)
+const _M1_F := 0.040
+const _M2_F := 0.090
+const _M1_S := 0.10
+const _M2_S := 0.16
+const _M_AMP := 4.5
+const _M_AMP2 := 2.5
+const _E1_DIR := Vector2(-0.31, 0.95)
+const _E2_DIR := Vector2(0.90, -0.44)
+const _E1_F := 0.020
+const _E2_F := 0.045
+const _E1_S := 0.08
+const _E2_S := 0.13
+
 # Returns the exact water surface height (world Y) at any given world position.
 func get_height(world_pos: Vector3) -> float:
-	var h := sin(world_pos.x * 0.4 + _time * wave_speed) \
-		+ sin(world_pos.z * 0.3 + _time * wave_speed * 0.8) \
-		+ 0.5 * sin((world_pos.x + world_pos.z) * 0.7 + _time * 1.7)
+	var p := Vector2(world_pos.x, world_pos.z)
+	var tt := _time * wave_speed
+	var warp := Vector2(
+		_M_AMP * sin(p.dot(_M1_DIR) * _M1_F + tt * _M1_S) + _M_AMP2 * sin(p.dot(_M2_DIR) * _M2_F + tt * _M2_S),
+		_M_AMP * sin(p.dot(_M1_DIR) * _M1_F + tt * _M1_S + 2.1) + _M_AMP2 * sin(p.dot(_M2_DIR) * _M2_F + tt * _M2_S + 4.2))
+	var pw := p + warp
+	var env := 0.68 + 0.32 * sin(pw.dot(_E1_DIR) * _E1_F + tt * _E1_S) * sin(pw.dot(_E2_DIR) * _E2_F + tt * _E2_S)
+	var h := 0.0
+	for w in _WAVES:
+		var d: Vector2 = w[0]
+		var f: float = w[1]
+		var a: float = w[2]
+		var s: float = w[3]
+		h += a * sin(pw.dot(d) * f + tt * s)
+	h *= env
 	return global_position.y + h * wave_height * 0.33

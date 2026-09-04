@@ -1,22 +1,32 @@
 extends Control
 class_name MobileControls
 
+const Icons := preload("res://ui_icons.gd")
+
 ## ============================================================
-## MOBILE TOUCH CONTROLS — full button set
-##   - Left half of screen   : dynamic joystick = walk (starts where you touch)
-##   - Right half of screen  : drag = look around
-##   - Buttons feed the SAME Input actions as the keyboard:
+## MOBILE TOUCH CONTROLS — joystick = move, touch-screen = look
+##   - The bottom-left joystick DOCK is the ONLY movement control: touch it
+##     (within its grab zone) and drag to walk. It stays fixed at the dock.
+##   - Touching ANYWHERE ELSE on the screen and dragging rotates the camera
+##     (look). A second finger can look while the first holds the joystick.
+##   - Action buttons are INVISIBLE Button nodes whose circular icon art is
+##     painted by this overlay's _draw() (original vector glyphs, reference
+##     style). They feed the SAME Input actions as the keyboard:
 ##       JUMP(jump) RUN(sprint,hold) USE(interact) DIVE(move_down)
 ##       ROPE(rope_throw, HOLD to charge, release to throw) RECALL(rope_cancel)
 ##       BUILD(build/exit/cancel) EDIT(pick up aimed piece) REMOVE(remove_build)
 ##       PLACE(place_build / confirm edit) ROT(rotate_build) NEXT(cycle_build)
 ##   Buttons swap per mode: normal / build / edit.
+##   - The survival HUD (bag/hotbar) may claim touches: anything its
+##     claims_touch() reports is never turned into camera look, and while its
+##     bag panel is open all gameplay input is suspended.
 ## Shows on touch/mobile devices automatically; `force_show` previews on PC.
 ## ============================================================
 
 @export var force_show: bool = false
-## Fraction of the screen width used as the movement zone (left side).
-@export var move_zone_width: float = 0.45
+## Grab zone around the joystick dock, as a multiple of the stick radius.
+## Touches inside it start movement; touches outside it start camera look.
+@export var dock_zone_scale: float = 1.6
 ## Look sensitivity per touch-pixel (mouse is 0.003; fingers are coarser).
 @export var look_sensitivity: float = 0.007
 ## Movement dead zone (0..1 of joystick travel).
@@ -33,7 +43,7 @@ var _knob := Vector2.ZERO   # joystick knob (screen)
 var _stick := Vector2.ZERO  # joystick vector, y+ = forward
 var _dock := Vector2.ZERO   # resting joystick position (bottom-left)
 
-# --- buttons ---
+# --- buttons (invisible; icon art drawn by _draw) ---
 var _btn_jump: Button
 var _btn_run: Button
 var _btn_use: Button
@@ -41,6 +51,7 @@ var _btn_dive: Button
 var _btn_rope: Button
 var _btn_recall: Button
 var _btn_edit: Button
+var _btn_climb: Button
 var _btn_build: Button
 var _btn_place: Button
 var _btn_rotate: Button
@@ -53,6 +64,11 @@ var _mode := "init"  # "normal" | "build" | "edit"
 var _rope_busy := false
 var _swimming := false
 var _can_edit := false
+var _can_interact := false  # center crosshair points at an interactable
+var _can_climb := false     # swimming next to the raft — CLIMB button available
+
+# reference to the survival HUD overlay (bag/hotbar), lazy
+var _hud: Control = null
 
 
 func _ready() -> void:
@@ -84,6 +100,16 @@ func _apply_viewport_size() -> void:
 
 func _process(_delta: float) -> void:
 	_update_visibility()
+	# While the bag panel is open the whole screen belongs to the HUD: drop the
+	# joystick and any held action so nothing drifts behind the panel.
+	if _hud_node() != null and _hud_node().is_blocking():
+		if _move_id != -1 or Input.is_action_pressed("jump") or Input.is_action_pressed("sprint") \
+				or Input.is_action_pressed("rope_throw") or Input.is_action_pressed("interact"):
+			_move_id = -1
+			_stick = Vector2.ZERO
+			queue_redraw()
+			_release_all_actions()
+		return
 	_update_movement_actions()
 	_sync_mode()
 
@@ -116,10 +142,17 @@ func _update_visibility() -> void:
 		_look_id = -1
 
 
+func _hud_node() -> Control:
+	if _hud == null or not is_instance_valid(_hud):
+		_hud = get_tree().get_first_node_in_group("survival_hud") as Control
+	return _hud
+
+
 # ============================================================
 # TOUCH ROUTING — via _input (mouse_filter is IGNORE so the mouse is never
-# blocked). Touches that land on a button are left to the button's own GUI
-# handling; everything else becomes joystick (left half) or look (right).
+# blocked). Touches claimed by the HUD (bag/hotbar/panel) or landing on an
+# action button are left to those controls; the bottom-left joystick dock is
+# the ONLY movement control; every other touch starts camera look.
 # ============================================================
 func _input(event: InputEvent) -> void:
 	# F10 toggles the mobile UI on/off — handy for previewing it on a PC
@@ -130,17 +163,24 @@ func _input(event: InputEvent) -> void:
 	if not visible:
 		return
 	if event is InputEventScreenTouch:
-		if event.pressed and _over_button(event.position):
-			return  # the Button handles it
 		if event.pressed:
-			if _move_id == -1 and event.position.x < size.x * move_zone_width:
-				_start_move(event.index, event.position)
+			if _over_button(event.position):
+				return  # the Button handles it
+			if _hud_node() != null and _hud_node().claims_touch(event.position):
+				return  # bag / hotbar / open panel
+			if _move_id == -1 and _in_dock_zone(event.position):
+				_start_move(event.index)
 			elif _look_id == -1:
 				_start_look(event.index, event.position)
 		else:
 			_end_touch(event.index)
 	elif event is InputEventScreenDrag:
-		if event.index == _move_id:
+		if _move_id != -1 and event.index == _move_id and _hud_node() != null and _hud_node().is_blocking():
+			_move_id = -1
+			_stick = Vector2.ZERO
+			queue_redraw()
+			_release_all_actions()
+		elif event.index == _move_id:
 			_update_move(event.position)
 		elif event.index == _look_id:
 			_update_look(event.relative)
@@ -154,17 +194,18 @@ func _over_button(pos: Vector2) -> bool:
 	return false
 
 
-func _start_move(index: int, pos: Vector2) -> void:
+## True when the touch is inside the joystick dock's grab zone (the ONLY
+## place movement can start — everywhere else on the screen looks around).
+func _in_dock_zone(pos: Vector2) -> bool:
+	return pos.distance_to(_dock) <= _joy_radius() * dock_zone_scale
+
+
+func _start_move(index: int) -> void:
 	_move_id = index
-	# Touching near the docked joystick uses the dock as its base (a fixed
-	# stick feels better); anywhere else on the left half spawns a joystick at
-	# the touch point.
-	var r := _joy_radius()
-	if pos.distance_to(_dock) <= r * 1.5:
-		_base = _dock
-	else:
-		_base = pos
-	_knob = _base
+	# Movement always anchors to the fixed dock (no dynamic spawning) so the
+	# rest of the screen stays free for camera look.
+	_base = _dock
+	_knob = _dock
 	_stick = Vector2.ZERO
 	queue_redraw()
 
@@ -172,9 +213,9 @@ func _start_move(index: int, pos: Vector2) -> void:
 func _update_move(pos: Vector2) -> void:
 	var radius := _joy_radius()
 	var delta := pos - _base
-	var len := delta.length()
-	if len > radius:
-		delta = delta / len * radius
+	var dist := delta.length()
+	if dist > radius:
+		delta = delta / dist * radius
 		_knob = _base + delta
 	else:
 		_knob = pos
@@ -242,24 +283,25 @@ func _release_all_actions() -> void:
 
 
 # ============================================================
-# BUTTONS
+# BUTTONS (invisible, icon art drawn in _draw)
 # ============================================================
 func _build_buttons() -> void:
-	_btn_jump = _make_button("JUMP", Color(0.18, 0.55, 0.9, 0.62))
-	_btn_rope = _make_button("ROPE", Color(0.85, 0.6, 0.15, 0.68))
-	_btn_recall = _make_button("BACK", Color(0.75, 0.3, 0.25, 0.7))
-	_btn_run = _make_button("RUN", Color(0.3, 0.62, 0.35, 0.55))
-	_btn_use = _make_button("USE", Color(0.85, 0.6, 0.2, 0.6))
-	_btn_dive = _make_button("DIVE", Color(0.2, 0.55, 0.8, 0.55))
-	_btn_edit = _make_button("EDIT", Color(0.5, 0.4, 0.75, 0.6))
-	_btn_build = _make_button("BUILD", Color(0.45, 0.35, 0.8, 0.65))
-	_btn_place = _make_button("PLACE", Color(0.15, 0.72, 0.45, 0.75))
-	_btn_rotate = _make_button("ROT", Color(0.2, 0.55, 0.8, 0.6))
-	_btn_next = _make_button("NEXT", Color(0.25, 0.6, 0.75, 0.6))
-	_btn_remove = _make_button("REMOVE", Color(0.8, 0.25, 0.2, 0.75))
+	_btn_jump = _make_button("jump")
+	_btn_rope = _make_button("hook")
+	_btn_recall = _make_button("back")
+	_btn_run = _make_button("run")
+	_btn_use = _make_button("hand")
+	_btn_dive = _make_button("down")
+	_btn_edit = _make_button("pencil")
+	_btn_climb = _make_button("climb")
+	_btn_build = _make_button("hammer")
+	_btn_place = _make_button("check")
+	_btn_rotate = _make_button("rot")
+	_btn_next = _make_button("next")
+	_btn_remove = _make_button("trash")
 
 	_all_buttons = [_btn_jump, _btn_rope, _btn_recall, _btn_run, _btn_use, _btn_dive,
-			_btn_edit, _btn_build, _btn_place, _btn_rotate, _btn_next, _btn_remove]
+			_btn_climb, _btn_edit, _btn_build, _btn_place, _btn_rotate, _btn_next, _btn_remove]
 
 	# Hold-style buttons: press the action on touch-down, release on touch-up.
 	_btn_jump.button_down.connect(_press_action.bind("jump"))
@@ -283,14 +325,23 @@ func _build_buttons() -> void:
 	_btn_recall.button_down.connect(_press_action.bind("rope_cancel"))
 	_btn_recall.button_up.connect(_release_action.bind("rope_cancel"))
 
-	# Tap-style: USE is momentary (like pressing E), EDIT picks the aimed piece.
+	# Tap-style: USE is momentary (like pressing E), EDIT picks the aimed piece,
+	# CLIMB boards the raft directly (same as E while swimming next to it).
 	_btn_use.button_down.connect(_press_action.bind("interact"))
 	_btn_use.button_up.connect(_release_action.bind("interact"))
 	_btn_edit.pressed.connect(_on_edit_pressed)
+	_btn_climb.pressed.connect(_on_climb_pressed)
 
 	for b in _all_buttons:
 		add_child(b)
+		b.pressed.connect(_queue_redraw)
+		b.button_down.connect(_queue_redraw)
+		b.button_up.connect(_queue_redraw)
 	_sync_mode()
+
+
+func _queue_redraw() -> void:
+	queue_redraw()
 
 
 func _press_action(action: StringName) -> void:
@@ -312,42 +363,31 @@ func _on_edit_pressed() -> void:
 		p.call("_handle_double_click_edit")
 
 
-func _make_button(text: String, color: Color) -> Button:
+## Tap = pull the player out of the water onto the nearest deck edge. The
+## button only appears while swimming next to the raft/foundation, so the
+## press always succeeds (climb_out no-ops if the ledge moved away).
+func _on_climb_pressed() -> void:
+	var p := _get_player()
+	if p == null or not visible:
+		return
+	if p.has_method("climb_out"):
+		p.call("climb_out")
+
+
+func _make_button(kind: String) -> Button:
 	var b := Button.new()
-	b.text = text
+	b.text = ""
 	b.focus_mode = Control.FOCUS_NONE
 	b.mouse_filter = Control.MOUSE_FILTER_STOP
-	b.add_theme_font_size_override("font_size", 22)
-	b.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
-	b.add_theme_color_override("font_hover_color", Color.WHITE)
-	b.add_theme_color_override("font_pressed_color", Color(1, 1, 1, 0.8))
-	var normal := _style(color)
-	var hover := _style(color.lightened(0.15))
-	var pressed := _style(color.darkened(0.25))
-	pressed.border_color = Color(1, 1, 1, 0.6)
-	b.add_theme_stylebox_override("normal", normal)
-	b.add_theme_stylebox_override("hover", hover)
-	b.add_theme_stylebox_override("pressed", pressed)
-	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	b.add_theme_stylebox_override("disabled", normal.duplicate())
+	b.set_meta("icon_kind", kind)
+	var empty := StyleBoxEmpty.new()
+	for state in ["normal", "hover", "pressed", "focus", "disabled"]:
+		b.add_theme_stylebox_override(state, empty)
 	return b
 
 
-func _style(color: Color) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = color
-	s.border_color = Color(1, 1, 1, 0.3)
-	s.set_border_width_all(2)
-	s.set_corner_radius_all(14)
-	s.content_margin_left = 6.0
-	s.content_margin_right = 6.0
-	s.content_margin_top = 6.0
-	s.content_margin_bottom = 6.0
-	return s
-
-
 # ============================================================
-# MODE SYNC — which buttons are visible, and how BUILD is labelled.
+# MODE SYNC — which buttons are visible, and what BUILD does per mode.
 # ============================================================
 func _sync_mode() -> void:
 	var p := _get_player()
@@ -365,19 +405,33 @@ func _sync_mode() -> void:
 		var c: Node = p.get("aim_collider")
 		if c != null and p.has_method("_find_editable_target"):
 			can_edit = p.call("_find_editable_target", c) != null
+	var can_interact := false
+	if mode == "normal" and p != null and p.has_method("can_interact_now"):
+		can_interact = bool(p.call("can_interact_now"))
+	var can_climb := false
+	if mode == "normal" and swimming and p != null and p.has_method("can_climb_out"):
+		can_climb = bool(p.call("can_climb_out"))
 
-	if mode == _mode and rope_busy == _rope_busy and swimming == _swimming and can_edit == _can_edit:
+	if mode == _mode and rope_busy == _rope_busy and swimming == _swimming \
+			and can_edit == _can_edit and can_interact == _can_interact and can_climb == _can_climb:
 		return
 	_mode = mode
 	_rope_busy = rope_busy
 	_swimming = swimming
 	_can_edit = can_edit
+	_can_interact = can_interact
+	_can_climb = can_climb
 
 	var normal: bool = mode == "normal"
 	_btn_jump.visible = normal
 	_btn_run.visible = normal
-	_btn_use.visible = normal
+	# The HAND button only appears when the center crosshair is actually over
+	# an interactable (debris / door / usable piece) — same logic as the E key.
+	_btn_use.visible = normal and can_interact
 	_btn_dive.visible = normal and swimming
+	# CLIMB appears ONLY while swimming right next to the raft/foundation
+	# (same test as the E key) — never on land, never in open water.
+	_btn_climb.visible = normal and can_climb
 	_btn_rope.visible = normal
 	_btn_recall.visible = normal and rope_busy
 	_btn_edit.visible = normal and can_edit
@@ -386,18 +440,16 @@ func _sync_mode() -> void:
 	_btn_next.visible = mode == "build"
 	_btn_remove.visible = mode == "edit"
 
-	var label := "BUILD"
-	var col := Color(0.45, 0.35, 0.8, 0.65)
-	match mode:
-		"edit":
-			label = "CANCEL"
-			col = Color(0.7, 0.45, 0.2, 0.7)
-		"build":
-			label = "EXIT"
-			col = Color(0.8, 0.3, 0.3, 0.7)
-	if _btn_build.text != label:
-		_btn_build.text = label
-	_btn_build.add_theme_stylebox_override("normal", _style(col))
+	# If a hold-style button vanished while held (e.g. the target moved away
+	# from the crosshair mid-press), release its action so it never sticks.
+	if not _btn_use.visible and Input.is_action_pressed("interact"):
+		Input.action_release("interact")
+	if not _btn_rope.visible and Input.is_action_pressed("rope_throw"):
+		Input.action_release("rope_throw")
+	if not _btn_run.visible and Input.is_action_pressed("sprint"):
+		Input.action_release("sprint")
+
+	queue_redraw()
 
 
 # ============================================================
@@ -410,14 +462,12 @@ func _layout() -> void:
 	var m := clampf(vp.y * 0.018, 8.0, 18.0)
 	var big := clampf(vp.y * 0.15, 92.0, 132.0)
 	var small := clampf(vp.y * 0.085, 54.0, 80.0)
-	var tiny := clampf(vp.y * 0.07, 46.0, 64.0)
 	var right := vp.x - m
 	var bottom := vp.y - m
 
 	# Resting joystick position: bottom-left corner, inside the move zone.
 	var jr := _joy_radius()
 	_dock = Vector2(m + jr, vp.y - m - jr)
-	queue_redraw()
 
 	# Right-edge column (bottom up): JUMP/PLACE (big), ROPE, RECALL.
 	var col_x := right - big
@@ -430,8 +480,8 @@ func _layout() -> void:
 	_btn_recall.position = Vector2(right - small, bottom - big - m - big - m - small)
 	_btn_recall.size = Vector2(small, small)
 
-	# Left-of-column small stack (bottom up): RUN/USE (normal), DIVE, EDIT,
-	# and the ROT/NEXT/REMOVE equivalents in build/edit modes.
+	# Left-of-column small stack (bottom up): RUN/USE (normal), DIVE, CLIMB,
+	# EDIT, and the ROT/NEXT/REMOVE equivalents in build/edit modes.
 	var s_x := right - big - m - small
 	_btn_run.position = Vector2(s_x, bottom - small)
 	_btn_run.size = Vector2(small, small)
@@ -439,7 +489,9 @@ func _layout() -> void:
 	_btn_use.size = Vector2(small, small)
 	_btn_dive.position = Vector2(s_x, bottom - small - m - small - m - small)
 	_btn_dive.size = Vector2(small, small)
-	_btn_edit.position = Vector2(s_x, bottom - small - m - small - m - small - m - small)
+	_btn_climb.position = Vector2(s_x, bottom - small - m - small - m - small - m - small)
+	_btn_climb.size = Vector2(small, small)
+	_btn_edit.position = Vector2(s_x, bottom - small - m - small - m - small - m - small - m - small)
 	_btn_edit.size = Vector2(small, small)
 	_btn_next.position = _btn_run.position
 	_btn_next.size = _btn_run.size
@@ -448,45 +500,150 @@ func _layout() -> void:
 	_btn_remove.position = _btn_dive.position
 	_btn_remove.size = Vector2(small, small)
 
-	# Top-right BUILD / EXIT / CANCEL toggle.
-	_btn_build.position = Vector2(right - small, m)
-	_btn_build.size = Vector2(small, small)
+	# LEFT-CENTER BUILD toggle (enter/exit build mode): sits above the
+	# movement joystick's grab zone, out of the camera-look area and never on
+	# top of the center crosshair. Turns into an X (cancel) while building.
+	var b_size := small
+	var b_x: float = m
+	var b_y: float = clampf(vp.y * 0.36, m, _dock.y - jr * 1.9 - b_size)
+	_btn_build.position = Vector2(b_x, b_y)
+	_btn_build.size = Vector2(b_size, b_size)
 
-	_fit_fonts()
+	queue_redraw()
 
 
-func _fit_fonts() -> void:
+# ============================================================
+# ICON ART — every visible action button is painted here as a dark glassy
+# circle with an original white vector glyph (reference-style).
+# ============================================================
+func _button_icon_kind(b: Button) -> String:
+	var kind: String = str(b.get_meta("icon_kind", "?"))
+	if b == _btn_build:
+		# The build toggle morphs with its mode: hammer = enter, X = exit/cancel.
+		kind = "x" if (_mode == "build" or _mode == "edit") else "hammer"
+	return kind
+
+
+func _draw() -> void:
+	if not visible:
+		return
+	var radius := _joy_radius()
+	if _move_id != -1:
+		_draw_dpad(_base, radius, _knob)
+	else:
+		# Idle dock — a faint resting D-pad so players can SEE where to put
+		# their thumb instead of hunting for an invisible control.
+		_draw_dpad(_dock, radius, _dock)
+	# Action buttons on top of the D-pad? No — buttons live bottom-right; draw
+	# them after so nothing overlaps incorrectly.
 	for b in _all_buttons:
-		if b != null and b.size.x > 0.0:
-			b.add_theme_font_size_override("font_size", int(maxf(13.0, b.size.x * 0.15)))
+		if b == null or not b.visible:
+			continue
+		_draw_action_button(b)
+
+
+func _draw_action_button(b: Button) -> void:
+	var rect := b.get_global_rect()
+	var center := rect.get_center()
+	var r := minf(rect.size.x, rect.size.y) * 0.5
+	var pressed := b.is_pressed() or b.has_focus()
+	var bg := Color(0.06, 0.08, 0.11, 0.55) if not pressed else Color(0.16, 0.2, 0.28, 0.75)
+	draw_circle(center, r * 0.92, bg)
+	var ring: Color = Color(1, 1, 1, 0.32)
+	if _button_icon_kind(b) == "hammer" and _mode == "normal":
+		ring = Color(0.55, 0.9, 0.5, 0.5)
+	elif _button_icon_kind(b) == "x":
+		ring = Color(0.95, 0.4, 0.35, 0.5)
+	elif _button_icon_kind(b) == "check":
+		ring = Color(0.4, 0.95, 0.6, 0.5)
+	elif _button_icon_kind(b) == "climb":
+		ring = Color(0.4, 0.85, 0.95, 0.6)
+	draw_arc(center, r * 0.92, 0.0, TAU, 40, ring, clampf(r * 0.06, 1.5, 3.0), true)
+	var col := Color(1, 1, 1, 0.92) if not pressed else Color(1, 1, 1, 1.0)
+	_draw_icon_glyph(b, center, r * 0.48, col)
+
+
+func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
+	var w := clampf(r * 0.26, 3.0, 7.0)
+	var kind := _button_icon_kind(b)
+	match kind:
+		"jump":
+			Icons.arrow_up(self, center, r, w, col)
+		"down":
+			Icons.arrow_down(self, center, r, w, col)
+		"back":
+			Icons.arrow_left(self, center, r, w, col)
+		"next":
+			Icons.chevrons(self, center, Vector2.RIGHT, r, w, col)
+		"check":
+			Icons.check(self, center, r, w, col)
+		"x":
+			Icons.cross(self, center, r, w, col)
+		"run":
+			Icons.run(self, center, r * 1.15, w * 0.9, col)
+		"hand":
+			Icons.hand(self, center, r, w * 0.7, col)
+		"climb":
+			# Arrow up out of a wave — "pull yourself onto the raft".
+			Icons.arrow_up(self, center + Vector2(0, -r * 0.1), r * 0.6, w, col)
+			var wy := center.y + r * 0.45
+			var wpts := PackedVector2Array()
+			for wi in range(5):
+				var wt := float(wi) / 4.0
+				wpts.append(Vector2(center.x - r * 0.6 + wt * r * 1.2, wy + sin(wt * PI) * r * 0.18))
+			draw_polyline(wpts, col, maxf(w * 0.7, 1.5), true)
+		"hook":
+			Icons.hook(self, center, r, w * 0.9, col)
+		"hammer":
+			Icons.hammer(self, center, r, w, col)
+		"pencil":
+			Icons.pencil(self, center, r, w, col)
+		"trash":
+			Icons.trash(self, center, r, w, col)
+		"rot":
+			Icons.rotate(self, center, r, w, col)
+		_:
+			Icons.check(self, center, r, w, col)
+
+
+# ============================================================
+# DEBUG DRAW — D-pad joystick: transparent base ring, four directional
+# arrows pointing toward the central thumbstick (reference style).
+# ============================================================
+func _draw_dpad(center: Vector2, radius: float, knob_pos: Vector2) -> void:
+	# Transparent base plate.
+	draw_circle(center, radius, Color(1, 1, 1, 0.08))
+	draw_arc(center, radius, 0.0, TAU, 48, Color(1, 1, 1, 0.28), 2.5)
+	draw_arc(center, radius * 0.42, 0.0, TAU, 32, Color(1, 1, 1, 0.18), 1.5)
+	# Four directional arrows pointing toward the central thumbstick.
+	var dirs: Array[Vector2] = [Vector2.UP, Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT]
+	for dir in dirs:
+		_draw_inward_arrow(center, dir, radius)
+	# Central thumbstick (moves with the touch).
+	var knob_r := clampf(radius * 0.34, 22.0, 44.0)
+	draw_circle(knob_pos, knob_r, Color(1, 1, 1, 0.34))
+	draw_arc(knob_pos, knob_r, 0.0, TAU, 32, Color(1, 1, 1, 0.45), 2.0)
+
+
+## One directional chevron whose tip points IN toward the center (like the
+## reference D-pad, where the arrows converge on the thumbstick).
+func _draw_inward_arrow(center: Vector2, dir: Vector2, radius: float) -> void:
+	var perp := Vector2(-dir.y, dir.x)
+	var tip := center + dir * radius * 0.30
+	var back := center + dir * radius * 0.82
+	var half_w := radius * 0.16
+	var pts := PackedVector2Array([
+		tip,
+		back + perp * half_w,
+		back - perp * half_w,
+	])
+	draw_colored_polygon(pts, Color(1, 1, 1, 0.34))
 
 
 func _get_player() -> Node:
 	if _player == null or not is_instance_valid(_player):
 		_player = get_tree().get_first_node_in_group("player")
 	return _player
-
-
-# ============================================================
-# DEBUG DRAW — joystick base ring + knob
-# ============================================================
-func _draw() -> void:
-	if not visible:
-		return
-	var radius := _joy_radius()
-	if _move_id != -1:
-		# Active joystick at its base.
-		draw_circle(_base, radius, Color(1, 1, 1, 0.12))
-		draw_arc(_base, radius, 0.0, TAU, 40, Color(1, 1, 1, 0.35), 3.0)
-		var knob_r := clampf(radius * 0.38, 24.0, 48.0)
-		draw_circle(_knob, knob_r, Color(1, 1, 1, 0.4))
-		draw_arc(_knob, knob_r, 0.0, TAU, 32, Color(1, 1, 1, 0.5), 2.0)
-	else:
-		# Idle dock — a faint resting joystick so players can SEE where to put
-		# their thumb instead of hunting for an invisible control.
-		draw_circle(_dock, radius, Color(1, 1, 1, 0.06))
-		draw_arc(_dock, radius, 0.0, TAU, 40, Color(1, 1, 1, 0.2), 3.0)
-		draw_circle(_dock, clampf(radius * 0.3, 20.0, 38.0), Color(1, 1, 1, 0.16))
 
 
 # Exposed for tests: where the resting joystick dock sits.

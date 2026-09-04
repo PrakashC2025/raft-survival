@@ -2,11 +2,20 @@
 
 [ext_resource type="Script" uid="uid://b73vh4kl4v0mu" path="res://build_socket.gd" id="1_buildsocket"]
 
+[ext_resource type="Shader" path="res://wood_planks.gdshader" id="2_wood"]
+
 [sub_resource type="BoxShape3D" id="col_window"]
 size = Vector3(2, 2.5, 0.2)
 
-[sub_resource type="StandardMaterial3D" id="mat_wall"]
-albedo_color = Color(0.62, 0.43, 0.22, 1)
+[sub_resource type="ShaderMaterial" id="mat_wall"]
+shader = ExtResource("2_wood")
+shader_parameter/base_color = Color(0.62, 0.43, 0.22, 1)
+shader_parameter/seam_color = Color(0.30, 0.20, 0.11, 1)
+shader_parameter/half_x = 0.35
+shader_parameter/half_y = 0.475
+shader_parameter/half_z = 0.1
+shader_parameter/plank_width = 0.25
+shader_parameter/seam_width = 0.006
 
 [sub_resource type="BoxMesh" id="mesh_corner_tl"]
 material = SubResource("mat_wall")
@@ -39,7 +48,7 @@ size = Vector3(0.6, 2.5, 0.02)
 material = SubResource("mat_glass")
 size = Vector3(2.0, 0.6, 0.02)
 
-[node name="Window" type="AnimatableBody3D" unique_id=1910187336]
+[node name="Window" type="StaticBody3D" unique_id=1910187336]
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1863715467]
 shape = SubResource("col_window")
