@@ -11,14 +11,14 @@ config_version=5
 [application]
 
 config/name="RaftSurvival"
-run/main_scene="res://main_menu.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
-config/icon="res://icon.svg"
+config/icon="res://textures/icon.svg"
 
 [autoload]
 
 Inventory="*uid://cnmofngcvjed"
-Stats="*res://stats.gd"
+Stats="*res://scripts/stats.gd"
+PlantDB="*res://scripts/plant_data.gd"
 
 [display]
 

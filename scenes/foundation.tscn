@@ -1,0 +1,65 @@
+[gd_scene format=3 uid="uid://cw0ck4qsvnw7q"]
+
+[ext_resource type="Script" uid="uid://b73vh4kl4v0mu" path="res://scripts/build_socket.gd" id="1_buildsocket"]
+
+[ext_resource type="Shader" path="res://shaders/wood_planks.gdshader" id="2_wood"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
+size = Vector3(2, 0.3, 2)
+
+[sub_resource type="ShaderMaterial" id="mat_foundation"]
+shader = ExtResource("2_wood")
+shader_parameter/base_color = Color(0.72, 0.53, 0.3, 1)
+shader_parameter/seam_color = Color(0.34, 0.23, 0.13, 1)
+shader_parameter/half_x = 1.0
+shader_parameter/half_y = 0.15
+shader_parameter/half_z = 1.0
+shader_parameter/plank_width = 0.25
+shader_parameter/seam_width = 0.006
+
+[sub_resource type="BoxMesh" id="BoxMesh_ybjjv"]
+material = SubResource("mat_foundation")
+size = Vector3(2, 0.3, 2)
+
+[node name="Foundation" type="StaticBody3D" unique_id=733737494]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1283678161]
+shape = SubResource("BoxShape3D_ybjjv")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1174171913]
+mesh = SubResource("BoxMesh_ybjjv")
+
+[node name="BuildSockets" type="Node3D" parent="." unique_id=987654321]
+
+[node name="Socket_North" type="Marker3D" parent="BuildSockets" unique_id=11111111]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, 1)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Foundation", "Wall", "Stairs"])
+
+[node name="Socket_South" type="Marker3D" parent="BuildSockets" unique_id=22222222]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, -1)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Foundation", "Wall", "Stairs"])
+
+[node name="Socket_East" type="Marker3D" parent="BuildSockets" unique_id=33333333]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0.15, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Foundation", "Wall", "Stairs"])
+
+[node name="Socket_West" type="Marker3D" parent="BuildSockets" unique_id=44444444]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0.15, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 0
+accepts = Array[String](["Foundation", "Wall", "Stairs"])
+
+[node name="Socket_Top" type="Marker3D" parent="BuildSockets" unique_id=99999999]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, 0)
+script = ExtResource("1_buildsocket")
+socket_type = 1
+accepts = Array[String](["Wall", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot"])
+
+[node name="SampleMarker" type="Marker3D" parent="." unique_id=12121212]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)

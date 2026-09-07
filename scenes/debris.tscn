@@ -1,0 +1,20 @@
+[gd_scene format=3 uid="uid://p6cinliy74fm"]
+
+[ext_resource type="Script" uid="uid://canu5cbcp66kn" path="res://scripts/debris.gd" id="1_e8eya"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
+size = Vector3(0.6, 0.3, 0.6)
+
+[sub_resource type="BoxMesh" id="BoxMesh_ybjjv"]
+size = Vector3(0.6, 0.3, 0.6)
+
+[node name="Debris" type="RigidBody3D" unique_id=617304399]
+script = ExtResource("1_e8eya")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1809774335]
+shape = SubResource("BoxShape3D_ybjjv")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1420675215]
+mesh = SubResource("BoxMesh_ybjjv")
+
+[node name="F1" type="Marker3D" parent="." unique_id=175102218]

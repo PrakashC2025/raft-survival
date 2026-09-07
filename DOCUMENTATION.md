@@ -33,6 +33,7 @@
 23. [Placeholder Scenes](#23-placeholder-scenes)
 24. [How to Extend](#24-how-to-extend)
 25. [Script Source Reference](#25-script-source-reference)
+26. [Island](#26-island)
 
 ---
 
@@ -118,12 +119,13 @@ A full-screen `Control` under `Player/CanvasLayer` (`MobileControls`) that feeds
 - **Joystick = move only:** a **fixed joystick dock** sits at bottom-left; touch it (within `dock_zone_scale` × stick radius) and drag to walk. Analog strength is pushed to `move_*` via `Input.action_press(action, strength)`. Movement never spawns anywhere else on screen.
 - **Touch anywhere else = look:** touching *any* other point of the screen and dragging rotates the camera (`player.add_look_input(rel, 0.007)` — the shared mouse/touch path). A second finger can look while the first holds the joystick.
 - **Full button set** (each presses its keyboard action on touch-down, releases on touch-up, so taps and holds both behave like the keys):
-  - Normal mode — `JUMP` (big; jump / hold = swim up), `RUN` (sprint, hold), `USE`/HAND (interact — **only shown when pressing it would actually do something**, i.e. the exact E-key test: aimed debris within pickup range, aimed door, or **any debris within the nearby 2 m grab range** — real-life "only take debris you can reach"), `DIVE` (shown while swimming; move_down), `CLIMB` (shown **only while swimming right next to the raft/foundation deck** — taps `player.climb_out()` to pull the player onto the deck; same logic as E), `ROPE` (big; **hold to charge, release to throw** — same as Q), `BACK` (shown only while the rope is out; rope_cancel recall), `EDIT` (shown when aiming at your own piece; one tap = desktop "E, E" pickup), `BUILD` (**left-center**, above the joystick grab zone — the icon turns into a red ✕ and its ring turns red while Build Mode is on, i.e. a visible ON/OFF state).
-  - Build mode — big `PLACE`, `ROT`, `NEXT`, `EXIT` (JUMP/RUN/USE/ROPE hide so you don't mis-tap).
+  - Normal mode — `JUMP` (big; jump / hold = swim up), `RUN` (sprint, hold), `USE`/HAND (interact — **only shown when pressing it would actually do something**, i.e. the exact E-key test: aimed debris within pickup range, aimed door, **any debris within the nearby 2 m grab range**, an **empty planter while a seed is selected** (plant), or a **mature plant/tree/stump** (pick fruit / dig / chop / remove stump)), `DIVE` (shown while swimming; move_down), `CLIMB` (shown **only while swimming right next to the raft/foundation deck** — taps `player.climb_out()` to pull the player onto the deck; same logic as E), `ROPE` (big; **hold to charge, release to throw** — same as Q), `BACK` (shown only while the rope is out; rope_cancel recall), `EDIT` (shown when aiming at your own piece; one tap = desktop "E, E" pickup), `BUILD` (**left-center**, above the joystick grab zone — the icon turns into a red ✕ and its ring turns red while Build Mode is on, i.e. a visible ON/OFF state).
+  - Build mode — big `PLACE`, `ROT`, `NEXT`, `EXIT` (JUMP/RUN/USE/ROPE hide so you don't mis-tap). `NEXT` cycles through every piece including the three planters; `PLACE` puts the selected piece down.
   - Edit mode — `PLACE` (confirm), `ROT`, `REMOVE`, `CANCEL` (left-center build button turns into ✕/cancel).
+  - **All modes — `?` help button** (small, above the BUILD toggle on the left edge): opens an in-game controls guide panel (move / use / building / farming quick-start / rope / bag / PC keys). Tap anywhere outside the panel or the ✕ to close; while open, joystick and camera look are suspended.
 - **Visibility:** mobile UI shows **only on real mobile builds** (Android/iOS) or when `force_show` is enabled in the inspector — **F10** toggles it live for quick desktop previews. Never on a plain PC otherwise, so the keyboard + mouse are untouched (the overlay is `mouse_filter = IGNORE`; it reads touches via `_input` and can never swallow the PC mouse). Everything is laid out per-viewport (safe margins, sizes scale), portrait and landscape.
 - Buttons are invisible Button nodes (their hit areas) with **dark circular icon art painted by the overlay's `_draw()`** — original vector glyphs via `ui_icons.gd` (jump ↑, run, hand/interact, hook/rope, hammer↔X, check, rotate, …). Button identity/visibility still switches with mode.
-- **SurvivalHUD (`survival_hud.gd`)** — a sibling full-screen overlay that coordinates with `MobileControls` through `claims_touch()`/`is_blocking()` (its areas are never turned into camera look; while its bag panel is open the joystick is dropped). **Normal mode** shows the **inventory hotbar** (inventory slots 0..5: items you own — a fresh game starts with `Rope` in slot 1) + a **BAG button**; tapping a slot selects that item (`player.select_hotbar_slot()` → `active_item`, cyan border). **Build Mode** swaps that bar for the **build-piece row** (Foundation/Wall/Roof/Stairs/Door/Window; tap = `player.select_piece_for_build()`); the inventory is untouched underneath and is restored exactly when Build Mode exits. The bag opens a **30-slot panel** (5×5 bag + hotbar row) with **drag-and-drop**: drag any slot onto another — empty destination = move, same item = merge stacks, different item = swap; a drag ghost follows the finger and nothing is ever deleted. Overflowing pickups (stack size 99, new items auto-fill bag slots 6..29 before hotbar) show a **"BAG FULL"** toast instead of dropping items. Also draws a **day/night clock** at the far top-right corner (split sun/moon dial showing `Sky3D.current_time` as DAY n + hh:mm underneath; the status circles sit to its LEFT so the caption never overlaps anything), plus **status circles** (health/hunger/thirst), top-left **resource pills** (Wood/Rope/Plastic/Metal totals), and a small **build chip** top-center while placing/editing (piece + validity + cost). Tapping outside the panel or the ✕ closes it.
+- **SurvivalHUD (`survival_hud.gd`)** — a sibling full-screen overlay that coordinates with `MobileControls` through `claims_touch()`/`is_blocking()` (its areas are never turned into camera look; while its bag panel is open the joystick is dropped). **Normal mode** shows the **inventory hotbar** (inventory slots 0..5: items you own — a fresh game starts with `Rope` in slot 1) + a **BAG button**; tapping a slot selects that item (`player.select_hotbar_slot()` → `active_item`, cyan border). **Build Mode** swaps that bar for the **build-piece row** (Foundation/Wall/Roof/Stairs/Door/Window/PlanterPot/PlanterBox/TreePot; tap = `player.select_piece_for_build()`); the inventory is untouched underneath and is restored exactly when Build Mode exits. The bag opens a **30-slot panel** (5×5 bag + hotbar row) with **drag-and-drop**: drag any slot onto another — empty destination = move, same item = merge stacks, different item = swap; a drag ghost follows the finger and nothing is ever deleted. Overflowing pickups (stack size 99, new items auto-fill bag slots 6..29 before hotbar) show a **"BAG FULL"** toast instead of dropping items. Also draws a **day/night clock** at the far top-right corner (split sun/moon dial showing `Sky3D.current_time` as DAY n + hh:mm underneath; the status circles sit to its LEFT so the caption never overlaps anything), plus **status circles** (health/hunger/thirst), top-left **resource pills** (Wood/Rope/Plastic/Metal totals), and a small **build chip** top-center while placing/editing (piece + validity + cost). Tapping outside the panel or the ✕ closes it.
 - Desktop dev label (`InventoryHUD`) is hidden while the mobile UI is active.
 - The joystick ring/knob, resting D-pad dock, all action buttons, and the whole SurvivalHUD are `_draw()` visuals (no icon image assets).
 
@@ -132,9 +134,9 @@ A full-screen `Control` under `Player/CanvasLayer` (`MobileControls`) that feeds
 | `move_forward/back/left/right` | W / S / A / D (+ Arrows) | Movement |
 | `jump` | Space | Jump / Swim up (hold = continuous swim up) |
 | `move_down` | C | Dive on ground / Swim down |
-| `interact` | E | Pickup debris (in range) / Toggle door / **Climb onto the raft while swimming next to it** / Double-click = pick up piece for editing |
+| `interact` | E | Pickup debris (in range) / Toggle door / **Climb onto the raft while swimming next to it** / Plant a seed on an aimed empty planter (seed selected) / Pick a ripe fruit (tap) / Dig a crop, chop a tree, or remove a stump (hold) / Double-click = pick up piece for editing |
 | `build` | B | Toggle build mode / Cancel edit |
-| `cycle_build` | Tab | Cycle: Foundation→Wall→Roof→Stairs→Door→Window |
+| `cycle_build` | Tab | Cycle: Foundation→Wall→Roof→Stairs→Door→Window→PlanterPot→PlanterBox→TreePot |
 | `rotate_build` | R **and** Y | Rotate build 90° (hold **Shift** for 15° fine steps) |
 | `rotate_build_x` | X | Rotate on X axis (**edit mode only** — X is shadowed by `remove_build` in edit mode) |
 | `place_build` | P | Place building / Confirm edit |
@@ -153,6 +155,26 @@ A full-screen `Control` under `Player/CanvasLayer` (`MobileControls`) that feeds
 
 > **Note:** `rotate_build` binds both R and Y; holding **Shift** while rotating uses 15° steps instead of 90° (handy for angling walls placed in a foundation's center). `rotate_build_x` binds X, but in edit mode X is consumed by `remove_build` first (checked earlier in `_process`), so the X-axis rotation is effectively unreachable via keyboard right now. **F3** toggles the build overlay in build mode (see below). **F5–F9** are dev-only time/debug keys handled by `ocean.gd` (`dev_time_keys` export — F3 is left to the build overlay).
 
+### 3.2 Farming Quick Guide
+
+Planters are build pieces — **PlanterPot** (potato), **PlanterBox** (bigger pot), **TreePot** (coconut / banana trees).
+
+| Step | Desktop | Mobile |
+|---|---|---|
+| 1. Enter build mode | `B` | ✕/hammer button (left-center, turns ✕ while on) |
+| 2. Pick the planter | `Tab` until PlanterPot/Box/TreePot | `NEXT` (bottom-right, cycles pieces) |
+| 3. Place it on a deck | `P` (green ghost = ok) | `PLACE` (big ✓, bottom-right) |
+| 4. Exit build mode | `B` | tap the ✕ button again |
+| 5. Equip a seed | number row / hotbar click (seed must be in hand) | tap the seed in the hotbar (auto-granted: Potato/Coconut/Banana Seed) |
+| 6. Plant it | aim at the empty planter + `E` | aim + tap `USE`/hand |
+| 7. Wait | plant grows SEED→SPROUT→GROWING→MATURE on its own timer | same |
+| 8. Harvest | aim + `E` (tap) picks one ripe fruit · aim + hold `E` digs potato / chops tree | aim + tap/hold `USE` |
+| 9. After a tree falls | stump remains; aim + hold `E` to remove it and replant | aim + hold `USE` |
+
+- Trees need several chop hits (`chop_hits_required` in `plant_data.gd`); each hit kicks the trunk, then the tree falls **away from you**, drops its `fell_drops` (Wood + Coconut/Banana) and leaves a stump.
+- Only the **ripe fruit you are aiming at** is picked — the other slots keep growing and regrow on their own timers.
+- Everything is data-driven in `plant_data.gd` (stage durations, regrow times, chop health, drops) — no per-plant code.
+
 ---
 
 ## 4. Autoloads
@@ -161,6 +183,7 @@ A full-screen `Control` under `Player/CanvasLayer` (`MobileControls`) that feeds
 |---|---|---|
 | `Inventory` | `inventory.gd` | Item tracker + crafting |
 | `Stats` | `stats.gd` | Survival stats (health/hunger/thirst) — **drain disabled** (`enabled=false`) until food/water sources exist |
+| `PlantDB` | `plant_data.gd` | Plant registry (potato / coconut / banana defs: stage timers, fruit timers, chop health, drops) |
 
 ```gdscript
 Inventory.add("Wood", 5)
@@ -357,17 +380,17 @@ The player is a **human-sized** capsule (total 1.8m: `CapsuleShape3D radius 0.3 
 
 Two independent wave implementations must agree:
 
-1. **Visual** — `main.gdshader` displaces the PlaneMesh vertices (uniforms `wave_height = 0.85`, `wave_speed = 1.2`) and shades the water **time-of-day aware** (see Day/Night below).
+1. **Visual** — `main.gdshader` displaces the PlaneMesh vertices (uniforms `wave_height = 0.38`, `wave_speed = 0.45`) and shades the water **time-of-day aware** (see Day/Night below).
 2. **Physics** — `ocean.gd` `get_height(world_pos)` returns the exact water Y at any point (used by raft, debris, player swimming, rope):
 
 ```gdscript
 # Wave-field constants. MUST stay identical to main.gdshader's vertex wave
 # formula (same dirs/freqs/amps/speeds) so buoyancy matches the visible waves.
 const _WAVES := [
-	[Vector2(1.0, 0.15), 0.085, 1.0, 0.85],   # large slow swell
-	[Vector2(-0.4, 0.92), 0.17, 0.8, 1.4],    # mid sea, crossing
-	[Vector2(0.8, -0.5), 0.42, 0.5, 2.0],     # wind chop
-	[Vector2(-0.75, -0.65), 0.9, 0.25, 2.6],  # fine chop
+	[Vector2(1.0, 0.15), 0.055, 1.0, 0.45],   # long rolling swell
+	[Vector2(-0.4, 0.92), 0.115, 0.75, 0.7],  # crossing swell
+	[Vector2(0.8, -0.5), 0.24, 0.38, 1.05],   # gentle chop
+	[Vector2(-0.75, -0.65), 0.50, 0.13, 1.45], # tiny fine chop
 ]  # [dir, freq, amp, time_speed]
 
 func get_height(world_pos: Vector3) -> float:
@@ -382,7 +405,7 @@ func get_height(world_pos: Vector3) -> float:
 	return global_position.y + h * wave_height * 0.33
 ```
 
-`wave_height = 0.85`, `wave_speed = 1.2` (exports). The four layers travel in **different directions** (large slow swell → fine chop) so the surface reads as layered open-ocean motion instead of a single scrolling pattern; max wave amplitude ~0.72 m. The node registers in the `"ocean"` group so any runtime-instanced node (debris, etc.) can find it across scene boundaries.
+`wave_height = 0.38`, `wave_speed = 0.45` (exports). The four layers travel in **different directions** (two long swells → tiny fine chop) so the surface reads as smooth, slowly-breathing open-ocean motion instead of jittery chop; max wave amplitude ~0.35 m. The meander/envelope frequencies are halved vs. the old tuning, so crests bend over huge distances and wave sets arrive evenly (smooth sea, calm buoyancy). The node registers in the `"ocean"` group so any runtime-instanced node (debris, etc.) can find it across scene boundaries.
 
 > Visual and physics waves share the same amplitude: `ocean.gd` pushes `wave_height`/`wave_speed` into the material every frame from its exports, so the raft floats on the same waves it sees (no shaking against mismatched wave heights).
 
@@ -398,10 +421,11 @@ Lighting uses the bundled **Sky3D** addon (`Sky3D` WorldEnvironment with `SunLig
 
 - `ocean.gd` runs every frame as the driver: it reads the SkyDome's live sun/moon transforms (**read from the `SkyDome` child node** — the old `Sky3D.get("sky")` property was unbound in this scene, so `_sky` was silently null and the water froze at day colors forever; time factors never updated) and pushes smooth factors into the shader (`night_factor`, `twilight_factor`, `moon_factor`) plus the sun/moon colors and directions.
 - All shading math is done in **world space**: the vertex shader emits a **world-space wave normal** (analytic slope of the same wave field, passed as a varying — no per-fragment matrix cost) and the view vector is built from world positions, so fresnel, wave-face lighting and glitter track the real sun/moon directions no matter how the camera pitches.
-- Shader output (`render_mode unshaded`, manually lit): a **deep open-ocean look** — medium cobalt at the horizon, deep navy in the foreground/troughs, blue-cyan lit crest faces, scattered whitecaps. Roughly (per rendered-frame measurements through the real ACES+sRGB pipeline): near-horizon sea ≈ `#0D73A8` cobalt, mid water ≈ `#075D91`, steep foreground ≈ `#052E4D` near-black navy; **never black or pale**: the near/steep view darkens into the deep water column, far water brightens to cobalt aerial light (never grey-white), and a lifted `max(..., vec3(0.012, 0.03, 0.09))` floor keeps nights navy, not black.
+- Shader output (`render_mode unshaded`, manually lit): a **vivid realistic blue** — bright azure at the horizon, rich cobalt mid sea, deep navy in the foreground/troughs, saturated blue-cyan lit crest faces, sparse whitecaps. Roughly (through the real ACES+sRGB pipeline): near-horizon sea ≈ `#0E6FB4` azure, mid water ≈ `#075A96` cobalt, steep foreground ≈ `#052B4C` near-black navy. **Never black or pale**, day or night: the near/steep view darkens into the deep water column, far water brightens to azure aerial light, and a lifted floor keeps nights navy. Night stays alive: moonlit crest faces keep the blue body (deep sea blue, never gray), the moon path shimmers along the swell lines as long broken streaks, whitecaps read as blue-white moonlit foam, and the whole water body dims only gently (×0.80 at full night). Dawn/dusk wraps lit crest faces in the warm horizon glow, so morning water glows without ever turning orange.
 - **Layered detail**: 4 directional vertex waves + fragment-scale **micro ripples** (3 incommensurate directional lobes, analytic, distance-faded) that shade the near field as irregular moving chop; **wave-band shading** (lit crest faces toward the sun, darker troughs); **noise-free highlights**: sun glitter and whitecaps are broken into **elongated streaks** by a shared directional chop wave (product of two moving waves) so they follow the wave direction and never form round dots, blobs or a grid; whitecaps are sparse and gated on genuinely steep micro-crest facets near the camera (nothing beyond ~55 m, so the horizon stays clean cobalt); glitter hugs crest bands and fades out by ~150 m so the far field never dot-patterns; moon shimmer uses the same broken-streak breakup; night dims the whole water body (moon glitter is added after, so it still reads).
 - **Palette is ACES-aware and LINEAR**: `ALBEDO` is linear HDR and the scene uses ACES tonemapping (mode 3, white 6.0). The ocean uniforms are deliberately **NOT `source_color`** — that hint makes `set_shader_parameter()` convert pushed colors sRGB→linear and silently darkens the water ~3×. Values were calibrated by rendering grey ramps and patches through the real pipeline and inverting the measured transfer curve onto the target displayed colors. Palette tunable on the Ocean node: `day_color`, `twilight_color`, `night_color`, `deep_color`, `horizon_color`, `crest_color`, `foam_color`, `haze_color`, `sparkle_strength`.
 - **Underwater veil**: when the active camera dips below the wave surface a 2D gradient veil (`_OceanUnderwaterVeil` CanvasLayer, top lighter / bottom darker) fades in smoothly — denser with depth — giving a blue underwater tint + reduced visibility without touching gameplay rendering. Tunable: `under_alpha_max`, `under_top_color`, `under_bottom_color`.
+- **Ocean underside**: the water shader uses `cull_disabled`, so the surface renders from below too. A `!FRONT_FACING` branch shades the underside as a dim water ceiling (deep/day/night mix with a soft sun/moon glow filtering through and grazing-angle darkening) — swimming under the surface shows water above you instead of see-through sky.
 
 ---
 
@@ -753,7 +777,7 @@ RainSystem._process (child of Player, follows the camera):
 
 ### Rain System (`rain_system.gd`)
 
-Random timed rain events (4–8 real minutes apart, 1.5–5 min long). **Falling rain** is a wind-oriented GPUParticles3D streak volume (aligned to velocity, so drops read as diagonal lines matching the wind). **Impact splashes** are a small pooled one-shot burst pool: every frame `splashes_per_second × intensity` raycasts drop straight down at sample points and fires a bright burst wherever a drop lands on a structure (raft/foundation/wall/roof/stairs/door/window — physics layer 1) or a softer ripple on open water. **Sample bias (`forward_bias = 0.75`) concentrates splashes inside a cone ahead of the camera** (`forward_cone_radius = 4.5 m`) — the raft/roof/deck fill the middle of the screen, so most rain visibly pounds the surfaces the player is looking at instead of scattering across empty ocean. Rain also darkens the sky/ocean, adds fog, can flash lightning + thunder, and fades in/out over `fade_time` (F11 toggles instantly in debug builds).
+Random timed rain events (4–8 real minutes apart, 1.5–5 min long). **Falling rain** is a wind-oriented GPUParticles3D streak volume (aligned to velocity, so drops read as diagonal lines matching the wind; world-space particles with proximity fade so drops melt into surfaces instead of slicing through them). **Indoor cover:** every 0.15 s while raining, a vertical ray checks whether the camera is under a roof/deck (any horizontal-ish face on a `build_surface` piece); probe rays then measure the covered extent and the emitter switches from the full box around the camera to a **ring just OUTSIDE that footprint, spawned ~6 m above camera height** — drops fall onto the roof top and around the shelter and are visible at every open side, but never spawn under the roof, so rain can never appear inside a roofed room (walls/vertical faces can never count as cover). While outdoors next to a building, the box's TOP is capped just below the lowest nearby roof underside, so drops spawning above a house can never fall through its roof into the walls (visible from outside through doors/windows). **Submerged camera:** while the camera is below the wave surface (hysteresis at ±0.1 m) no rain is emitted and falling drops are cleared — rain never renders underwater. **Impact splashes** are a small pooled one-shot burst pool: every frame `splashes_per_second × intensity` raycasts drop straight down at sample points and fires a bright burst wherever a drop lands on a structure (raft/foundation/wall/roof/stairs/door/window — physics layer 1) or a softer ripple on open water. **Sample bias (`forward_bias = 0.75`) concentrates splashes inside a cone ahead of the camera** (`forward_cone_radius = 4.5 m`) — the raft/roof/deck fill the middle of the screen, so most rain visibly pounds the surfaces the player is looking at instead of scattering across empty ocean. Rain also darkens the sky/ocean, adds fog, can flash lightning + thunder, and fades in/out over `fade_time` (F11 toggles instantly in debug builds).
 
 ### Render Frame
 
@@ -10479,6 +10503,39 @@ void fragment() {
 }
 
 ```
+
+---
+
+## 26. Island
+
+A Blender-sculpted island (source: `../raft_island.blend`, built/finished by the `finish_island.py` / `fix_normals.py` / `export_final.py` scripts next to it) centered **60 m east, 40 m north** of the raft start — a real swim away. Players can find it by the pulsing light pillar (`island_beacon.gd`) and the on-screen diamond/distance hint (`island_marker.gd`), both of which stay readable at night.
+
+**Files**
+
+| File | Role |
+|---|---|
+| `models/island_terrain.glb` | 24×24 m terrain — grassy mound (peak ≈ 2.1 m) + flat sand ring beyond r = 10 m; per-vertex `COLOR_0` carries the absolute grass→tan blend |
+| `models/palm_tree.glb` | Low-poly palm: 8-sided tapered trunk with lean, 12 drooping fronds, 3 coconuts; origin at trunk base |
+| `models/grass_blade.glb` | 8×35 cm blade, 5 height segments; `COLOR_0` = black (base) → white (tip) wind mask |
+| `grass_wind.gdshader` | Wind sway. Reads the blade's `COLOR_0` as the bend mask; `INSTANCE_CUSTOM.x/y` = per-blade phase/strength so every blade sways out of sync. Uniforms: `wind_strength` (0.18), `wind_speed` (1.6), `wind_gustiness` (0.5), `wind_direction` |
+| `island_terrain.gdshader` | Realistic terrain material applied per-surface by `island_setup.gd`: vertex-paint albedo + per-pixel fbm detail, slope-based rock, and a wet-sand band that tracks the live water line (`water_line` uniform pushed every frame) |
+| `island_grass.gd` | `@tool` scatterer: raycasts down at random points inside `scatter_radius`, keeps hits that are flat enough (`min_surface_flatness`) and below `max_height_above_water` over sea level, fills one `MultiMeshInstance3D` (single draw call; `use_custom_data = true` is required by the shader). **Hit transforms are converted world → node-local** before storage: ray hits are world-space, but the MultiMeshInstance sits inside the Island, so raw world transforms would apply the island offset twice (blades landing over open ocean — the "no grass" bug). Retries a few frames if no collider exists yet |
+| `island_setup.gd` | Runtime setup: creates trimesh `StaticBody3D` colliders for the island + each palm (same result as the editor's *Mesh → Create Trimesh Static Body*), applies the terrain shader (grass surface keeps white `base_color` so the vertex paint shows; sand surface gets the sand tint; palms/beacon/grass are excluded), snaps palms onto the terrain, then rebuilds the grass one frame later. Skips meshes under a `no_collision` group node (the beacon visuals) |
+| `island_beacon.gd` | Pulsing light pillar + glowing orb + soft `OmniLight3D` on the mound (`IslandBeacon`, y ≈ 3.2) — visible from the raft even at night. Registers in group `island_beacon`; its meshes join `no_collision` so no trimesh collider is generated for them |
+| `island_marker.gd` | HUD hint (`IslandMarker` under `Player/CanvasLayer`): warm-orange diamond + `N m` distance readout. Sits above the island while on screen, clamps to the screen edge when it isn't (hollow diamond), fades out within `fade_distance` (18 m) of the beacon |
+
+**Scene wiring (`main.tscn`)** — `Island` (glb instance at 60, 0, 40) with child instances `PalmTree`/`PalmTree2`/`PalmTree3` and `IslandGrass` (4500 blades, radius 13 m — covers the full mound plus a fringe of beach grass on the sand ring; node 4 m above sea level so rays cover the mound); `IslandSetup` sits on `Main`.
+
+**Startup order matters:** `IslandGrass._ready()` runs before any collider exists (prints "no ground yet" and bails) → `IslandSetup._ready()` generates collision + snaps palms → one `process_frame` later it calls `IslandGrass.rebuild()` → blades placed.
+
+**Gotchas baked into the pipeline**
+
+- Godot trimesh colliders are **one-sided**. An open grid sculpt needs its normals explicitly flipped up (Blender's "recalculate outside" can't fix a plane's winding); `fix_normals.py` flips only when the average face normal z is negative, so it is safe to re-run.
+- Godot's glTF importer sets `vertex_color_use_as_albedo`, so vertex colors are **multiplied** by material albedo. The terrain materials are therefore neutral white (0.97) in Blender — the vertex `COLOR_0` carries the actual look.
+- **Blender 5.x glTF export silently drops vertex colors by default**: `export_vertex_color` defaults to `MATERIAL`, which only bakes colors when the material node tree uses a Color Attribute node. Our materials don't, so early exports got a fake all-white `COLOR_0` (rigid bending, washed-out terrain). All exports go through `export_final.py` next to the .blend, which passes `export_vertex_color='ACTIVE'` to bake the active color attribute. Verified in-engine: blade `COLOR_0.r` runs 0.0 (base) → 1.0 (tip).
+- Palm snapping excludes the palms' own collision bodies, otherwise a palm lands on top of its own pre-move trunk collider (y ≈ 4.7 instead of ≈ 1.55).
+
+**Tuning** — grass budget: `instance_count` (3000 by default; the field is a single draw call with shadows off — desktop tests showed 2200–6000 blades all run >300 fps at 960×540, so raise it for looks and only lower toward 800–1200 if a phone struggles), `scatter_radius`, `min_surface_flatness` (0.7); wind: uniforms on `GrassField.material_override` at runtime, or the defaults atop `grass_wind.gdshader` (`wind_strength` 0.14, matched to the Sky3D wind direction of 2.356 rad).
 
 ---
 
