@@ -1,0 +1,22 @@
+[gd_scene load_steps=4 format=3 uid="uid://bpq5qydl2ng6s"]
+
+[ext_resource type="Script" uid="uid://c6wyam2ijwlpf" path="res://scripts/planter.gd" id="1_planter"]
+[ext_resource type="Script" uid="uid://b73vh4kl4v0mu" path="res://scripts/build_socket.gd" id="2_buildsocket"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_box"]
+size = Vector3(1.1, 0.4, 0.55)
+
+[node name="PlanterBox" type="StaticBody3D"]
+script = ExtResource("1_planter")
+planter_category = 1
+box_size = Vector3(1.1, 0.4, 0.55)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_box")
+
+[node name="BuildSockets" type="Node3D" parent="."]
+
+[node name="Socket_Base" type="Marker3D" parent="BuildSockets"]
+script = ExtResource("2_buildsocket")
+socket_type = 2
+position = Vector3(0, -0.2, 0)
