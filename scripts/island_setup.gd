@@ -30,6 +30,8 @@ func _ready() -> void:
 	if island != null and _is_sketchfab_island(island):
 		# Rescale BEFORE collision/snap/grass so everything sees final geometry.
 		_normalize_sketchfab_island(island)
+		# The scan is a hollow shell floating above the flat seabed — seal it.
+		_add_sand_filler(island)
 	if generate_collision:
 		_create_island_collision()
 	if apply_terrain_material:
@@ -126,11 +128,13 @@ func _is_gameplay_node(node: Node) -> bool:
 ## footprint matches ISLAND_TARGET_SIZE, and hide stray props (raft/shell
 ## debris) that would shrink into sub-decimeter specks.
 func _normalize_sketchfab_island(island: Node3D) -> void:
+	# Use WORLD-space AABBs so an already-scaled import (baked root_scale)
+	# measures as ~24 m and the rescale below becomes a safe no-op.
 	var max_extent := 0.0
 	for mi in island.find_children("*", "MeshInstance3D", true, false):
 		if mi.mesh != null:
-			var s := (mi as MeshInstance3D).mesh.get_aabb().size
-			max_extent = maxf(max_extent, maxf(s.x, s.z))
+			var gaabb: AABB = (mi as MeshInstance3D).global_transform * (mi as MeshInstance3D).mesh.get_aabb()
+			max_extent = maxf(max_extent, maxf(gaabb.size.x, gaabb.size.z))
 	if max_extent <= 0.0:
 		return
 	var k := ISLAND_TARGET_SIZE / max_extent
@@ -141,10 +145,11 @@ func _normalize_sketchfab_island(island: Node3D) -> void:
 			(child as Node3D).scale = Vector3.ONE * k
 	for mi in island.find_children("*", "MeshInstance3D", true, false):
 		if mi.mesh != null:
-			var s := (mi as MeshInstance3D).mesh.get_aabb().size
-			if maxf(s.x, s.z) * k < 1.0:
+			var gaabb: AABB = (mi as MeshInstance3D).global_transform * (mi as MeshInstance3D).mesh.get_aabb()
+			if maxf(gaabb.size.x, gaabb.size.z) < 1.0:
 				(mi as MeshInstance3D).visible = false
-	print("[IslandSetup] beach scan rescaled x%.4f -> %d m footprint" % [k, int(ISLAND_TARGET_SIZE)])
+	if k < 0.98:
+		print("[IslandSetup] beach scan rescaled x%.4f -> %d m footprint" % [k, int(ISLAND_TARGET_SIZE)])
 
 ## Replace the glb's near-white placeholder materials with the terrain shader.
 ## Surfaces are matched by imported surface name (IslandGrass / Sand from the
@@ -263,3 +268,49 @@ func _snap_palm_trees() -> void:
 			continue
 		palm.global_position = hit["position"]
 		print("[IslandSetup] %s snapped to ground y=%.2f" % [palm.name, hit["position"].y])
+
+## The beach scan is a hollow shell whose bottom edge sits ~0.4 m above the
+## flat seabed, so players could swim under/into it and see the empty inside.
+## A sand-colored cylinder fills the interior from below the seabed up to the
+## shoreline and doubles as solid backup collision so nobody ends up inside.
+func _add_sand_filler(island: Node3D) -> void:
+	var top_y := 0.42
+	var radius := ISLAND_TARGET_SIZE * 0.5 - 0.4
+	for mi in island.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m.mesh == null or not m.visible:
+			continue
+		var gaabb: AABB = m.global_transform * m.mesh.get_aabb()
+		var sxz: float = maxf(gaabb.size.x, gaabb.size.z)
+		if sxz >= ISLAND_TARGET_SIZE * 0.5:
+			# widest visible mesh = the terrain shell
+			top_y = gaabb.position.y + 0.02 - island.global_position.y
+			radius = sxz * 0.5 - 0.4
+	var bottom_y := -3.0
+	var height := top_y - bottom_y
+	var filler := MeshInstance3D.new()
+	filler.name = "SandFill"
+	filler.add_to_group("no_collision")  # keep trimesh gen + shader override off it
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius * 0.92
+	cyl.height = height
+	cyl.radial_segments = 48
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.87, 0.77, 0.55)
+	mat.roughness = 1.0
+	cyl.material = mat
+	filler.mesh = cyl
+	filler.position = Vector3(0, bottom_y + height * 0.5, 0)
+	island.add_child(filler)
+	var body := StaticBody3D.new()
+	body.name = "SandFill_Body"
+	var cs := CollisionShape3D.new()
+	var shape := CylinderShape3D.new()
+	shape.radius = radius
+	shape.height = height
+	cs.shape = shape
+	body.add_child(cs)
+	body.position = filler.position
+	island.add_child(body)
+	print("[IslandSetup] sand filler: r=%.1f top=%.2f bottom=%.1f" % [radius, top_y, bottom_y])

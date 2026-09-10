@@ -2,5 +2,10 @@
 .godot/
 /android/
 
-# Large unused source mesh (217 MB) — kept on disk, not in git
+# Exported builds and signing artifacts — never commit these
+*.apk
+*.idsig
+build/
+
+# Large unused source mesh (218 MB) — deleted; the game uses grass/rs_grass.glb
 grass/*.obj

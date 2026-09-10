@@ -23,7 +23,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	if _beacon == null or not is_instance_valid(_beacon):
 		_beacon = get_tree().get_first_node_in_group(beacon_group)
 	if _player == null or not is_instance_valid(_player):

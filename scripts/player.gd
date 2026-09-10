@@ -323,10 +323,11 @@ func _physics_process(delta: float) -> void:
 func _update_swimming_state(water_y: float, has_ocean: bool) -> void:
 	was_swimming = is_swimming
 	if has_ocean:
+		var on_land := is_on_floor() and global_position.y > water_y
 		if is_swimming:
-			is_swimming = global_position.y < water_y + WATER_EXIT_OFFSET and not is_on_floor()
+			is_swimming = global_position.y < water_y + WATER_EXIT_OFFSET and not on_land
 		else:
-			is_swimming = global_position.y < water_y + WATER_ENTER_OFFSET
+			is_swimming = global_position.y < water_y + WATER_ENTER_OFFSET and not on_land
 	else:
 		is_swimming = false
 	if is_swimming != was_swimming:
@@ -653,15 +654,15 @@ func _ensure_starter_seeds() -> void:
 		Inventory.place_at(2, "Coconut Seed", 3)
 		Inventory.place_at(3, "Banana Seed", 3)
 		return
-	for seed in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
+	for seed_name in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
 		# Ensure the type exists at all (continue after a wipe / very old save).
-		if Inventory.total(seed) == 0:
-			Inventory.add(seed, 5 if seed == "Potato Seed" else 3)
+		if Inventory.total(seed_name) == 0:
+			Inventory.add(seed_name, 5 if seed_name == "Potato Seed" else 3)
 	# Move bag-only seeds up into a free hotbar slot.
-	for seed in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
+	for seed_name in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
 		var already_in_hotbar := false
 		for i in range(Inventory.HOTBAR_COUNT):
-			if Inventory.slot_item(i) == seed:
+			if Inventory.slot_item(i) == seed_name:
 				already_in_hotbar = true
 				break
 		if already_in_hotbar:
@@ -670,7 +671,7 @@ func _ensure_starter_seeds() -> void:
 			if not Inventory.slot_empty(h):
 				continue
 			for b in range(Inventory.BAG_START, Inventory.SLOT_COUNT):
-				if Inventory.slot_item(b) == seed:
+				if Inventory.slot_item(b) == seed_name:
 					Inventory.drop_into(b, h)
 					break
 			break
