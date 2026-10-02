@@ -9,3 +9,13 @@ build/
 
 # Large unused source mesh (218 MB) — deleted; the game uses grass/rs_grass.glb
 grass/*.obj
+
+# Local survival validation artifacts
+tools/test_userdata/
+tools/*runtime.log
+tools/campaign_*.log
+tools/survival_parse.log
+tools/survival_validation.log
+
+tools/asset_downloads/
+tools/mobile_*.log

@@ -41,7 +41,7 @@ const CLIMB_OUT_RANGE := 2.2
 const CLIMB_LAND_INSET := 0.45
 
 # Build
-const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot"]
+const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire"]
 const BUILD_SCENES := [
 	"res://scenes/foundation.tscn",
 	"res://scenes/wall.tscn",
@@ -52,6 +52,7 @@ const BUILD_SCENES := [
 	"res://scenes/planter_pot.tscn",
 	"res://scenes/planter_box.tscn",
 	"res://scenes/tree_pot.tscn",
+	"res://scenes/bonfire.tscn",
 ]
 const SOCKET_SNAP_RADIUS: float = 2.5
 const WALL_SURFACE_SNAP_RANGE: float = 4.0  # wall ghost snaps to a surface within this 2D distance
@@ -144,6 +145,12 @@ var aim_normal: Vector3 = Vector3.FORWARD
 var aim_collider: Node3D = null
 var aim_distance: float = 0.0
 var aim_valid: bool = false
+# Aim ray mask: world/raft/debris (1+2) plus the trees' AIM-ONLY layer
+# (1<<15). Tree PlantInstance bodies live ONLY on that layer so they can be
+# aimed/picked/chopped WITHOUT being solid walls the player collides with
+# (body collision_mask stays 1 below) — walking through a palm crown no
+# longer stops you, and dropped fruit never spawns inside a solid box.
+const AIM_MASK := 3 | (1 << 15)
 
 # State
 var is_swimming: bool = false
@@ -183,7 +190,7 @@ func _ready() -> void:
 			var scene = load(scene_path) as PackedScene
 			if scene:
 				build_pieces.append(scene)
-	Inventory.infinite = true
+	Inventory.infinite = false
 	# Continue (menu loaded a save) keeps whatever was stored; New Game (no
 	# save, empty bag) starts with Rope in hotbar slot 1 per the mobile spec.
 	_ensure_starter_seeds()
@@ -193,7 +200,11 @@ func _ready() -> void:
 	active_item = Inventory.slot_item(active_slot_index)
 	Inventory.changed.connect(_refresh_active_item)
 	Inventory.changed.connect(_queue_save)
-	floor_snap_length = 0.18
+	floor_snap_length = 0.45 # longer snap: no micro-bouncing down steep slopes
+	# The mountain has sections steeper than Godot's default 45° walk limit —
+	# raise it so every part of the hill is walkable without slide-fighting
+	# (the "shaking" feeling on some slope spots).
+	floor_max_angle = deg_to_rad(58.0)
 	# Resume day time from the save (Continue) — otherwise leave the scene's
 	# configured start time (noon).
 	if Inventory.loaded_meta.has("game_time"):
@@ -204,6 +215,11 @@ func _ready() -> void:
 	# Rebuild the saved structure after a Continue (New Game has an empty
 	# meta so this is a no-op). Deferred so the raft is fully in the tree.
 	call_deferred("_restore_built_pieces")
+	var survival := load("res://scripts/survival_director.gd").new() as Node
+	survival.name = "SurvivalDirector"
+	add_child(survival)
+	var model_controller := load("res://scripts/mobile_player_visual.gd").new() as Node
+	add_child(model_controller)
 	_queue_save()
 	if debug_building:
 		for i in BUILD_SCENES.size():
@@ -215,7 +231,7 @@ func _ready() -> void:
 # MOUSE LOOK
 # ============================================================
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		add_look_input(event.relative)
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -279,7 +295,7 @@ func _update_aim() -> void:
 	var ray_dir := -camera.global_transform.basis.z
 	var ray_end := ray_origin + ray_dir * AIM_DISTANCE
 	var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_end)
-	query.collision_mask = 3
+	query.collision_mask = AIM_MASK
 	query.exclude = [get_rid()]
 	var result := space_state.intersect_ray(query)
 	if result:
@@ -307,6 +323,9 @@ func _physics_process(delta: float) -> void:
 		water_y = oc.get_height(global_position)
 		has_ocean = true
 	var input_dir := Input.get_vector("move_left", "move_right", "move_back", "move_forward")
+	var survival_ui := get_node_or_null("SurvivalDirector")
+	if survival_ui != null and survival_ui.panel.visible:
+		input_dir = Vector2.ZERO
 	var direction := _get_movement_direction(input_dir)
 	var sprinting := Input.is_action_pressed("sprint")
 	if is_swimming:
@@ -316,6 +335,16 @@ func _physics_process(delta: float) -> void:
 		_try_step_up()
 	move_and_slide()
 	_update_swimming_state(water_y, has_ocean)
+	# Footprints on sand: find the Footprints child and feed it ground info.
+	var fp := get_node_or_null("Footprints")
+	if fp != null and is_on_floor():
+		var ground_normal := Vector3.UP
+		var ground_h := global_position.y
+		if get_slide_collision_count() > 0:
+			var sc := get_slide_collision(0)
+			ground_normal = sc.get_normal()
+			ground_h = sc.get_position().y
+		fp.track(self, ground_normal.y, ground_h)
 	# Held-item sway: accumulate time and pose the hand visual (idle + walk).
 	_hand_time += delta
 	_update_hand_sway(delta)
@@ -396,6 +425,12 @@ func _try_step_up() -> void:
 	if not PhysicsServer3D.body_test_motion(get_rid(), params, result):
 		_step_climb = 0.0
 		return
+	# A STEEP surface (normal mostly up) is a slope, not a stair — slopes are
+	# move_and_slide's job. Stepping here fought the slide every frame and
+	# shook the camera on the mountainside. Only real walls/risers climb.
+	if result.get_collision_normal().y > 0.5:
+		_step_climb = 0.0
+		return
 	# Blocked ahead: find how much lift clears the obstacle (stairs risers up to
 	# MAX_STEP_HEIGHT). Tall walls (2.5 m) stay blocked at every probe height.
 	# Small remaining lifts resolve in one smooth step; large ones are spread
@@ -429,6 +464,9 @@ func _handle_pickup() -> void:
 	# (the mobile CLIMB button calls climb_out() directly — same result).
 	if is_swimming and can_climb_out():
 		climb_out()
+		return
+	# --- Eat: E with a food item selected and nothing to interact with ---
+	if (not aim_valid or aim_collider == null) and _try_eat_selected():
 		return
 	# --- Planting: use a seed item on an aimed, empty planter ---
 	if aim_valid and aim_collider != null:
@@ -501,6 +539,33 @@ func _collect_debris(debris: Node3D) -> void:
 		debris.set("collected", true)
 		Inventory.add(item_name)
 		debris.queue_free()
+
+
+## Eat the selected food item (E on the hotbar item). Apples restore
+## hunger (Stats autoload); the item is consumed from the selected slot.
+func _try_eat_selected() -> bool:
+	if active_item == "" or not Inventory.has(active_item, 1):
+		return false
+	var stats := get_node_or_null("/root/Stats")
+	var food := 0.0
+	match active_item:
+		"Apple":
+			food = 30.0
+		"Coconut":
+			food = 25.0
+		"Potato":
+			food = 20.0
+		"Banana":
+			food = 20.0
+	if food <= 0.0:
+		return false
+	var eaten_item := active_item
+	Inventory.remove(active_item, 1)
+	if stats != null:
+		stats.call("eat", food)
+		if eaten_item == "Coconut":
+			stats.call("drink", 35.0)
+	return true
 
 # ============================================================
 # BUILD SYSTEM — PROCESS & INPUT
@@ -653,11 +718,8 @@ func _ensure_starter_seeds() -> void:
 		Inventory.place_at(1, "Potato Seed", 5)
 		Inventory.place_at(2, "Coconut Seed", 3)
 		Inventory.place_at(3, "Banana Seed", 3)
+		Inventory.place_at(4, "Apple Seed", 1)
 		return
-	for seed_name in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
-		# Ensure the type exists at all (continue after a wipe / very old save).
-		if Inventory.total(seed_name) == 0:
-			Inventory.add(seed_name, 5 if seed_name == "Potato Seed" else 3)
 	# Move bag-only seeds up into a free hotbar slot.
 	for seed_name in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
 		var already_in_hotbar := false
@@ -707,6 +769,9 @@ func _write_save(slot: String) -> void:
 	# The built structure lives under the raft's BuiltPieces — without this the
 	# save file holds only inventory and Continue returns an empty raft.
 	meta["built"] = _serialize_built_pieces()
+	var survival := get_node_or_null("SurvivalDirector")
+	if survival != null:
+		meta["survival"] = survival.save_state()
 	Inventory.save_game(meta, slot)
 
 
@@ -758,6 +823,8 @@ func _serialize_built_pieces() -> Array:
 		var b := t.basis
 		out.append({
 			"t": pname,
+			"plant_id": piece.planted_id if piece is Planter else "",
+			"plant_state": piece._plant.survival_snapshot() if piece is Planter and piece.has_plant() else {},
 			"x": [
 				b.x.x, b.x.y, b.x.z,
 				b.y.x, b.y.y, b.y.z,
@@ -810,6 +877,9 @@ func _restore_built_pieces() -> void:
 		for c in cols:
 			(c as CollisionShape3D).disabled = true
 		container.add_child(piece)
+		if piece is Planter and str(entry.get("plant_id", "")) != "":
+			if piece.plant_seed(str(entry.plant_id)):
+				piece._plant.restore_survival_snapshot(entry.get("plant_state", {}))
 		for c in cols:
 			(c as CollisionShape3D).set_deferred("disabled", false)
 		piece.add_to_group("build_surface")
@@ -880,9 +950,27 @@ func _update_hand_item() -> void:
 	_hand_item.rotation = Vector3.ZERO
 	if active_item == "":
 		return
+	var asset := "resource-stone" if active_item.ends_with(" Seed") else str({"Water Flask": "bottle", "Fresh Water": "bottle", "Raw Fish": "fish", "Cooked Fish": "fish", "Wood": "resource-wood", "Stone": "resource-stone", "Barrel": "barrel"}.get(active_item, ""))
+	if asset != "":
+		var visual := preload("res://scripts/mobile_assets.gd").make(asset, 0.08 if active_item.ends_with(" Seed") else 0.35)
+		if visual != null:
+			_hand_item.add_child(visual)
+			visual.position = Vector3(0, -0.05, -0.25)
+			return
 	# Each item is composed from primitives placed in a NATURAL HAND POSE around
 	# the fist (offsets below are fist-local: +X right, +Y up, -Z forward).
 	match active_item:
+		"Spear", "Fishing Rod", "Bow":
+			var shaft := CylinderMesh.new()
+			shaft.top_radius = 0.015
+			shaft.bottom_radius = 0.025
+			shaft.height = 1.3
+			var wood := _hand_mat(Color(0.33, 0.19, 0.08))
+			_hand_part(shaft, wood, Transform3D(Basis(Vector3.RIGHT, -PI / 2.5), Vector3(0, 0.0, -0.4)))
+			if active_item == "Spear":
+				var tip := PrismMesh.new()
+				tip.size = Vector3(0.1, 0.22, 0.035)
+				_hand_part(tip, _hand_mat(Color(0.4, 0.43, 0.45)), Transform3D(Basis(Vector3.RIGHT, -PI / 2.5), Vector3(0, 0.2, -1.0)))
 		"Rope":
 			var coil := _hand_mat(Color(0.78, 0.6, 0.35))
 			var cyl := CylinderMesh.new()
@@ -4208,6 +4296,7 @@ const RECIPE_REFUND := {
 	"PlanterPot": {"Wood": 4},
 	"PlanterBox": {"Wood": 6},
 	"TreePot": {"Wood": 8, "Rope": 1},
+	"Bonfire": {"Wood": 8, "Rope": 2},
 }
 
 

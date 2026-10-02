@@ -369,3 +369,43 @@ func new_game_reset() -> void:
 	for slot in [SAVE_PATH, QUICK_SAVE_PATH]:
 		if FileAccess.file_exists(slot):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(slot))
+
+## Transactional crafting: simulate first so a full bag never destroys inputs.
+func try_exchange(costs: Dictionary, rewards: Dictionary) -> bool:
+	_ensure_slots()
+	for item: String in costs:
+		if int(costs[item]) <= 0 or not has(item, int(costs[item])):
+			return false
+	var next: Array = slots.duplicate(true)
+	for item: String in costs:
+		var left: int = int(costs[item])
+		for i in range(SLOT_COUNT - 1, -1, -1):
+			if str(next[i].get("item", "")) != item:
+				continue
+			var take: int = mini(left, int(next[i].get("count", 0)))
+			next[i]["count"] -= take
+			left -= take
+			if next[i]["count"] <= 0:
+				next[i] = {}
+	for item: String in rewards:
+		var left: int = int(rewards[item])
+		if left <= 0:
+			return false
+		for pass_index in range(2):
+			for i in range(SLOT_COUNT):
+				if left == 0:
+					break
+				if pass_index == 0 and str(next[i].get("item", "")) == item:
+					var take: int = mini(left, MAX_STACK - int(next[i]["count"]))
+					next[i]["count"] += take
+					left -= take
+				elif pass_index == 1 and next[i].is_empty():
+					var take: int = mini(left, MAX_STACK)
+					next[i] = {"item": item, "count": take}
+					left -= take
+		if left > 0:
+			return false
+	slots = next
+	_recompute()
+	changed.emit()
+	return true

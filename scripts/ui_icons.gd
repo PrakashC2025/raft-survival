@@ -193,6 +193,16 @@ static func item_color(item: String) -> Color:
 			return Color(0.75, 0.28, 0.2)
 		"Stone":
 			return Color(0.55, 0.55, 0.58)
+		"Apple":
+			return Color(0.78, 0.15, 0.1)
+		"Apple Seed":
+			return Color(0.45, 0.2, 0.1)
+		"Coconut":
+			return Color(0.42, 0.3, 0.16)
+		"Potato":
+			return Color(0.75, 0.6, 0.4)
+		"Banana":
+			return Color(0.85, 0.78, 0.25)
 	return Color(0.8, 0.8, 0.8)
 
 
@@ -242,6 +252,25 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 				center + Vector2(-r * 0.4, r * 0.45),
 			])
 			c.draw_colored_polygon(pts2, col)
+		"Apple":
+			# round fruit + stem + leaf
+			_circle(c, center + Vector2(0, r * 0.08), r * 0.48, col)
+			_circle(c, center + Vector2(-r * 0.15, -r * 0.08), r * 0.1, Color(1.0, 0.5, 0.45), true)
+			_line(c, center + Vector2(0, -r * 0.38), center + Vector2(r * 0.08, -r * 0.62), r * 0.07, Color(0.35, 0.25, 0.12))
+			c.draw_circle(center + Vector2(r * 0.22, -r * 0.58), r * 0.14, Color(0.25, 0.55, 0.2))
+		"Apple Seed":
+			# small dark pip
+			var pts3 := PackedVector2Array([
+				center + Vector2(0, -r * 0.4),
+				center + Vector2(r * 0.22, 0),
+				center + Vector2(0, r * 0.4),
+				center + Vector2(-r * 0.22, 0),
+			])
+			c.draw_colored_polygon(pts3, col)
+		"Coconut":
+			_circle(c, center, r * 0.45, col)
+			_circle(c, center + Vector2(-r * 0.12, -r * 0.12), r * 0.07, Color(0.2, 0.13, 0.07), true)
+			_circle(c, center + Vector2(r * 0.1, -r * 0.16), r * 0.07, Color(0.2, 0.13, 0.07), true)
 		_:
 			_circle(c, center, r * 0.5, col)
 
@@ -275,3 +304,14 @@ static func backpack(c: CanvasItem, center: Vector2, r: float, col: Color) -> vo
 	c.draw_rect(Rect2(center.x + r * 0.14, center.y - r * 0.3, r * 0.16, r * 0.62), Color(0.9, 0.85, 0.7))
 	# pocket
 	c.draw_rect(Rect2(center.x - r * 0.2, center.y - r * 0.1, r * 0.4, r * 0.36), Color(0.85, 0.7, 0.45))
+
+
+# Camera toggle icon (rectangle body + circle lens).
+static func camera(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) -> void:
+	# Camera body
+	c.draw_rect(Rect2(center.x - r * 0.55, center.y - r * 0.3, r * 1.1, r * 0.7), col)
+	# Viewfinder bump on top
+	c.draw_rect(Rect2(center.x - r * 0.15, center.y - r * 0.45, r * 0.3, r * 0.2), col)
+	# Lens circle
+	_circle(c, center + Vector2(0, r * 0.05), r * 0.28, Color(0.06, 0.08, 0.11, 0.9))
+	_circle(c, center + Vector2(0, r * 0.05), r * 0.18, col, false, w * 0.8)

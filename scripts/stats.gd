@@ -3,11 +3,9 @@ signal stat_changed(stat_name: String, value: float)
 signal player_died
 
 const MAX_VALUE := 100.0
-@export var hunger_drain_rate: float = 0.4
-@export var thirst_drain_rate: float = 0.6
-## Stat drain is OFF until food/water sources exist (no eatables drop yet) —
-## set this true (or the drain rates) when adding consumables so survivors
-## actually need to eat and drink.
+@export var hunger_drain_rate: float = 0.06
+@export var thirst_drain_rate: float = 0.09
+## The survival director enables drain during gameplay and disables it in menus.
 @export var enabled := false
 
 var health: float = 100.0
@@ -37,3 +35,4 @@ func drink(thirst_value: float, health_bonus: float = 0.0) -> void:
 	thirst = clampf(thirst + thirst_value, 0.0, MAX_VALUE)
 	if health_bonus != 0.0:
 		change_health(health_bonus)
+

@@ -141,6 +141,10 @@ func _push_factors(night: float, twilight: float, moon_factor: float) -> void:
 	_mat.set_shader_parameter("night_factor", night)
 	_mat.set_shader_parameter("twilight_factor", twilight)
 	_mat.set_shader_parameter("moon_factor", moon_factor)
+	# Storm state for the water: roughens normals, churn speckle, darker body.
+	var rain_node := get_tree().get_first_node_in_group("rain_system")
+	if rain_node != null:
+		_mat.set_shader_parameter("rain_strength", float(rain_node.get("_intensity")))
 	if _sun_light != null and is_instance_valid(_sun_light):
 		_mat.set_shader_parameter("sun_dir", _sun_light.global_transform.origin.normalized())
 		_mat.set_shader_parameter("sun_glint_color", _sun_light.light_color)
@@ -254,6 +258,10 @@ const _WAVES := [
 	[Vector2(-0.4, 0.92), 0.115, 0.75, 0.7],
 	[Vector2(0.8, -0.5), 0.24, 0.38, 1.05],
 	[Vector2(-0.75, -0.65), 0.50, 0.13, 1.45],
+	# CROSS-SWELL (keep in sync with main.gdshader L5/L6): scrambles the
+	# 4-harmonic regularity into random-looking real-sea mixing.
+	[Vector2(0.33, 0.94), 0.163, 0.27, 0.87],
+	[Vector2(-0.95, 0.05), 0.317, 0.16, 1.23],
 ]  # [dir, freq, amp, time_speed]
 
 # Organic-field constants. MUST stay identical to main.gdshader's meander and

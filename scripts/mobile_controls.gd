@@ -58,6 +58,7 @@ var _btn_rotate: Button
 var _btn_next: Button
 var _btn_remove: Button
 var _btn_help: Button
+var _btn_camera: Button
 var _all_buttons: Array[Button] = []
 
 # --- in-game help panel (the "?" button) ---
@@ -180,6 +181,14 @@ func _input(event: InputEvent) -> void:
 		force_show = not force_show
 		return
 	if not visible:
+		return
+	var survivor := _get_player()
+	var journal: Node = survivor.get_node_or_null("SurvivalDirector") if survivor != null else null
+	if journal != null and (journal.panel.visible or journal.intro_running):
+		_release_all_actions()
+		_move_id = -1
+		_look_id = -1
+		_stick = Vector2.ZERO
 		return
 	# While the help panel is open the screen belongs to it: no joystick, no
 	# camera look (the panel's own buttons still work via the GUI).
@@ -323,10 +332,11 @@ func _build_buttons() -> void:
 	_btn_next = _make_button("next")
 	_btn_remove = _make_button("trash")
 	_btn_help = _make_button("help")
+	_btn_camera = _make_button("camera")
 
 	_all_buttons = [_btn_jump, _btn_rope, _btn_recall, _btn_run, _btn_use, _btn_dive,
 			_btn_climb, _btn_edit, _btn_build, _btn_place, _btn_rotate, _btn_next,
-			_btn_remove, _btn_help]
+			_btn_remove, _btn_help, _btn_camera]
 
 	# Hold-style buttons: press the action on touch-down, release on touch-up.
 	_btn_jump.button_down.connect(_press_action.bind("jump"))
@@ -357,6 +367,7 @@ func _build_buttons() -> void:
 	_btn_edit.pressed.connect(_on_edit_pressed)
 	_btn_climb.pressed.connect(_on_climb_pressed)
 	_btn_help.pressed.connect(_toggle_help)
+	_btn_camera.pressed.connect(_on_camera_pressed)
 
 	for b in _all_buttons:
 		add_child(b)
@@ -398,6 +409,15 @@ func _on_climb_pressed() -> void:
 		return
 	if p.has_method("climb_out"):
 		p.call("climb_out")
+
+
+## Tap = cycle between first-person and third-person camera.
+func _on_camera_pressed() -> void:
+	var p := _get_player()
+	if p == null or not visible:
+		return
+	if p.has_method("cycle_camera_mode"):
+		p.call("cycle_camera_mode")
 
 
 func _make_button(kind: String) -> Button:
@@ -467,6 +487,8 @@ func _sync_mode() -> void:
 	_btn_remove.visible = mode == "edit"
 	# Help is available in every mode.
 	_btn_help.visible = true
+	# Camera toggle is available in every mode.
+	_btn_camera.visible = true
 
 	# If a hold-style button vanished while held (e.g. the target moved away
 	# from the crosshair mid-press), release its action so it never sticks.
@@ -539,6 +561,9 @@ func _layout() -> void:
 	# "?" help button — sits directly above the BUILD toggle on the left edge.
 	_btn_help.position = Vector2(b_x, maxf(m, b_y - small - m))
 	_btn_help.size = Vector2(small, small)
+	# Camera toggle — sits directly above the HELP button on the left edge.
+	_btn_camera.position = Vector2(b_x, maxf(m, b_y - small - m - small - m))
+	_btn_camera.size = Vector2(small, small)
 
 	queue_redraw()
 
@@ -639,6 +664,8 @@ func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
 			var sz := font.get_string_size("?", HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
 			draw_string(font, center + Vector2(-sz.x * 0.5, sz.y * 0.5), "?",
 				HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+		"camera":
+			Icons.camera(self, center, r, w, col)
 		_:
 			Icons.check(self, center, r, w, col)
 
@@ -699,6 +726,7 @@ const HELP_CONTENT := "[center][b]GAME CONTROLS[/b][/center]\n\n" \
 	+ "[b]FARMING QUICK START[/b]\n1) Build mode → NEXT to a planter → PLACE on your deck. 2) Exit build mode. 3) Tap a Seed in the hotbar (Potato / Coconut / Banana). 4) Aim at the empty planter and tap USE to plant. 5) Watch it grow SEED → SPROUT → GROWING → MATURE. 6) Tap USE on a ripe fruit (only that fruit is picked). Hold USE to dig potatoes or chop a tree — the tree falls away from you, drops Wood + fruit, and leaves a stump. Hold USE on the stump to clear it and replant.\n\n" \
 	+ "[b]ROPE[/b]\nROPE button = hold to charge, release to throw the hook. BACK button = pull it back.\n\n" \
 	+ "[b]BAG[/b]\nTap the BAG button to open your 30-slot inventory; drag items to move/swap/merge them. Tap a hotbar slot to select that item.\n\n" \
+	+ "[b]CAMERA[/b]\nTap the camera icon (left edge) to toggle between first-person and third-person view.\n\n" \
 	+ "[b]KEYBOARD (PC)[/b]\nWASD move · Space jump · C dive · E interact · B build · Tab piece · P place · R/Y rotate · X remove · Q rope · F3 build overlay · F5-F8 dev time"
 
 
@@ -785,3 +813,4 @@ func _layout_help() -> void:
 	_help_close.position = _help_panel.position + Vector2(panel_w - pad_x - close_s, pad_y)
 	_help_close.size = Vector2(close_s, close_s)
 	_help_close.add_theme_font_size_override("font_size", int(fs * 1.3))
+

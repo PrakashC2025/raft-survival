@@ -11,8 +11,9 @@ config_version=5
 [application]
 
 config/name="RaftSurvival"
-run/main_scene="uid://b0w5l6ob2nsaj"
+run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
+run/max_fps=60
 config/icon="res://textures/icon.svg"
 
 [autoload]
@@ -20,6 +21,7 @@ config/icon="res://textures/icon.svg"
 Inventory="*uid://cnmofngcvjed"
 Stats="*res://scripts/stats.gd"
 PlantDB="*res://scripts/plant_data.gd"
+MobilePerf="*res://scripts/mobile_perf.gd"
 
 [display]
 
@@ -119,7 +121,7 @@ quick_save={
 
 [rendering]
 
-rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
 textures/vram_compression/import_etc2_astc=true
 lights_and_shadows/directional_shadow/size=2048
+lights_and_shadows/positional_shadow/size=2048
