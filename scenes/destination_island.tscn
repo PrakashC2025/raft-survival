@@ -1,0 +1,44 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://models/island_terrain.glb" id="1_terrain"]
+[ext_resource type="Script" path="res://scripts/island_destination.gd" id="2_destination"]
+[ext_resource type="Script" path="res://scripts/island_setup.gd" id="3_setup"]
+[ext_resource type="Script" path="res://scripts/island_grass.gd" id="4_grass"]
+[ext_resource type="Script" path="res://scripts/island_beacon.gd" id="5_beacon"]
+[ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_tall.glb" id="6_palm_tall"]
+[ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_short.glb" id="7_palm_short"]
+
+[node name="DestinationIsland" type="Node3D"]
+script = ExtResource("2_destination")
+map_label = "Island"
+beacon_color = Color(0.28, 0.86, 1.0, 1)
+pickup_count = 6
+
+[node name="IslandTerrain" parent="." instance=ExtResource("1_terrain")]
+
+[node name="IslandBeacon" type="Node3D" parent="."]
+position = Vector3(0, 3.2, 0)
+script = ExtResource("5_beacon")
+
+[node name="PalmTreeOne" parent="." instance=ExtResource("6_palm_tall")]
+transform = Transform3D(0.965926, 0, 0.258819, 0, 1, 0, -0.258819, 0, 0.965926, -3.8, 1.8, -3.2)
+scale = Vector3(2.2, 2.2, 2.2)
+
+[node name="PalmTreeTwo" parent="." instance=ExtResource("7_palm_short")]
+transform = Transform3D(0.766044, 0, 0.642788, 0, 1, 0, -0.642788, 0, 0.766044, 3.2, 1.6, -4.2)
+scale = Vector3(2.5, 2.5, 2.5)
+
+[node name="PalmTreeThree" parent="." instance=ExtResource("6_palm_tall")]
+transform = Transform3D(0.5, 0, 0.866025, 0, 1, 0, -0.866025, 0, 0.5, 4.0, 1.4, 2.6)
+scale = Vector3(1.9, 1.9, 1.9)
+
+[node name="IslandGrass" type="Node3D" parent="."]
+position = Vector3(0, 4, 0)
+script = ExtResource("4_grass")
+instance_count = 800
+scatter_radius = 11.0
+scatter_seed = 2468
+
+[node name="IslandSetup" type="Node3D" parent="."]
+script = ExtResource("3_setup")
+island_root = NodePath("..")

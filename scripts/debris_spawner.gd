@@ -37,6 +37,11 @@ const ITEM_POOL := [
 ]
 
 func _ready() -> void:
+	# Keep the ambient physics-body count modest on phones. The desktop stream
+	# remains denser, while mobile still starts with a visible spread of loot.
+	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+		max_debris = mini(max_debris, 48)
+		prewarm_count = mini(prewarm_count, 24)
 	player = get_tree().get_first_node_in_group("player")
 	_direction = Vector3(current_direction.x, 0.0, current_direction.z).normalized()
 	if _direction.length() < 0.001:
@@ -64,7 +69,7 @@ func _process(delta: float) -> void:
 
 # Fill the upstream corridor at startup — debris visible from frame 1.
 func _prewarm() -> void:
-	for i in prewarm_count:
+	for i in mini(prewarm_count, max_debris):
 		# Spread evenly from upstream to just past the player
 		var dist := randf_range(-upstream_distance, downstream_distance * 0.5)
 		_spawn_at(dist)

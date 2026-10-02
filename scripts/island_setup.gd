@@ -24,6 +24,7 @@ const ISLAND_TARGET_SIZE := 24.0  # old island_terrain.glb footprint (m)
 
 var _terrain_mats: Array[ShaderMaterial] = []
 var _island_node: Node3D = null
+var setup_complete := false
 
 func _ready() -> void:
 	var island := get_node_or_null(island_root) as Node3D
@@ -31,7 +32,9 @@ func _ready() -> void:
 		# Rescale BEFORE collision/snap/grass so everything sees final geometry.
 		_normalize_sketchfab_island(island)
 	if generate_collision:
-		_create_island_collision()
+		# Cooking a scan mesh can be expensive on mobile. Yield between generated
+		# bodies so the startup work does not pile up in a single frame.
+		await _create_island_collision()
 	if apply_terrain_material:
 		_apply_terrain_materials()
 	if snap_palms:
@@ -49,6 +52,7 @@ func _ready() -> void:
 		var grass := get_node_or_null(island_root_path().path_join("IslandGrass"))
 		if grass != null and grass.has_method("rebuild"):
 			grass.call("rebuild")
+	setup_complete = true
 
 func _process(_delta: float) -> void:
 	# Keep the terrain shader's water line on the live wave surface so the wet
@@ -79,16 +83,13 @@ func _create_island_collision() -> void:
 			continue
 		if _is_collision_skipped(mesh_inst, island):
 			continue
-		# Skip if a body already exists as a sibling (manually created in the editor)
-		var has_body := false
-		for sib in mesh_inst.get_parent().get_children():
-			if sib is StaticBody3D:
-				has_body = true
-				break
-		if has_body:
+		# Only skip this mesh when its own generated collision body exists. A
+		# sibling body for another mesh must not suppress this mesh's collider.
+		var body_name := mesh_inst.name + "_Body"
+		if mesh_inst.get_parent().get_node_or_null(body_name) is StaticBody3D:
 			continue
 		var body := StaticBody3D.new()
-		body.name = mesh_inst.name + "_Body"
+		body.name = body_name
 		var shape := CollisionShape3D.new()
 		shape.name = "CollisionShape3D"
 		shape.shape = mesh_inst.mesh.create_trimesh_shape()
@@ -97,6 +98,7 @@ func _create_island_collision() -> void:
 		# Match the visual transform so the collider hugs the mesh exactly
 		body.global_transform = mesh_inst.global_transform
 		print("[IslandSetup] collision generated for ", mesh_inst.name)
+		await get_tree().physics_frame
 
 ## Generated visuals flagged no_collision (beacon pillar/glow) are skipped for
 ## BOTH collision generation and material overrides.
@@ -105,14 +107,26 @@ func _is_collision_skipped(mesh_inst: MeshInstance3D, island: Node3D) -> bool:
 	while n != null and n != island:
 		if n.is_in_group("no_collision"):
 			return true
+		# Palm fronds are visual-only; colliding with their flat surfaces is
+		# expensive and confusing when the player walks near the canopy.
+		if n is MeshInstance3D and n.name.findn("leaf") >= 0:
+			return true
 		n = n.get_parent()
 	return false
 
-## True when the island glb is the Sketchfab beach scan (sand_raftsurvival.glb).
+## True for the scanned beach import. Some GLB conversions rename the
+## original Sketchfab nodes, so the large source-mesh footprint is the stable
+## fallback signal.
 func _is_sketchfab_island(island: Node3D) -> bool:
-	for child in island.get_children():
-		if child is Node3D and child.name.begins_with("Sketchfab"):
+	for node in island.find_children("*", "Node3D", true, false):
+		if node.name.begins_with("Sketchfab"):
 			return true
+	for candidate in island.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := candidate as MeshInstance3D
+		if mesh_instance != null and mesh_instance.mesh != null:
+			var size := mesh_instance.mesh.get_aabb().size
+			if maxf(size.x, size.z) >= 100.0:
+				return true
 	return false
 
 ## Gameplay nodes placed in main.tscn must never be rescaled with the scan.
@@ -121,6 +135,14 @@ func _is_gameplay_node(node: Node) -> bool:
 	return n.begins_with("Palm") or n.begins_with("IslandGrass") \
 			or n.begins_with("IslandBeacon")
 
+func _is_gameplay_descendant(node: Node, island: Node3D) -> bool:
+	var current := node
+	while current != null and current != island:
+		if _is_gameplay_node(current):
+			return true
+		current = current.get_parent()
+	return false
+
 ## The scan spans ~283 m with dunes ±30 m tall — far bigger than the 24 m
 ## gameplay island. Scale every imported root down so the widest mesh's XZ
 ## footprint matches ISLAND_TARGET_SIZE, and hide stray props (raft/shell
@@ -128,6 +150,8 @@ func _is_gameplay_node(node: Node) -> bool:
 func _normalize_sketchfab_island(island: Node3D) -> void:
 	var max_extent := 0.0
 	for mi in island.find_children("*", "MeshInstance3D", true, false):
+		if _is_gameplay_descendant(mi, island):
+			continue
 		if mi.mesh != null:
 			var s := (mi as MeshInstance3D).mesh.get_aabb().size
 			max_extent = maxf(max_extent, maxf(s.x, s.z))
@@ -140,6 +164,8 @@ func _normalize_sketchfab_island(island: Node3D) -> void:
 		if child is Node3D and not _is_gameplay_node(child):
 			(child as Node3D).scale = Vector3.ONE * k
 	for mi in island.find_children("*", "MeshInstance3D", true, false):
+		if _is_gameplay_descendant(mi, island):
+			continue
 		if mi.mesh != null:
 			var s := (mi as MeshInstance3D).mesh.get_aabb().size
 			if maxf(s.x, s.z) * k < 1.0:

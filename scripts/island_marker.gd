@@ -24,10 +24,10 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 func _process(delta: float) -> void:
-	if _beacon == null or not is_instance_valid(_beacon):
-		_beacon = get_tree().get_first_node_in_group(beacon_group)
 	if _player == null or not is_instance_valid(_player):
-		_player = get_tree().get_first_node_in_group(player_group)
+		_player = get_tree().get_first_node_in_group(player_group) as Node3D
+	if _player != null:
+		_beacon = _find_target_beacon()
 	if _beacon == null or _player == null:
 		if _alpha > 0.0:
 			_alpha = 0.0
@@ -64,6 +64,26 @@ func _process(delta: float) -> void:
 		_clamped = true
 
 	queue_redraw()
+
+func _find_target_beacon() -> Node3D:
+	var beacons := get_tree().get_nodes_in_group(beacon_group)
+	var nearest_outside: Node3D = null
+	var nearest_any: Node3D = null
+	var outside_distance := INF
+	var any_distance := INF
+	for candidate in beacons:
+		if not (candidate is Node3D) or not is_instance_valid(candidate):
+			continue
+		var beacon := candidate as Node3D
+		var distance := _player.global_position.distance_to(beacon.global_position)
+		if distance < any_distance:
+			any_distance = distance
+			nearest_any = beacon
+		if distance >= fade_distance and distance < outside_distance:
+			outside_distance = distance
+			nearest_outside = beacon
+	return nearest_outside if nearest_outside != null else nearest_any
+
 
 func _draw() -> void:
 	if _alpha <= 0.01:

@@ -21,6 +21,12 @@ enum Stage { SEED, SPROUT, GROWING, MATURE, FALLING, STUMP }
 
 const CAT_ROOT := "ROOT"
 const CAT_FRUIT := "FRUIT_TREE"
+const PALM_TALL_SCENE: PackedScene = preload("res://models/kenney_palm_detailed_tall.glb")
+const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
+const BANANA_SCENE: PackedScene = preload("res://models/kenney_banana.glb")
+const CHOP_SOUND: AudioStream = preload("res://audio/chop.ogg")
+const HARVEST_SOUND: AudioStream = preload("res://audio/pickup_rustle.ogg")
+const ITEM_PICKUP_SCENE: PackedScene = preload("res://scenes/food_pickup.tscn")
 # Height fraction reached at the END of each stage (indexed by Stage.SEED..MATURE)
 const STAGE_FRAC := [0.06, 0.22, 0.55, 1.0]
 
@@ -44,7 +50,7 @@ var _wind_phase2: float = 0.0
 var _wind_freq: float = 1.0
 
 # One entry per fruit slot:
-# {"pos": Vector3 (local), "elapsed": float, "regrow": float, "mesh": MeshInstance3D}
+# {"pos": Vector3 (local), "elapsed": float, "regrow": float, "mesh": Node3D}
 var _fruits: Array = []
 
 # Hold-to-harvest state (chop / dig / stump removal)
@@ -54,6 +60,8 @@ var _hold_target: float = 1.0
 var _hold_kind: String = ""
 var _health: int = 0
 var _fell_axis: Vector3 = Vector3.FORWARD
+var _pending_dig_drop: Dictionary = {}
+var _pending_fell_drops: Dictionary = {}
 
 # Small debris chips (wood/soil) flying briefly after hits
 var _chips: Array = []
@@ -108,6 +116,76 @@ func _ready() -> void:
 	_container.scale = Vector3(_grow, _grow, _grow)
 	_rebuild_visual()
 	_build_progress_ui()
+
+
+func save_state() -> Dictionary:
+	var saved_stage := _stage
+	var saved_health := _health
+	# Do not persist a half-played fall tween: retry the final chop after load.
+	if saved_stage == Stage.FALLING:
+		saved_stage = Stage.MATURE
+		saved_health = 1
+	var fruit_states: Array[Dictionary] = []
+	for fruit in _fruits:
+		var position: Vector3 = fruit.get("pos", Vector3.ZERO)
+		fruit_states.append({
+			"p": [position.x, position.y, position.z],
+			"r": float(fruit.get("rotation_y", 0.0)),
+			"e": float(fruit.get("elapsed", 0.0)),
+			"g": float(fruit.get("regrow", 60.0)),
+		})
+	return {
+		"id": plant_id,
+		"stage": saved_stage,
+		"timer": _stage_timer,
+		"health": saved_health,
+		"fruits": fruit_states,
+	}
+
+
+func restore_state(state: Dictionary) -> void:
+	if str(state.get("id", plant_id)) != plant_id:
+		return
+	_stage = clampi(int(state.get("stage", Stage.SEED)), Stage.SEED, Stage.STUMP)
+	if _stage == Stage.FALLING:
+		_stage = Stage.MATURE
+		_health = 1
+	else:
+		_health = maxi(0, int(state.get("health", _health)))
+	_stage_timer = maxf(0.0, float(state.get("timer", 0.0)))
+	if _stage < Stage.MATURE:
+		_stage_timer = minf(_stage_timer, _stage_time(_stage))
+	else:
+		_stage_timer = 0.0
+	_rebuild_visual()
+	if _stage < Stage.MATURE:
+		var needed := maxf(_stage_time(_stage), 0.001)
+		var from_scale: float = STAGE_FRAC[_stage]
+		var to_scale: float = STAGE_FRAC[clampi(_stage + 1, 0, Stage.MATURE)]
+		_grow = lerpf(from_scale, to_scale, clampf(_stage_timer / needed, 0.0, 1.0))
+	else:
+		_grow = 1.0
+	_container.scale = Vector3.ONE * _grow
+	if _stage == Stage.STUMP:
+		_container.scale = Vector3.ONE
+		return
+	if _stage != Stage.MATURE or _def.get("category", "") != CAT_FRUIT:
+		return
+	var fruit_states: Variant = state.get("fruits", [])
+	if fruit_states is Array:
+		for i in range(mini(fruit_states.size(), _fruits.size())):
+			var saved_fruit: Variant = fruit_states[i]
+			if not (saved_fruit is Dictionary):
+				continue
+			var fruit: Dictionary = _fruits[i]
+			var coordinates: Array = saved_fruit.get("p", [])
+			if coordinates.size() >= 3:
+				fruit["pos"] = Vector3(float(coordinates[0]), float(coordinates[1]), float(coordinates[2]))
+			fruit["rotation_y"] = float(saved_fruit.get("r", fruit.get("rotation_y", 0.0)))
+			fruit["regrow"] = maxf(0.1, float(saved_fruit.get("g", fruit.get("regrow", 60.0))))
+			fruit["elapsed"] = clampf(float(saved_fruit.get("e", 0.0)), 0.0, float(fruit["regrow"]))
+			_fruits[i] = fruit
+	_update_fruits(0.0)
 
 
 # ============================================================
@@ -258,6 +336,9 @@ func _build_root_visual(stage: int) -> void:
 
 
 func _build_tree_visual(stage: int) -> void:
+	if plant_id == "Coconut":
+		_build_coconut_palm_visual(stage)
+		return
 	var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.2)))
 	var trunk_r: float = float(_def.get("trunk_radius", 0.13))
 	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 0.9)))
@@ -288,6 +369,81 @@ func _build_tree_visual(stage: int) -> void:
 		_container.add_child(canopy)
 
 	_update_collision()
+
+
+func _build_coconut_palm_visual(stage: int) -> void:
+	if stage == Stage.SEED:
+		var seed_mesh := MeshInstance3D.new()
+		var seed := SphereMesh.new()
+		seed.radius = 0.035
+		seed.height = 0.07
+		seed_mesh.mesh = seed
+		seed_mesh.position = Vector3(0.0, 0.02, 0.0)
+		var seed_material := StandardMaterial3D.new()
+		seed_material.albedo_color = Color(0.36, 0.24, 0.12)
+		seed_material.roughness = 0.95
+		seed_mesh.material_override = seed_material
+		_container.add_child(seed_mesh)
+		return
+
+	var palm := PALM_TALL_SCENE.instantiate() as Node3D
+	if palm == null:
+		push_warning("[Plant] Could not instance Kenney palm model")
+		return
+	palm.name = "CoconutPalm"
+	_container.add_child(palm)
+	var bounds := _node_local_aabb(palm)
+	if bounds.size.y <= 0.001:
+		push_warning("[Plant] Kenney palm model has no measurable height")
+		return
+	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 1.1)))
+	var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.6)))
+	var target_height: float = trunk_h + canopy_r * 0.7
+	var model_scale: float = target_height / bounds.size.y
+	palm.scale = Vector3.ONE * model_scale
+	palm.position = Vector3(
+		-bounds.get_center().x * model_scale,
+		-bounds.position.y * model_scale,
+		-bounds.get_center().z * model_scale
+	)
+
+	# Fruit sockets sit just beneath the crown; keeping this as a lightweight
+	# marker preserves the existing staggered grow/pick/regrow behaviour.
+	if stage >= Stage.MATURE:
+		var canopy := Node3D.new()
+		canopy.name = "Canopy"
+		canopy.position = Vector3(0.0, target_height * 0.76, 0.0)
+		_container.add_child(canopy)
+	_update_collision()
+
+
+func _node_local_aabb(root: Node3D) -> AABB:
+	var found := false
+	var lower := Vector3.ZERO
+	var upper := Vector3.ZERO
+	for candidate in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := candidate as MeshInstance3D
+		if mesh_instance == null or mesh_instance.mesh == null:
+			continue
+		var relative := mesh_instance.transform
+		var ancestor := mesh_instance.get_parent()
+		while ancestor != null and ancestor != root:
+			if ancestor is Node3D:
+				relative = (ancestor as Node3D).transform * relative
+			ancestor = ancestor.get_parent()
+		if ancestor != root:
+			continue
+		var mesh_bounds := mesh_instance.mesh.get_aabb()
+		for corner in range(8):
+			var point: Vector3 = relative * mesh_bounds.get_endpoint(corner)
+			if not found:
+				lower = point
+				upper = point
+				found = true
+			else:
+				lower = lower.min(point)
+				upper = upper.max(point)
+	return AABB(lower, upper - lower) if found else AABB()
 
 
 func _update_collision() -> void:
@@ -351,15 +507,11 @@ func _init_fruit_slots() -> void:
 		var slot_regrow: float = regrow * _rng.randf_range(0.9, 1.1)
 		_fruits.append({
 			"pos": local_pos,
+			"rotation_y": ang + _rng.randf_range(-0.6, 0.6),
 			"elapsed": _rng.randf_range(0.0, regrow * 0.5),
 			"regrow": slot_regrow,
 			"mesh": null,
 		})
-
-
-func _fruit_green() -> Color:
-	# Young fruit is green regardless of its ripe color.
-	return Color(0.3, 0.45, 0.22)
 
 
 func _update_fruits(delta: float) -> void:
@@ -367,7 +519,7 @@ func _update_fruits(delta: float) -> void:
 		f["elapsed"] = float(f["elapsed"]) + delta
 		var regrow: float = float(f["regrow"])
 		var prog: float = clampf(float(f["elapsed"]) / regrow, 0.0, 1.0)
-		var m: MeshInstance3D = f.get("mesh")
+		var m := f.get("mesh") as Node3D
 		if prog < 0.06:
 			if m != null and is_instance_valid(m):
 				m.queue_free()
@@ -378,31 +530,47 @@ func _update_fruits(delta: float) -> void:
 			f["mesh"] = m
 			_container.add_child(m)
 		m.position = f["pos"]
-		var ripe_col: Color = _def.get("fruit_color", Color(0.8, 0.6, 0.2))
-		var size_t := prog * prog * (3.0 - 2.0 * prog)  # smoothstep ease
-		m.scale = Vector3.ONE * (0.35 + 0.65 * size_t)
-		# Color drifts from green toward the ripe fruit color as it matures.
-		var color_t: float = clampf((prog - 0.15) / 0.85, 0.0, 1.0)
-		var mat: StandardMaterial3D = m.material_override as StandardMaterial3D
-		if mat != null:
-			mat.albedo_color = _fruit_green().lerp(ripe_col, color_t)
-			mat.emission = (ripe_col * 0.18) * color_t
-		m.visible = true
+		m.rotation.y = float(f.get("rotation_y", 0.0))
+		var size_t := clampf((prog - 0.06) / 0.94, 0.0, 1.0)
+		size_t = size_t * size_t * (3.0 - 2.0 * size_t)
+		m.scale = Vector3.ONE * (0.12 + 0.88 * size_t)
 
 
-func _make_fruit_mesh() -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	var sph := SphereMesh.new()
-	var fruit_r: float = float(_def.get("fruit_radius", 0.1))
-	sph.radius = fruit_r
-	sph.height = fruit_r * 2.0
-	mi.mesh = sph
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = _fruit_green()
-	mat.emission_enabled = true
-	mat.emission = Color(0, 0, 0)
-	mi.material_override = mat
-	return mi
+func _make_fruit_mesh() -> Node3D:
+	var root := Node3D.new()
+	root.name = "FruitVisual"
+	var fruit_scene: PackedScene = null
+	if plant_id == "Coconut":
+		fruit_scene = COCONUT_SCENE
+	elif plant_id == "Banana":
+		fruit_scene = BANANA_SCENE
+	if fruit_scene != null:
+		var model := fruit_scene.instantiate() as Node3D
+		if model != null:
+			root.add_child(model)
+			var bounds := _node_local_aabb(model)
+			var largest := maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z))
+			if largest > 0.001:
+				var target_size: float = float(_def.get("fruit_radius", 0.1)) * 2.0
+				var model_scale: float = target_size / largest
+				model.scale = Vector3.ONE * model_scale
+				model.position = -bounds.get_center() * model_scale
+				return root
+			model.queue_free()
+
+	# Safe visual fallback for custom plant definitions without a matching GLB.
+	var fallback := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	var fruit_radius: float = float(_def.get("fruit_radius", 0.1))
+	sphere.radius = fruit_radius
+	sphere.height = fruit_radius * 2.0
+	fallback.mesh = sphere
+	var material := StandardMaterial3D.new()
+	material.albedo_color = _def.get("fruit_color", Color(0.8, 0.6, 0.2))
+	material.roughness = 0.82
+	fallback.material_override = material
+	root.add_child(fallback)
+	return root
 
 
 # ============================================================
@@ -626,16 +794,28 @@ func _cancel_hold() -> void:
 func _pick_fruit(fruit) -> void:
 	if fruit == null:
 		return
+	var yield_item: String = str(_def.get("yield_item", ""))
+	var amount: int = randi_range(int(_def.get("yield_min", 1)), int(_def.get("yield_max", 1)))
+	if not yield_item.is_empty() and not Inventory.can_store_rewards({yield_item: amount}):
+		_notify_bag_full()
+		return
 	fruit["elapsed"] = 0.0
 	var m = fruit.get("mesh")
 	if m != null and is_instance_valid(m):
 		m.queue_free()
 	fruit["mesh"] = null
-	var yield_item: String = _def.get("yield_item", "")
-	var amt: int = randi_range(int(_def.get("yield_min", 1)), int(_def.get("yield_max", 1)))
-	if yield_item != "":
-		Inventory.add(yield_item, amt)
+	if not yield_item.is_empty():
+		Inventory.add(yield_item, amount)
+		var player := _get_player()
+		if player != null and player.has_method("play_world_sfx"):
+			player.call("play_world_sfx", HARVEST_SOUND, -9.0)
 	_spawn_chips(_def.get("fruit_color", Color(0.8, 0.6, 0.2)), 3, 0.25)
+
+
+func _notify_bag_full() -> void:
+	var player := _get_player()
+	if player != null and player.has_method("_hud_toast"):
+		player.call("_hud_toast", "BAG FULL  •  CLEAR SPACE BEFORE HARVEST")
 
 
 # ============================================================
@@ -643,6 +823,14 @@ func _pick_fruit(fruit) -> void:
 # ============================================================
 func _do_dig() -> void:
 	_cancel_hold()
+	_pending_dig_drop.clear()
+	var yield_item: String = str(_def.get("yield_item", ""))
+	if not yield_item.is_empty():
+		var amount := randi_range(int(_def.get("yield_min", 1)), int(_def.get("yield_max", 1)))
+		if not Inventory.can_store_rewards({yield_item: amount}):
+			_notify_bag_full()
+			return
+		_pending_dig_drop[yield_item] = amount
 	var tw := create_tween()
 	tw.tween_property(_container, "scale", Vector3.ONE * 0.04, 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
@@ -650,10 +838,8 @@ func _do_dig() -> void:
 
 
 func _finish_dig() -> void:
-	var yield_item: String = _def.get("yield_item", "")
-	var amt: int = randi_range(int(_def.get("yield_min", 1)), int(_def.get("yield_max", 1)))
-	if yield_item != "":
-		Inventory.add(yield_item, amt)
+	_deliver_rewards(_pending_dig_drop)
+	_pending_dig_drop.clear()
 	_spawn_chips(Color(0.32, 0.22, 0.14), 4, 0.35)
 	var planter := get_parent().get_parent() as Planter
 	if planter != null and planter.has_method("clear_plant"):
@@ -668,6 +854,9 @@ func _finish_dig() -> void:
 # ============================================================
 func _do_chop_hit() -> void:
 	_health -= 1
+	var player := _get_player()
+	if player != null and player.has_method("play_world_sfx"):
+		player.call("play_world_sfx", CHOP_SOUND, -9.0)
 	var trunk_col: Color = _def.get("trunk_color", Color(0.5, 0.36, 0.2))
 	_spawn_chips(trunk_col.lightened(0.15), 4, 0.3)
 	# Small trunk reaction so the hit visibly registers (no camera shake).
@@ -681,6 +870,12 @@ func _do_chop_hit() -> void:
 
 func _start_fall() -> void:
 	_cancel_hold()
+	_pending_fell_drops = _roll_fell_drops()
+	if not Inventory.can_store_rewards(_pending_fell_drops):
+		_pending_fell_drops.clear()
+		_health = 1
+		_notify_bag_full()
+		return
 	_stage = Stage.FALLING
 	# Fall away from the player.
 	var p := _get_player()
@@ -703,16 +898,53 @@ func _apply_fall(a: float) -> void:
 	_visual.rotate(_fell_axis, a)
 
 
-func _finish_fell() -> void:
-	# Resources drop (configurable per plant in PlantDB.fell_drops).
+func _roll_fell_drops() -> Dictionary:
+	var rewards: Dictionary = {}
 	var drops: Array = _def.get("fell_drops", [])
-	for d in drops:
-		if not (d is Array) or d.size() < 3:
+	for drop in drops:
+		if not (drop is Array) or drop.size() < 3:
 			continue
-		var item_name: String = str(d[0])
-		var amt: int = randi_range(int(d[1]), int(d[2]))
-		if amt > 0:
-			Inventory.add(item_name, amt)
+		var item_name := str(drop[0])
+		var amount := randi_range(int(drop[1]), int(drop[2]))
+		if amount > 0:
+			rewards[item_name] = int(rewards.get(item_name, 0)) + amount
+	return rewards
+
+
+func _deliver_rewards(rewards: Dictionary) -> void:
+	for item_name in rewards:
+		var amount := maxi(0, int(rewards[item_name]))
+		if amount <= 0:
+			continue
+		var overflow := Inventory.add(str(item_name), amount)
+		if overflow > 0:
+			_spawn_reward_pickup(str(item_name), overflow)
+
+
+func _spawn_reward_pickup(item_name: String, amount: int) -> void:
+	if amount <= 0:
+		return
+	var pickup := ITEM_PICKUP_SCENE.instantiate()
+	if pickup == null or not (pickup is Node3D):
+		if pickup != null:
+			pickup.free()
+		return
+	pickup.set("item_name", item_name)
+	pickup.set("amount", amount)
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		scene_root = get_parent()
+	if scene_root == null:
+		pickup.free()
+		return
+	scene_root.add_child(pickup)
+	var offset := Vector3(randf_range(-0.3, 0.3), 0.55, randf_range(-0.3, 0.3))
+	(pickup as Node3D).global_position = global_position + offset
+
+
+func _finish_fell() -> void:
+	_deliver_rewards(_pending_fell_drops)
+	_pending_fell_drops.clear()
 	_spawn_chips(_def.get("trunk_color", Color(0.5, 0.36, 0.2)).darkened(0.1), 6, 0.5)
 	_stage = Stage.STUMP
 	for c in _container.get_children():

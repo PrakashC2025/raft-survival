@@ -51,6 +51,7 @@ const NEARBY_PROBE_RADII := [2.4, 5.0, 8.0]
 const RING_SPAWN_ABOVE_CAMERA := 6.0  ## ring spawns this high: drops fall onto/outside the roof, never under it
 var _covered := false
 var _cover_timer := 0.0
+var _cover_check_interval := COVER_CHECK_INTERVAL
 var _cover_ring_radius := 4.0
 var _last_ring_radius := -1.0  ## last radius actually pushed into the material
 ## Rain box top (emitter-local Y). Lowered below nearby roof undersides when
@@ -115,6 +116,14 @@ var _orig_wave_height: float = -1.0
 
 func _ready() -> void:
 	add_to_group("rain_system")
+	# Rain is an occasional weather event, so keep its particle and ray-query
+	# budget conservative on mobile without removing the effect.
+	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+		particle_amount = mini(particle_amount, 420)
+		splash_pool_size = mini(splash_pool_size, 8)
+		splash_particle_count = mini(splash_particle_count, 5)
+		splashes_per_second = minf(splashes_per_second, 10.0)
+		_cover_check_interval = 0.4
 	_find_refs()
 	_build_particles()
 	_build_splash_pool()
@@ -371,7 +380,7 @@ func _update_cover_state(delta: float) -> void:
 	_cover_timer -= delta
 	if _cover_timer > 0.0:
 		return
-	_cover_timer = COVER_CHECK_INTERVAL
+	_cover_timer = _cover_check_interval
 	if not _is_raining:
 		# No rain: skip the raycasts entirely, and make sure the emitter is
 		# back in full-box mode for the next downpour.
@@ -473,7 +482,10 @@ func _apply_cover_mode() -> void:
 		_rain_process_mat.emission_ring_height = 0.4
 		_rain_process_mat.emission_ring_radius = _cover_ring_radius
 		_rain_process_mat.emission_ring_inner_radius = _cover_ring_radius + 2.8
-		_particles.amount = mini(particle_amount + 500, particle_amount * 2)
+		var ring_particle_amount: int = mini(particle_amount + 500, particle_amount * 2)
+		if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+			ring_particle_amount = particle_amount
+		_particles.amount = ring_particle_amount
 		_particles.position = Vector3(0.0, RING_SPAWN_ABOVE_CAMERA, 0.0)
 	else:
 		# Outdoors: full box around the camera, with the top capped just below
@@ -552,12 +564,16 @@ func _update_intensity(delta: float) -> void:
 # "Structures") get a brighter, faster burst; open water gets a softer one.
 # ============================================================
 func _process_splashes(delta: float) -> void:
-	if not splash_enabled or not _is_raining or _intensity <= 0.05 or _camera == null:
+	if not splash_enabled or _splash_pool.is_empty() or not _is_raining \
+			or _intensity <= 0.05 or _camera == null:
 		return
 	if _camera_submerged:
 		return  # no splashes while the camera is underwater
-	_splash_accum += delta * splashes_per_second * _intensity
-	while _splash_accum >= 1.0:
+	# Never catch up a backlog of raycasts after a slow frame or app resume.
+	# A single splash per rendered frame is visually enough and puts a hard cap
+	# on the worst-case work this cosmetic effect can trigger.
+	_splash_accum = minf(_splash_accum + delta * splashes_per_second * _intensity, 1.0)
+	if _splash_accum >= 1.0:
 		_splash_accum -= 1.0
 		_spawn_one_splash()
 
@@ -603,6 +619,8 @@ func _spawn_one_splash() -> void:
 
 
 func _fire_splash(pos: Vector3, on_structure: bool) -> void:
+	if _splash_pool.is_empty():
+		return
 	var p: GPUParticles3D = _splash_pool[_splash_index]
 	_splash_index = (_splash_index + 1) % _splash_pool.size()
 	p.global_position = pos + Vector3(0, 0.02, 0)

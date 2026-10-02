@@ -699,7 +699,7 @@ const HELP_CONTENT := "[center][b]GAME CONTROLS[/b][/center]\n\n" \
 	+ "[b]FARMING QUICK START[/b]\n1) Build mode → NEXT to a planter → PLACE on your deck. 2) Exit build mode. 3) Tap a Seed in the hotbar (Potato / Coconut / Banana). 4) Aim at the empty planter and tap USE to plant. 5) Watch it grow SEED → SPROUT → GROWING → MATURE. 6) Tap USE on a ripe fruit (only that fruit is picked). Hold USE to dig potatoes or chop a tree — the tree falls away from you, drops Wood + fruit, and leaves a stump. Hold USE on the stump to clear it and replant.\n\n" \
 	+ "[b]ROPE[/b]\nROPE button = hold to charge, release to throw the hook. BACK button = pull it back.\n\n" \
 	+ "[b]BAG[/b]\nTap the BAG button to open your 30-slot inventory; drag items to move/swap/merge them. Tap a hotbar slot to select that item.\n\n" \
-	+ "[b]KEYBOARD (PC)[/b]\nWASD move · Space jump · C dive · E interact · B build · Tab piece · P place · R/Y rotate · X remove · Q rope · F3 build overlay · F5-F8 dev time"
+	+ "[b]KEYBOARD (PC)[/b]\nWASD move · Space jump · Ctrl dive · E use · C craft · M map · B build · Tab next piece · P place · R/Y rotate · Delete remove · Q rope · F3 build overlay · F5 quick-save"
 
 
 func _toggle_help() -> void:

@@ -5,11 +5,15 @@ extends CharacterBody3D
 # ============================================================
 const WALK_SPEED := 3.0
 const SPRINT_SPEED := 5.0
+# Measured Quaternius men's gait cycle strides, scaled for this near-1x model.
+const SURVIVOR_WALK_STRIDE_M := 1.84
+const SURVIVOR_WALK_CYCLE_SECONDS := 1.33
+const SURVIVOR_RUN_STRIDE_M := 2.37
+const SURVIVOR_RUN_CYCLE_SECONDS := 0.79
 const SWIM_SPEED := 2.0
 const SWIM_SPRINT_SPEED := 3.5
 const JUMP_VELOCITY := 10.0
 const WATER_JUMP_VELOCITY := 12.0
-const DIVE_VELOCITY := -6.0
 const GRAVITY := 9.8
 const MOUSE_SENSITIVITY := 0.003
 # Max riser height the player can auto-step onto while walking (stairs/curbs).
@@ -35,6 +39,14 @@ const MAX_SWIM_DEPTH := 30.0
 const AIM_DISTANCE := 60.0
 const PICKUP_RANGE := 5.0
 const NEARBY_PICKUP_RANGE := 2.0
+const FOOTSTEP_WOOD := [
+	preload("res://audio/footstep_wood01.ogg"),
+	preload("res://audio/footstep_wood02.ogg"),
+	preload("res://audio/footstep_wood03.ogg"),
+]
+const FOOTSTEP_ISLAND := [preload("res://audio/footstep_gravel.ogg")]
+const PICKUP_SOUND: AudioStream = preload("res://audio/pickup_rustle.ogg")
+const ITEM_PICKUP_SCENE: PackedScene = preload("res://scenes/food_pickup.tscn")
 # Climb out of the ocean: horizontal reach to the deck edge + how far onto
 # the deck the player lands (kept small so the board feels natural).
 const CLIMB_OUT_RANGE := 2.2
@@ -110,10 +122,24 @@ var _hand_item: Node3D = null
 var _hand_time := 0.0       # accumulated seconds, drives held-item sway
 var _fist_node: Node3D = null
 var _step_climb := 0.0  # current smooth auto-climb progress (stairs/curbs)
+var _footstep_audio: AudioStreamPlayer3D = null
+var _interaction_audio: AudioStreamPlayer3D = null
+var _footstep_timer: float = 0.0
+var _fishing_time_remaining := 0.0
+var _fishing_cooldown := 0.0
+var survival_day := 1
+var raft_upgrade_tier := 0
+var life_vest_equipped := false
+var _life_vest_visual: MeshInstance3D = null
+var _survivor_animator: AnimationPlayer = null
+var _survivor_animation: String = ""
 var ghost: Node3D = null
 var build_rotation: float = 0.0
 var build_rotation_x: float = 0.0
 var build_valid: bool = false
+var _mobile_build_preview := false
+var _build_preview_timer := 0.0
+const MOBILE_BUILD_PREVIEW_INTERVAL := 1.0 / 30.0
 var _ghost_valid_mat: StandardMaterial3D = null
 var _ghost_invalid_mat: StandardMaterial3D = null
 
@@ -172,7 +198,10 @@ func _get_ocean() -> Ocean:
 # INIT
 # ============================================================
 func _ready() -> void:
+	_mobile_build_preview = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")
 	add_to_group("player")
+	_setup_audio()
+	_setup_survivor_materials()
 	rope_system.player = self
 	rope_system.camera = camera
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -183,9 +212,27 @@ func _ready() -> void:
 			var scene = load(scene_path) as PackedScene
 			if scene:
 				build_pieces.append(scene)
-	Inventory.infinite = true
-	# Continue (menu loaded a save) keeps whatever was stored; New Game (no
-	# save, empty bag) starts with Rope in hotbar slot 1 per the mobile spec.
+	# Real progression now uses gathered materials; infinite mode remains a
+	# manual Inventory debug toggle and is never enabled by a normal game.
+	Inventory.infinite = false
+	if Inventory.loaded_meta.is_empty():
+		Stats.reset()
+	else:
+		Stats.load_state(Inventory.loaded_meta)
+		# Heal legacy saves that recorded a death before the death-screen recovery
+		# path existed; continuing should never strand the player at zero health.
+		if Stats.health <= 0.0:
+			Stats.reset()
+	if not Stats.player_died.is_connected(_on_player_died):
+		Stats.player_died.connect(_on_player_died)
+	raft_upgrade_tier = clampi(int(Inventory.loaded_meta.get("raft_upgrade_tier", 0)), 0, 2)
+	life_vest_equipped = bool(Inventory.loaded_meta.get("life_vest_equipped", false))
+	# The raft is a sibling and may not have joined its group yet during this
+	# node's _ready(); defer until the whole scene has entered the tree.
+	call_deferred("_restore_raft_upgrade_state")
+	if life_vest_equipped:
+		_apply_life_vest_visual()
+	# New Game starts with Rope and starter seeds; Continue preserves inventory.
 	_ensure_starter_seeds()
 	_create_hud()
 	active_slot_index = int(Inventory.loaded_meta.get("active_slot", 0))
@@ -194,12 +241,29 @@ func _ready() -> void:
 	Inventory.changed.connect(_refresh_active_item)
 	Inventory.changed.connect(_queue_save)
 	floor_snap_length = 0.18
-	# Resume day time from the save (Continue) — otherwise leave the scene's
-	# configured start time (noon).
-	if Inventory.loaded_meta.has("game_time"):
-		var sky3d: Node = get_parent().get_node_or_null("Sky3D")
-		if sky3d != null:
-			sky3d.set("current_time", float(Inventory.loaded_meta.get("game_time", 12.0)))
+	# Restore the clock, calendar date, and monotonic survival day. A fresh
+	# game starts on Day 1 instead of inheriting the scene's editor test date.
+	var sky3d: Node = get_parent().get_node_or_null("Sky3D")
+	if sky3d != null:
+		if Inventory.loaded_meta.has("game_time"):
+			sky3d.set("current_time", float(Inventory.loaded_meta["game_time"]))
+		var time_of_day := sky3d.get_node_or_null("TimeOfDay")
+		if time_of_day != null:
+			if Inventory.loaded_meta.has("calendar_year"):
+				time_of_day.set("year", int(Inventory.loaded_meta["calendar_year"]))
+			if Inventory.loaded_meta.has("calendar_month"):
+				time_of_day.set("month", int(Inventory.loaded_meta["calendar_month"]))
+			if Inventory.loaded_meta.has("calendar_day"):
+				time_of_day.set("day", int(Inventory.loaded_meta["calendar_day"]))
+			else:
+				time_of_day.set("year", int(Inventory.loaded_meta.get("calendar_year", 2025)))
+				time_of_day.set("month", int(Inventory.loaded_meta.get("calendar_month", 1)))
+				time_of_day.set("day", int(Inventory.loaded_meta.get("game_day", 1)))
+			survival_day = maxi(1, int(Inventory.loaded_meta.get("game_day", 1)))
+			var day_changed_callback := Callable(self, "_on_sky_day_changed")
+			if time_of_day.has_signal("day_changed") \
+					and not time_of_day.is_connected("day_changed", day_changed_callback):
+				time_of_day.connect("day_changed", day_changed_callback)
 	_update_hand_item()
 	# Rebuild the saved structure after a Continue (New Game has an empty
 	# meta so this is a no-op). Deferred so the raft is fully in the tree.
@@ -211,12 +275,168 @@ func _ready() -> void:
 			if scene:
 				_validate_build_scene(scene, BUILD_RECIPE_NAMES[i])
 
+func get_survival_day() -> int:
+	return maxi(1, survival_day)
+
+
+func _on_sky_day_changed(_calendar_day: int) -> void:
+	survival_day += 1
+	_queue_save()
+
+
+func _restore_raft_upgrade_state() -> void:
+	await get_tree().process_frame
+	var saved_raft := _get_raft_node()
+	if saved_raft != null and saved_raft.has_method("set_upgrade_tier"):
+		saved_raft.call("set_upgrade_tier", raft_upgrade_tier)
+
+
+func _setup_audio() -> void:
+	_footstep_audio = AudioStreamPlayer3D.new()
+	_footstep_audio.name = "FootstepAudio"
+	_footstep_audio.volume_db = -8.0
+	_footstep_audio.unit_size = 5.0
+	_footstep_audio.max_distance = 28.0
+	add_child(_footstep_audio)
+
+	_interaction_audio = AudioStreamPlayer3D.new()
+	_interaction_audio.name = "InteractionAudio"
+	_interaction_audio.volume_db = -7.0
+	_interaction_audio.unit_size = 5.0
+	_interaction_audio.max_distance = 28.0
+	add_child(_interaction_audio)
+
+
+func _setup_survivor_materials() -> void:
+	var survivor := _body_visual.get_node_or_null("BeachSurvivor") as Node3D
+	if survivor == null:
+		return
+	for candidate in survivor.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := candidate as MeshInstance3D
+		if mesh_instance == null or mesh_instance.mesh == null:
+			continue
+		for surface in range(mesh_instance.mesh.get_surface_count()):
+			var source := mesh_instance.get_active_material(surface) as BaseMaterial3D
+			var material: BaseMaterial3D
+			if source != null:
+				material = source.duplicate() as BaseMaterial3D
+			else:
+				material = StandardMaterial3D.new()
+			material.vertex_color_use_as_albedo = true
+			material.vertex_color_is_srgb = false
+			material.metallic = 0.0
+			material.roughness = 0.88
+			mesh_instance.set_surface_override_material(surface, material)
+	_setup_survivor_animations(survivor)
+
+
+func _setup_survivor_animations(survivor: Node3D) -> void:
+	for candidate in survivor.find_children("*", "AnimationPlayer", true, false):
+		var animator := candidate as AnimationPlayer
+		if animator == null:
+			continue
+		var idle_clip := _find_survivor_clip(animator, "Idle")
+		var walk_clip := _find_survivor_clip(animator, "Walk")
+		var run_clip := _find_survivor_clip(animator, "Run")
+		if idle_clip.is_empty() or walk_clip.is_empty() or run_clip.is_empty():
+			continue
+		_survivor_animator = animator
+		for clip_name in [idle_clip, walk_clip, run_clip]:
+			var animation := animator.get_animation(clip_name)
+			if animation != null:
+				animation.loop_mode = Animation.LOOP_LINEAR
+		_play_survivor_animation("Idle")
+		return
+
+
+func _find_survivor_clip(animator: AnimationPlayer, requested_name: String) -> String:
+	for animation_name in animator.get_animation_list():
+		var clip_name := str(animation_name)
+		if clip_name.get_file().to_lower() == requested_name.to_lower():
+			return clip_name
+	return ""
+
+
+func _play_survivor_animation(requested_name: String) -> void:
+	if _survivor_animator == null:
+		return
+	var clip_name := _find_survivor_clip(_survivor_animator, requested_name)
+	if clip_name.is_empty() or clip_name == _survivor_animation:
+		return
+	_survivor_animator.play(clip_name, 0.15)
+	_survivor_animation = clip_name
+
+
+func _update_survivor_animation(sprinting: bool) -> void:
+	if _survivor_animator == null or _body_visual == null or not _body_visual.visible:
+		return
+	var real_velocity := get_real_velocity()
+	var horizontal_speed := Vector2(real_velocity.x, real_velocity.z).length()
+	var animation_name := "Idle"
+	if is_on_floor() and not is_swimming and horizontal_speed >= 0.65:
+		animation_name = "Run" if sprinting else "Walk"
+		var stride_m := SURVIVOR_RUN_STRIDE_M if sprinting else SURVIVOR_WALK_STRIDE_M
+		var cycle_seconds := SURVIVOR_RUN_CYCLE_SECONDS if sprinting else SURVIVOR_WALK_CYCLE_SECONDS
+		var cycle_speed := horizontal_speed / (stride_m / cycle_seconds)
+		# Pace the source gait to the player's actual movement so the feet don't
+		# slide at the game's 3 m/s walk and 5 m/s sprint speeds.
+		_survivor_animator.speed_scale = clampf(cycle_speed, 0.6, 2.5)
+	else:
+		_survivor_animator.speed_scale = 1.0
+	_play_survivor_animation(animation_name)
+
+
+## Reusable one-shot for nearby interactions (pickup, chopping, harvest).
+func play_world_sfx(sound: AudioStream, level_db: float = -7.0) -> void:
+	if sound == null or _interaction_audio == null:
+		return
+	_interaction_audio.stream = sound
+	_interaction_audio.volume_db = level_db
+	_interaction_audio.pitch_scale = randf_range(0.96, 1.04)
+	_interaction_audio.play()
+
+
+func _island_underfoot() -> bool:
+	for collision_index in range(get_slide_collision_count()):
+		var collision := get_slide_collision(collision_index)
+		if collision.get_normal().dot(Vector3.UP) < 0.55:
+			continue
+		var collider := collision.get_collider() as Node
+		while collider != null:
+			if collider.is_in_group("island"):
+				return true
+			collider = collider.get_parent()
+	return false
+
+
+func _update_footsteps(delta: float, sprinting: bool) -> void:
+	if _footstep_audio == null or is_swimming or not is_on_floor():
+		_footstep_timer = 0.0
+		return
+	var real_velocity := get_real_velocity()
+	if Vector2(real_velocity.x, real_velocity.z).length() < 0.65:
+		_footstep_timer = 0.0
+		return
+	_footstep_timer += delta
+	var interval := 0.34 if sprinting else 0.48
+	if _footstep_timer < interval:
+		return
+	_footstep_timer = 0.0
+	var sounds: Array = FOOTSTEP_ISLAND if _island_underfoot() else FOOTSTEP_WOOD
+	_footstep_audio.stream = sounds[randi_range(0, sounds.size() - 1)]
+	_footstep_audio.pitch_scale = randf_range(0.94, 1.06)
+	_footstep_audio.play()
+
+
 # ============================================================
 # MOUSE LOOK
 # ============================================================
-func _unhandled_input(event: InputEvent) -> void:
+func _handle_camera_and_hotbar_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		add_look_input(event.relative)
+	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed \
+			and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	if event.is_action_pressed("ui_cancel"):
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	# Number-row keys 1..6 select a hotbar slot (slot 1 = Potato Seed etc.
@@ -316,6 +536,8 @@ func _physics_process(delta: float) -> void:
 		_try_step_up()
 	move_and_slide()
 	_update_swimming_state(water_y, has_ocean)
+	_update_footsteps(delta, sprinting)
+	_update_survivor_animation(sprinting)
 	# Held-item sway: accumulate time and pose the hand visual (idle + walk).
 	_hand_time += delta
 	_update_hand_sway(delta)
@@ -349,8 +571,6 @@ func _update_land(delta: float, direction: Vector3, sprinting: bool) -> void:
 	velocity.y -= GRAVITY * delta
 	if is_on_floor() and Input.is_action_just_pressed("jump"):
 		velocity.y = JUMP_VELOCITY
-	if is_on_floor() and Input.is_action_just_pressed("move_down"):
-		velocity.y = DIVE_VELOCITY
 
 func _update_swimming(delta: float, direction: Vector3, water_y: float, sprinting: bool) -> void:
 	var spd := SWIM_SPRINT_SPEED if sprinting else SWIM_SPEED
@@ -432,17 +652,18 @@ func _handle_pickup() -> void:
 	# --- Planting: use a seed item on an aimed, empty planter ---
 	if aim_valid and aim_collider != null:
 		var planter := _find_planter_ancestor(aim_collider)
-		if planter != null and not planter.has_plant():
-			# Exact selected seed takes priority; otherwise auto-pick the first
-			# seed that fits this planter so aiming + E just works.
-			var seed_name: String = ""
-			if active_item.ends_with(" Seed") and Inventory.has(active_item, 1):
-				seed_name = active_item
-			else:
-				seed_name = _find_fitting_seed(planter)
-			if seed_name != "" and planter.plant_seed(seed_name.trim_suffix(" Seed")):
-				Inventory.remove(seed_name, 1)
-				return
+		if planter != null:
+			if not planter.has_plant():
+				# Exact selected seed takes priority; otherwise auto-pick the first
+				# seed that fits this planter so aiming + E just works.
+				var seed_name: String = ""
+				if active_item.ends_with(" Seed") and Inventory.has(active_item, 1):
+					seed_name = active_item
+				else:
+					seed_name = _find_fitting_seed(planter)
+				if seed_name != "" and planter.plant_seed(seed_name.trim_suffix(" Seed")):
+					Inventory.remove(seed_name, 1)
+			return
 	if aim_valid and aim_collider != null:
 		if aim_collider.is_in_group("debris") and aim_distance <= PICKUP_RANGE:
 			_collect_debris(aim_collider)
@@ -461,6 +682,200 @@ func _handle_pickup() -> void:
 				if global_position.distance_to(d.global_position) <= NEARBY_PICKUP_RANGE:
 					_collect_debris(d)
 					return
+
+	_handle_selected_item_use()
+
+
+func _handle_selected_item_use() -> void:
+	match active_item:
+		"Coconut":
+			if Inventory.has("Coconut", 1):
+				Inventory.remove("Coconut", 1)
+				Stats.eat(12.0)
+				Stats.drink(28.0)
+				_hud_toast("COCONUT  +HUNGER  +THIRST")
+			return
+		"Banana":
+			if Inventory.has("Banana", 1):
+				Inventory.remove("Banana", 1)
+				Stats.eat(30.0)
+				_hud_toast("BANANA  +HUNGER")
+			return
+		"Fish":
+			if Inventory.has("Fish", 1):
+				Inventory.remove("Fish", 1)
+				Stats.eat(24.0)
+				_hud_toast("RAW FISH  +HUNGER")
+			return
+		"Spear":
+			var shark := _get_aimed_shark()
+			if shark != null and aim_distance <= 5.2 and shark.has_method("take_damage"):
+				shark.call("take_damage", 38.0, self)
+				play_world_sfx(PICKUP_SOUND, -10.0)
+			return
+		"Fishing Rod":
+			if _fishing_time_remaining > 0.0:
+				return
+			if _fishing_cooldown > 0.0:
+				_hud_toast("FISHING LINE IS RESTING")
+				return
+			if is_swimming:
+				_hud_toast("CAST FROM THE RAFT OR SHORE")
+				return
+			_fishing_time_remaining = 2.6
+			_fishing_cooldown = 7.5
+			_hud_toast("LINE IN THE WATER...")
+			return
+		"Sail Kit":
+			_install_raft_upgrade(1)
+			return
+		"Motor Kit":
+			_install_raft_upgrade(2)
+			return
+		"Life Vest":
+			if life_vest_equipped:
+				_hud_toast("LIFE VEST ALREADY EQUIPPED")
+				return
+			if Inventory.has("Life Vest", 1):
+				Inventory.remove("Life Vest", 1)
+				life_vest_equipped = true
+				_apply_life_vest_visual()
+				_queue_save()
+				_hud_toast("LIFE VEST EQUIPPED  •  DAMAGE REDUCED")
+			return
+
+
+func _install_raft_upgrade(tier: int) -> void:
+	var raft := _get_raft_node()
+	if raft == null or global_position.distance_to(raft.global_position) > 9.0:
+		_hud_toast("STAND ON YOUR RAFT TO INSTALL")
+		return
+	if tier <= raft_upgrade_tier:
+		_hud_toast("THAT RAFT UPGRADE IS ALREADY INSTALLED")
+		return
+	var item_name := "Sail Kit" if tier == 1 else "Motor Kit"
+	if not Inventory.has(item_name, 1):
+		return
+	Inventory.remove(item_name, 1)
+	raft_upgrade_tier = maxi(raft_upgrade_tier, tier)
+	if raft.has_method("set_upgrade_tier"):
+		raft.call("set_upgrade_tier", raft_upgrade_tier)
+	_queue_save()
+	_hud_toast("SAIL INSTALLED  •  MAP TO PLOT A COURSE" if tier == 1 else "OUTBOARD MOTOR INSTALLED  •  SPEED UPGRADED")
+
+
+func _tick_fishing(delta: float) -> void:
+	_fishing_cooldown = maxf(0.0, _fishing_cooldown - delta)
+	if _fishing_time_remaining <= 0.0:
+		return
+	_fishing_time_remaining = maxf(0.0, _fishing_time_remaining - delta)
+	if _fishing_time_remaining <= 0.0:
+		var overflow := Inventory.add("Fish", 1)
+		if overflow > 0:
+			_spawn_item_pickup("Fish", overflow, global_position + Vector3(0.0, -0.55, -0.45))
+			_hud_toast("FISH CAUGHT  •  DROPPED NEARBY")
+		else:
+			_hud_toast("FISH CAUGHT")
+		play_world_sfx(PICKUP_SOUND, -11.0)
+
+
+func _spawn_item_pickup(item_name: String, amount: int, at: Vector3) -> void:
+	if amount <= 0:
+		return
+	var pickup := ITEM_PICKUP_SCENE.instantiate()
+	if pickup == null or not (pickup is Node3D):
+		if pickup != null:
+			pickup.free()
+		return
+	pickup.set("item_name", item_name)
+	pickup.set("amount", amount)
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		scene_root = get_parent()
+	if scene_root == null:
+		pickup.free()
+		return
+	scene_root.add_child(pickup)
+	(pickup as Node3D).global_position = at
+
+
+func _get_aimed_shark() -> Node3D:
+	if not aim_valid or aim_collider == null:
+		return null
+	var current: Node = aim_collider
+	for _step in range(5):
+		if current == null:
+			break
+		if current.is_in_group("shark"):
+			return current as Node3D
+		current = current.get_parent()
+	return null
+
+
+func _apply_life_vest_visual() -> void:
+	if not life_vest_equipped or _body_visual == null:
+		return
+	if _life_vest_visual != null and is_instance_valid(_life_vest_visual):
+		return
+	var vest_mesh := BoxMesh.new()
+	vest_mesh.size = Vector3(0.48, 0.34, 0.3)
+	_life_vest_visual = MeshInstance3D.new()
+	_life_vest_visual.name = "LifeVestVisual"
+	_life_vest_visual.mesh = vest_mesh
+	_life_vest_visual.position = Vector3(0.0, 0.08, -0.015)
+	var vest_material := StandardMaterial3D.new()
+	vest_material.albedo_color = Color(0.95, 0.34, 0.12)
+	vest_material.roughness = 0.8
+	_life_vest_visual.material_override = vest_material
+	_life_vest_visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_body_visual.add_child(_life_vest_visual)
+
+
+func take_shark_damage(amount: float) -> void:
+	var reduction := 0.38 if life_vest_equipped else 1.0
+	Stats.change_health(-amount * reduction)
+	_hud_toast("SHARK BITE  •  LIFE VEST ABSORBED IMPACT" if life_vest_equipped else "SHARK BITE  •  GET TO THE RAFT")
+
+
+func _on_player_died() -> void:
+	set_physics_process(false)
+	var hud: Node = get_node_or_null("CanvasLayer/SurvivalHUD")
+	if hud != null and hud.has_method("show_death"):
+		hud.call("show_death")
+	else:
+		_hud_toast("YOU DIED")
+
+
+func respawn_from_death() -> void:
+	var raft := _get_raft_node()
+	if raft != null:
+		global_position = raft.global_position + Vector3(0.0, 1.4, 0.0)
+	velocity = Vector3.ZERO
+	is_swimming = false
+	Stats.reset()
+	set_physics_process(true)
+	_queue_save()
+	_hud_toast("BACK ON THE RAFT")
+
+
+func request_course_to(island: Node3D) -> bool:
+	if island == null or not is_instance_valid(island):
+		_hud_toast("ISLAND NOT AVAILABLE")
+		return false
+	var raft := _get_raft_node()
+	if raft == null or not raft.has_method("set_course"):
+		_hud_toast("NO SAILING RAFT FOUND")
+		return false
+	if raft_upgrade_tier <= 0:
+		_hud_toast("CRAFT AND INSTALL A SAIL KIT FIRST")
+		return false
+	if bool(raft.call("set_course", island.global_position)):
+		_queue_save()
+		_hud_toast("COURSE SET  •  HOLD ON WHILE THE RAFT SAILS")
+		return true
+	_hud_toast("ISLAND IS ALREADY WITHIN REACH")
+	return false
+
 
 func _find_planter_ancestor(n: Node3D) -> Planter:
 	var cur: Node = n
@@ -493,72 +908,140 @@ func _find_fitting_seed(planter: Planter) -> String:
 	return ""
 
 func _collect_debris(debris: Node3D) -> void:
-	if debris.get("collected") == true:
+	if debris == null or not is_instance_valid(debris) or debris.get("collected") == true:
 		return
 	var item_name: String = str(debris.get("item_name"))
-	if item_name != "" and item_name != "null":
-		debris.set("collected", true)
-		Inventory.add(item_name)
-		debris.queue_free()
+	if item_name.is_empty() or item_name == "null":
+		return
+	# Keep the pickup in the world when the bag is full; a failed pickup must
+	# never delete resources or permanently consume a one-time island item.
+	var pickup_amount := 1
+	if "amount" in debris:
+		pickup_amount = maxi(1, int(debris.get("amount")))
+	var overflow := Inventory.add(item_name, pickup_amount)
+	if overflow > 0:
+		if overflow < pickup_amount and debris.has_method("set_pickup_amount"):
+			debris.call("set_pickup_amount", overflow)
+		return
+	debris.set("collected", true)
+	if debris.has_method("get_pickup_id"):
+		Inventory.mark_island_pickup_collected(str(debris.call("get_pickup_id")))
+	play_world_sfx(PICKUP_SOUND, -8.0)
+	debris.queue_free()
 
 # ============================================================
 # BUILD SYSTEM — PROCESS & INPUT
 # ============================================================
-func _process(_delta: float) -> void:
-	_tick_save(_delta)
+func _process(delta: float) -> void:
+	_tick_save(delta)
+	_tick_fishing(delta)
 	_update_hud()
+	_poll_gameplay_actions()
 	# Quick-save (F5) works in every mode — snapshots slot "quick".
 	if Input.is_action_just_pressed("quick_save"):
 		quick_save()
-	# --- PRIORITY 1: Edit Mode ---
-	if _editing != null:
-		if Input.is_action_just_pressed("place_build"):
-			_confirm_edit()
-			return
-		if Input.is_action_just_pressed("remove_build"):
-			_remove_editing()
-			return
-		if Input.is_action_just_pressed("build"):
-			_cancel_edit()
-			return
-		if Input.is_action_just_pressed("rotate_build"):
-			_rotate_build()
-		if Input.is_action_just_pressed("rotate_build_x"):
-			_rotate_build_x()
-		_update_edit_follow()
-		crosshair.set_state(crosshair.State.BUILD)
+	# Keep the placement ghost current even when the player is not generating
+	# input events. Mobile previews are throttled to 30 Hz to limit physics work.
+	if build_mode and ghost != null and is_instance_valid(ghost) and _editing == null:
+		if _mobile_build_preview:
+			_build_preview_timer += delta
+			if _build_preview_timer >= MOBILE_BUILD_PREVIEW_INTERVAL:
+				_build_preview_timer = 0.0
+				_update_build_preview()
+		else:
+			_update_build_preview()
+	else:
+		_build_preview_timer = 0.0
+
+
+## Poll edge-triggered gameplay actions here rather than relying on input-event
+## delivery. Mobile controls emulate actions with Input.action_press(), which
+## updates action state but does not send an unhandled InputEvent to this node.
+func _poll_gameplay_actions() -> void:
+	var hud: Node = get_node_or_null("CanvasLayer/SurvivalHUD")
+	if hud != null and hud.has_method("gameplay_input_blocked") \
+			and bool(hud.call("gameplay_input_blocked")):
 		return
-	# --- E double-click: pickup piece for editing (works in AND out of build mode) ---
+	if _editing != null:
+		_poll_edit_actions()
+		return
+	# E double-click: pickup a piece for editing (works in and out of build mode).
 	if Input.is_action_just_pressed("interact"):
 		_handle_double_click_edit()
-	# --- PRIORITY 2: Build Mode ---
+		if _editing != null:
+			_update_edit_follow()
+			crosshair.set_state(crosshair.State.BUILD)
+			return
 	if Input.is_action_just_pressed("build"):
 		_toggle_build()
 	if Input.is_action_just_pressed("cycle_build") and build_mode:
 		_cycle_build_piece()
-	if build_mode and ghost:
-		if Input.is_action_just_pressed("place_build"):
-			_try_build()
-		if Input.is_action_just_pressed("rotate_build"):
-			_rotate_build()
-		if Input.is_action_just_pressed("rotate_build_x"):
-			_rotate_build_x()
-		if Input.is_key_pressed(KEY_F3) and not _f3_held:
-			build_overlay = not build_overlay
-			if not build_overlay:
-				_clear_overlay_markers()
-		_f3_held = Input.is_key_pressed(KEY_F3)
-		crosshair.set_state(crosshair.State.BUILD)
-		_update_build_preview()
+	if build_mode:
+		_poll_build_mode_actions()
 		return
-	# --- PRIORITY 3: Normal gameplay ---
+	_f3_held = false
 	_handle_pickup()
-	if aim_valid and aim_collider != null and aim_collider.is_in_group("debris") and aim_distance <= PICKUP_RANGE:
+	var aimed_pickup := aim_valid and aim_collider != null \
+			and aim_collider.is_in_group("debris") and aim_distance <= PICKUP_RANGE
+	if aimed_pickup:
 		crosshair.set_state(crosshair.State.ITEM)
 	elif aim_valid and aim_collider != null and "toggle" in aim_collider:
 		crosshair.set_state(crosshair.State.ITEM)
 	else:
 		crosshair.set_state(crosshair.State.NONE)
+
+
+func _poll_edit_actions() -> void:
+	if Input.is_action_just_pressed("place_build"):
+		_update_edit_follow()
+		_confirm_edit()
+		return
+	if Input.is_action_just_pressed("remove_build"):
+		_remove_editing()
+		return
+	if Input.is_action_just_pressed("build"):
+		_cancel_edit()
+		return
+	if Input.is_action_just_pressed("rotate_build"):
+		_rotate_build()
+	if Input.is_action_just_pressed("rotate_build_x"):
+		_rotate_build_x()
+	_update_edit_follow()
+	crosshair.set_state(crosshair.State.BUILD)
+
+
+func _poll_build_mode_actions() -> void:
+	if Input.is_action_just_pressed("rotate_build"):
+		_rotate_build()
+	if Input.is_action_just_pressed("rotate_build_x"):
+		_rotate_build_x()
+	var f3_down := Input.is_key_pressed(KEY_F3)
+	if f3_down and not _f3_held:
+		build_overlay = not build_overlay
+		if not build_overlay:
+			_clear_overlay_markers()
+	_f3_held = f3_down
+	crosshair.set_state(crosshair.State.BUILD)
+	# Validate on the exact placement action so a stale preview cannot be used.
+	if Input.is_action_just_pressed("place_build"):
+		_update_build_preview()
+		_try_build()
+		_build_preview_timer = 0.0
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	_handle_camera_and_hotbar_input(event)
+	# The HUD normally handles map/crafting keys first; keep this fallback for
+	# scenes where the HUD is hidden or replaced.
+	var hud: Node = get_node_or_null("CanvasLayer/SurvivalHUD")
+	if event.is_action_pressed("toggle_map"):
+		if hud != null and hud.has_method("toggle_map"):
+			hud.call("toggle_map")
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("toggle_crafting"):
+		if hud != null and hud.has_method("toggle_crafting"):
+			hud.call("toggle_crafting")
+		get_viewport().set_input_as_handled()
 
 func _toggle_build() -> void:
 	if _editing != null:
@@ -641,23 +1124,16 @@ func select_piece_for_build(index: int) -> void:
 ## Mobile normal-mode hotbar tap: select inventory slot 0..5 as the active
 ## item (building pieces live in Build Mode and go through
 ## select_piece_for_build instead). Empty taps clear the selection.
-## Make sure the three starter seeds are usable on every load:
-##  - New game: Rope + seeds go straight into hotbar slots 0..3.
-##  - Older saves: seeds may be sitting in the bag, where they can never be
-##    "selected" — pull them into a free hotbar slot automatically so E/USE
-##    planting works without opening the bag panel.
+## New Game grants the starter Rope and seeds exactly once. Continue never
+## replenishes spent seeds; it only moves seeds the player already owns from
+## the bag to an empty hotbar slot for convenient planting.
 func _ensure_starter_seeds() -> void:
-	if Inventory.is_empty():
+	if Inventory.loaded_meta.is_empty() and Inventory.is_empty():
 		Inventory.place_at(0, "Rope", 1)
 		Inventory.place_at(1, "Potato Seed", 5)
 		Inventory.place_at(2, "Coconut Seed", 3)
 		Inventory.place_at(3, "Banana Seed", 3)
 		return
-	for seed in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
-		# Ensure the type exists at all (continue after a wipe / very old save).
-		if Inventory.total(seed) == 0:
-			Inventory.add(seed, 5 if seed == "Potato Seed" else 3)
-	# Move bag-only seeds up into a free hotbar slot.
 	for seed in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
 		var already_in_hotbar := false
 		for i in range(Inventory.HOTBAR_COUNT):
@@ -666,14 +1142,17 @@ func _ensure_starter_seeds() -> void:
 				break
 		if already_in_hotbar:
 			continue
-		for h in range(Inventory.HOTBAR_COUNT):
-			if not Inventory.slot_empty(h):
-				continue
-			for b in range(Inventory.BAG_START, Inventory.SLOT_COUNT):
-				if Inventory.slot_item(b) == seed:
-					Inventory.drop_into(b, h)
-					break
-			break
+		var seed_in_bag := -1
+		for b in range(Inventory.BAG_START, Inventory.SLOT_COUNT):
+			if Inventory.slot_item(b) == seed:
+				seed_in_bag = b
+				break
+		if seed_in_bag < 0:
+			continue
+		for hotbar_slot in range(Inventory.HOTBAR_COUNT):
+			if Inventory.slot_empty(hotbar_slot):
+				Inventory.drop_into(seed_in_bag, hotbar_slot)
+				break
 
 
 func select_hotbar_slot(index: int) -> void:
@@ -700,9 +1179,25 @@ func _queue_save() -> void:
 ## and write it to the given slot ("main" autosave or "quick" quick-save).
 func _write_save(slot: String) -> void:
 	var meta := {"active_slot": active_slot_index}
+	var stat_state: Dictionary = Stats.save_state()
+	# Quitting from the death screen must not write a zero-health Continue save.
+	if float(stat_state.get("health", 100.0)) <= 0.0:
+		stat_state["health"] = 60.0
+		stat_state["hunger"] = 60.0
+		stat_state["thirst"] = 60.0
+	for stat_name in stat_state:
+		meta[stat_name] = stat_state[stat_name]
+	meta["raft_upgrade_tier"] = raft_upgrade_tier
+	meta["life_vest_equipped"] = life_vest_equipped
 	var sky3d: Node = get_parent().get_node_or_null("Sky3D")
 	if sky3d != null and sky3d.get("current_time") != null:
 		meta["game_time"] = float(sky3d.get("current_time"))
+		var time_of_day := sky3d.get_node_or_null("TimeOfDay")
+		if time_of_day != null:
+			meta["game_day"] = survival_day
+			meta["calendar_day"] = int(time_of_day.get("day"))
+			meta["calendar_month"] = int(time_of_day.get("month"))
+			meta["calendar_year"] = int(time_of_day.get("year"))
 	# The built structure lives under the raft's BuiltPieces — without this the
 	# save file holds only inventory and Continue returns an empty raft.
 	meta["built"] = _serialize_built_pieces()
@@ -755,7 +1250,7 @@ func _serialize_built_pieces() -> Array:
 			continue
 		var t := (piece as Node3D).transform
 		var b := t.basis
-		out.append({
+		var entry := {
 			"t": pname,
 			"x": [
 				b.x.x, b.x.y, b.x.z,
@@ -763,7 +1258,12 @@ func _serialize_built_pieces() -> Array:
 				b.z.x, b.z.y, b.z.z,
 				t.origin.x, t.origin.y, t.origin.z,
 			],
-		})
+		}
+		if piece is Planter:
+			var plant_state: Dictionary = (piece as Planter).save_plant_state()
+			if not plant_state.is_empty():
+				entry["plant"] = plant_state
+		out.append(entry)
 	return out
 
 
@@ -811,6 +1311,8 @@ func _restore_built_pieces() -> void:
 		container.add_child(piece)
 		for c in cols:
 			(c as CollisionShape3D).set_deferred("disabled", false)
+		if piece is Planter and entry.has("plant") and entry["plant"] is Dictionary:
+			(piece as Planter).restore_plant_state(entry["plant"])
 		piece.add_to_group("build_surface")
 		restored.append(piece)
 		# Grid occupancy (foundations are grid-registered; walls/doors/etc are
@@ -881,6 +1383,7 @@ func _update_hand_item() -> void:
 		return
 	# Each item is composed from primitives placed in a NATURAL HAND POSE around
 	# the fist (offsets below are fist-local: +X right, +Y up, -Z forward).
+	var along_forward := Basis(Vector3.RIGHT, PI / 2.0)
 	match active_item:
 		"Rope":
 			var coil := _hand_mat(Color(0.78, 0.6, 0.35))
@@ -964,8 +1467,100 @@ func _update_hand_item() -> void:
 			bw.height = 0.03
 			_hand_part(bw, band, Transform3D(Basis.IDENTITY, Vector3(0, -0.2, -0.22)))
 			_hand_part(bw, band, Transform3D(Basis.IDENTITY, Vector3(0, -0.08, -0.22)))
+		"Spear":
+			var spear_wood := _hand_mat(Color(0.55, 0.36, 0.18), 0.84)
+			var spear_haft := CylinderMesh.new()
+			spear_haft.top_radius = 0.025
+			spear_haft.bottom_radius = 0.032
+			spear_haft.height = 0.78
+			_hand_part(spear_haft, spear_wood, Transform3D(along_forward, Vector3(0.0, -0.02, -0.35)))
+			var spear_tip := ConeMesh.new()
+			spear_tip.top_radius = 0.0
+			spear_tip.bottom_radius = 0.08
+			spear_tip.height = 0.22
+			spear_tip.radial_segments = 5
+			_hand_part(spear_tip, _hand_mat(Color(0.7, 0.73, 0.76), 0.3, 0.72),
+					Transform3D(along_forward, Vector3(0.0, 0.0, -0.82)))
+		"Fishing Rod":
+			var rod_mat := _hand_mat(Color(0.43, 0.3, 0.16), 0.8)
+			var rod_mesh := CylinderMesh.new()
+			rod_mesh.top_radius = 0.022
+			rod_mesh.bottom_radius = 0.034
+			rod_mesh.height = 0.8
+			_hand_part(rod_mesh, rod_mat, Transform3D(along_forward, Vector3(0.0, 0.02, -0.34)))
+			var reel := CylinderMesh.new()
+			reel.top_radius = 0.075
+			reel.bottom_radius = 0.075
+			reel.height = 0.06
+			_hand_part(reel, _hand_mat(Color(0.62, 0.66, 0.67), 0.42, 0.5), Transform3D(Basis.IDENTITY, Vector3(0.06, -0.02, -0.28)))
+		"Sail Kit":
+			var kit_pole := CylinderMesh.new()
+			kit_pole.top_radius = 0.025
+			kit_pole.bottom_radius = 0.025
+			kit_pole.height = 0.58
+			_hand_part(kit_pole, _hand_mat(Color(0.5, 0.32, 0.17)), Transform3D(along_forward, Vector3(0.0, 0.02, -0.3)))
+			var cloth := QuadMesh.new()
+			cloth.size = Vector2(0.32, 0.36)
+			_hand_part(cloth, _hand_mat(Color(0.87, 0.78, 0.6)), Transform3D(Basis.IDENTITY, Vector3(0.0, 0.12, -0.3)))
+		"Motor Kit":
+			var motor_box := BoxMesh.new()
+			motor_box.size = Vector3(0.26, 0.28, 0.2)
+			_hand_part(motor_box, _hand_mat(Color(0.3, 0.36, 0.39), 0.4, 0.55), Transform3D(Basis.IDENTITY, Vector3(0.0, -0.04, -0.26)))
+			var motor_cap := CylinderMesh.new()
+			motor_cap.top_radius = 0.09
+			motor_cap.bottom_radius = 0.09
+			motor_cap.height = 0.05
+			_hand_part(motor_cap, _hand_mat(Color(0.82, 0.28, 0.14)), Transform3D(Basis.IDENTITY, Vector3(0.0, 0.12, -0.26)))
+		"Life Vest":
+			var vest_mini := BoxMesh.new()
+			vest_mini.size = Vector3(0.36, 0.28, 0.2)
+			_hand_part(vest_mini, _hand_mat(Color(0.95, 0.35, 0.13)), Transform3D(Basis.IDENTITY, Vector3(0.0, -0.03, -0.26)))
+		"Coconut":
+			_add_hand_asset("res://models/kenney_coconut.glb", 0.3)
+		"Banana":
+			_add_hand_asset("res://models/kenney_banana.glb", 0.3)
+		"Fish":
+			var fish_mesh := SphereMesh.new()
+			fish_mesh.radius = 0.15
+			fish_mesh.height = 0.28
+			fish_mesh.radial_segments = 8
+			fish_mesh.rings = 4
+			_hand_part(fish_mesh, _hand_mat(Color(0.56, 0.68, 0.72)), Transform3D(Basis.IDENTITY, Vector3(0.0, -0.03, -0.28)))
 		_:
 			return
+
+
+func _add_hand_asset(path: String, target_size: float) -> void:
+	var packed := load(path) as PackedScene
+	if packed == null:
+		return
+	var model := packed.instantiate() as Node3D
+	if model == null:
+		return
+	var found := false
+	var low := Vector3.ZERO
+	var high := Vector3.ZERO
+	for candidate in model.find_children("*", "MeshInstance3D", true, false):
+		var mi := candidate as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var box := mi.transform * mi.get_aabb()
+		if not found:
+			low = box.position
+			high = box.position + box.size
+			found = true
+		else:
+			low = low.min(box.position)
+			high = high.max(box.position + box.size)
+	if not found:
+		model.queue_free()
+		return
+	var bounds := AABB(low, high - low)
+	var largest := maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z))
+	var fit := target_size / maxf(largest, 0.001)
+	model.scale = Vector3.ONE * fit
+	model.position = Vector3(0.0, -0.02, -0.27) - bounds.get_center() * fit
+	_hand_item.add_child(model)
 
 
 func _hand_mat(color: Color, rough: float = 0.6, metal: float = 0.0) -> StandardMaterial3D:
@@ -1014,6 +1609,18 @@ func _update_hand_sway(_delta: float) -> void:
 ##     case — in real life you only take debris that is within your pickable
 ##     range, and the E key collects those even without precise aiming).
 func can_interact_now() -> bool:
+	if active_item in ["Coconut", "Banana", "Fish"] and Inventory.has(active_item, 1):
+		return true
+	if active_item == "Life Vest" and Inventory.has("Life Vest", 1) and not life_vest_equipped:
+		return true
+	if active_item == "Fishing Rod" and not is_swimming and _fishing_time_remaining <= 0.0:
+		return true
+	if active_item == "Spear" and aim_distance <= 5.2 and _get_aimed_shark() != null:
+		return true
+	if active_item in ["Sail Kit", "Motor Kit"] and Inventory.has(active_item, 1):
+		var raft := _get_raft_node()
+		if raft != null and global_position.distance_to(raft.global_position) <= 9.0:
+			return true
 	if aim_valid and aim_collider != null:
 		var c := aim_collider
 		if c.is_in_group("debris") and aim_distance <= PICKUP_RANGE:
@@ -4087,10 +4694,18 @@ func _try_build() -> void:
 		return
 	if not Inventory.can_afford(piece_name):
 		return
-	if not Inventory.craft(piece_name):
+	var raft: Node3D = _get_raft_node()
+	if raft == null:
 		return
 	var scene: PackedScene = build_pieces[selected_piece_index]
-	var piece: Node3D = scene.instantiate()
+	if scene == null:
+		return
+	var piece := scene.instantiate() as Node3D
+	if piece == null:
+		return
+	if not Inventory.craft(piece_name):
+		piece.free()
+		return
 	# Give every placed piece a unique name — Godot auto-renames duplicate
 	# children to "@AnimatableBody3D@n" (class name based), which breaks the
 	# name-based piece detection (_find_piece_name etc.) for every piece after
@@ -4101,10 +4716,6 @@ func _try_build() -> void:
 	# (it is in build_surface group). Parenting there causes the piece local
 	# transform to be relative to the Foundation, not the raft, shifting the
 	# final world position by the Foundation's offset.
-	var raft: Node3D = _get_raft_node()
-	if raft == null:
-		piece.queue_free()
-		return
 	var container: Node = raft.get_node_or_null("BuiltPieces")
 	if container == null:
 		container = Node3D.new()
@@ -4493,6 +5104,14 @@ func _remove_editing() -> void:
 		_editing = null
 		return
 	var building_name := _editing.name
+	var refund: Dictionary = {}
+	for recipe_name in RECIPE_REFUND:
+		if building_name.begins_with(recipe_name):
+			refund = RECIPE_REFUND[recipe_name]
+			break
+	if not Inventory.can_store_rewards(refund):
+		_hud_toast("BAG FULL  •  CLEAR SPACE BEFORE REMOVING")
+		return
 	# Unregister from grid
 	var cell: Vector2i = _world_to_grid(_editing.global_position)
 	_grid_unregister(cell)
@@ -4509,13 +5128,9 @@ func _remove_editing() -> void:
 				for s in _get_all_sockets(sibling):
 					if s.is_occupied and s.occupying_piece == _editing:
 						s.free_socket()
-	# Refund resources
-	for recipe_name in RECIPE_REFUND:
-		if building_name.begins_with(recipe_name):
-			var refund: Dictionary = RECIPE_REFUND[recipe_name]
-			for item in refund:
-				Inventory.add(item, refund[item])
-			break
+	# Refund the exact recipe cost after confirming the inventory can hold it.
+	for item in refund:
+		Inventory.add(str(item), int(refund[item]))
 	_editing.queue_free()
 	_editing = null
 	_edit_valid = false

@@ -22,11 +22,17 @@
 [ext_resource type="Script" uid="uid://dpfwvnwwsrja4" path="res://scripts/mobile_controls.gd" id="19_mobile"]
 [ext_resource type="Script" uid="uid://c5t6sybbgxaqh" path="res://scripts/survival_hud.gd" id="20_hud"]
 [ext_resource type="PackedScene" uid="uid://c1y6s375pbu01" path="res://models/sand_raftsurvival.glb" id="21_island"]
-[ext_resource type="PackedScene" uid="uid://dd2wsn7txmixq" path="res://models/palm_tree.glb" id="22_palm"]
+[ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_tall.glb" id="22_palm"]
 [ext_resource type="Script" uid="uid://diowgnrc2v4dy" path="res://scripts/island_setup.gd" id="23_islandsetup"]
 [ext_resource type="Script" uid="uid://prn6nkf22jbc" path="res://scripts/island_grass.gd" id="24_islandgrass"]
 [ext_resource type="Script" uid="uid://cdfw5dgx18uri" path="res://scripts/island_beacon.gd" id="25_beacon"]
 [ext_resource type="Script" uid="uid://bak02doledtl7" path="res://scripts/island_marker.gd" id="26_marker"]
+[ext_resource type="Script" path="res://scripts/mobile_performance.gd" id="27_performance"]
+[ext_resource type="PackedScene" path="res://models/beach_survivor.glb" id="28_survivor"]
+[ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_short.glb" id="29_palm_short"]
+[ext_resource type="Script" path="res://scripts/ocean_ambience.gd" id="30_ocean_audio"]
+[ext_resource type="PackedScene" path="res://scenes/destination_island.tscn" id="31_destination"]
+[ext_resource type="Script" path="res://scripts/shark_spawner.gd" id="32_sharks"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
 render_priority = 0
@@ -52,7 +58,7 @@ shader_parameter/wave_speed = 0.45
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_ybjjv"]
 material = SubResource("ShaderMaterial_0gc0m")
-size = Vector2(500, 500)
+size = Vector2(1000, 1000)
 subdivide_width = 160
 subdivide_depth = 160
 
@@ -204,32 +210,41 @@ shape = SubResource("CapsuleShape3D_ybjjv")
 [node name="Body" type="Node3D" parent="Player" unique_id=556785338]
 transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, -0.042, 0)
 
+[node name="BeachSurvivor" parent="Player/Body" instance=ExtResource("28_survivor")]
+transform = Transform3D(0.9, 0, 0, 0, 0.9, 0, 0, 0, 0.9, 0, -0.84, 0)
+
 [node name="LegL" type="MeshInstance3D" parent="Player/Body" unique_id=1732520519]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, -0.48, 0)
 mesh = SubResource("BoxMesh_human_leg")
 surface_material_override/0 = SubResource("StandardMaterial3D_pants")
 
 [node name="LegR" type="MeshInstance3D" parent="Player/Body" unique_id=1276908548]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, -0.48, 0)
 mesh = SubResource("BoxMesh_human_leg")
 surface_material_override/0 = SubResource("StandardMaterial3D_pants")
 
 [node name="Torso" type="MeshInstance3D" parent="Player/Body" unique_id=1269243988]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.13, 0)
 mesh = SubResource("BoxMesh_human_torso")
 surface_material_override/0 = SubResource("StandardMaterial3D_shirt")
 
 [node name="ArmL" type="MeshInstance3D" parent="Player/Body" unique_id=834379482]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.28, 0.16, 0)
 mesh = SubResource("BoxMesh_human_arm")
 surface_material_override/0 = SubResource("StandardMaterial3D_shirt")
 
 [node name="ArmR" type="MeshInstance3D" parent="Player/Body" unique_id=1517470357]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.28, 0.16, 0)
 mesh = SubResource("BoxMesh_human_arm")
 surface_material_override/0 = SubResource("StandardMaterial3D_shirt")
 
 [node name="Head" type="MeshInstance3D" parent="Player/Body" unique_id=2127867931]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.57, 0)
 mesh = SubResource("BoxMesh_human_head")
 surface_material_override/0 = SubResource("StandardMaterial3D_skin")
@@ -297,9 +312,11 @@ script = ExtResource("26_marker")
 script = ExtResource("5_lquwl")
 debris_scene = ExtResource("6_7mycd")
 
-[node name="Island" parent="." unique_id=1580141119 instance=ExtResource("21_island")]
+[node name="Island" type="Node3D" parent="." unique_id=1580141119]
 unique_name_in_owner = true
-transform = Transform3D(0.10125629, 0, 0, 0, 0.09266175, 0, 0, 0, 0.057864916, 107.33414, -0.9068012, -91.8569)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 107.33414, -0.9068012, -91.8569)
+
+[node name="IslandTerrain" parent="Island" instance=ExtResource("21_island")]
 
 [node name="IslandBeacon" type="Node3D" parent="Island" unique_id=1667252892]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.2, 0)
@@ -307,12 +324,15 @@ script = ExtResource("25_beacon")
 
 [node name="PalmTree" parent="Island" unique_id=852400309 instance=ExtResource("22_palm")]
 transform = Transform3D(0.965926, 0, 0.258819, 0, 1, 0, -0.258819, 0, 0.965926, -3.5, 1.8, -3)
+scale = Vector3(2.2, 2.2, 2.2)
 
-[node name="PalmTree2" parent="Island" unique_id=1802697924 instance=ExtResource("22_palm")]
+[node name="PalmTree2" parent="Island" unique_id=1802697924 instance=ExtResource("29_palm_short")]
 transform = Transform3D(0.766044, 0, 0.642788, 0, 1, 0, -0.642788, 0, 0.766044, 2.5, 2, -4.5)
+scale = Vector3(2.5, 2.5, 2.5)
 
 [node name="PalmTree3" parent="Island" unique_id=150675457 instance=ExtResource("22_palm")]
 transform = Transform3D(0.5, 0, 0.866025, 0, 1, 0, -0.866025, 0, 0.5, 4.5, 1.2, 1)
+scale = Vector3(2.0, 2.0, 2.0)
 
 [node name="IslandGrass" type="Node3D" parent="Island" unique_id=555555555]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 0)
@@ -322,6 +342,29 @@ scatter_radius = 13.0
 
 [node name="IslandSetup" type="Node3D" parent="." unique_id=444444444]
 script = ExtResource("23_islandsetup")
+
+[node name="ReefIsle" parent="." instance=ExtResource("31_destination")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -155, -0.9, 110)
+map_label = "Reef Isle"
+beacon_color = Color(0.32, 0.82, 1, 1)
+pickup_seed = 24117
+
+[node name="DriftwoodCay" parent="." instance=ExtResource("31_destination")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -225, -0.9, -190)
+map_label = "Driftwood Cay"
+beacon_color = Color(1, 0.62, 0.27, 1)
+pickup_seed = 51293
+
+[node name="FarCove" parent="." instance=ExtResource("31_destination")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 305, -0.9, 235)
+map_label = "Far Cove"
+beacon_color = Color(0.62, 0.5, 1, 1)
+pickup_seed = 88402
+
+[node name="SharkSpawner" type="Node3D" parent="."]
+script = ExtResource("32_sharks")
+shark_count = 3
+patrol_radius = 32.0
 
 [node name="Sky3D" type="WorldEnvironment" parent="." unique_id=9361917]
 environment = SubResource("Environment_kq58d")
@@ -378,3 +421,9 @@ dome_path = NodePath("../SkyDome")
 current_time = 0.47885333329713153
 day = 5
 celestials_calculations = 0
+
+[node name="MobilePerformance" type="Node" parent="."]
+script = ExtResource("27_performance")
+
+[node name="OceanAmbience" type="AudioStreamPlayer" parent="."]
+script = ExtResource("30_ocean_audio")

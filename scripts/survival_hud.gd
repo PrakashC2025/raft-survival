@@ -27,14 +27,33 @@ const Icons := preload("res://scripts/ui_icons.gd")
 ## ============================================================
 
 const PIECE_ORDER := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
+const CRAFT_ORDER := ["Fishing Rod", "Spear", "Sail Kit", "Motor Kit", "Life Vest"]
 const RESOURCE_PILL_ITEMS := ["Wood", "Rope", "Plastic", "Metal"]
 const STATS := [["health", "Health"], ["hunger", "Hunger"], ["thirst", "Thirst"]]
+const MAP_RANGE_METERS := 430.0
 
 const HOTBAR_COUNT := 6
 const BAG_COLS := 5
 const BAG_ROWS := 6   # 5x5 bag + 1 hotbar row = 30
 
 var _bag_open := false
+var _map_open := false
+var _craft_open := false
+var _selected_island: Node3D = null
+
+# --- map / crafting modal geometry ---
+var _map_button_rect := Rect2()
+var _craft_button_rect := Rect2()
+var _map_panel_rect := Rect2()
+var _map_close_rect := Rect2()
+var _map_course_rect := Rect2()
+var _map_area_rect := Rect2()
+var _map_center := Vector2.ZERO
+var _map_plot_radius := 0.0
+var _map_markers: Array[Dictionary] = []
+var _craft_panel_rect := Rect2()
+var _craft_close_rect := Rect2()
+var _craft_card_rects: Array[Rect2] = []
 
 # --- geometry (recomputed every frame while visible) ---
 var _vp := Vector2.ZERO
@@ -76,6 +95,10 @@ var _paused := false
 var _pause_panel_rect := Rect2()
 var _pause_resume_rect := Rect2()
 var _pause_quit_rect := Rect2()
+var _death_open := false
+var _death_panel_rect := Rect2()
+var _death_respawn_rect := Rect2()
+var _death_menu_rect := Rect2()
 
 
 func _ready() -> void:
@@ -102,6 +125,11 @@ func _inventory_changed() -> void:
 		queue_redraw()
 
 
+## True while a HUD modal should keep one-shot world actions from firing.
+func gameplay_input_blocked() -> bool:
+	return _map_open or _craft_open or _bag_open or _paused or _death_open
+
+
 func _on_bag_full(amount: int) -> void:
 	_show_toast("BAG FULL" if amount >= 1 else "")
 
@@ -117,11 +145,102 @@ func show_toast(text: String) -> void:
 	_show_toast(text)
 
 
-func _should_show() -> bool:
+func show_death() -> void:
+	_death_open = true
+	_map_open = false
+	_craft_open = false
+	_bag_open = false
+	_paused = false
+	_cancel_drag()
+	visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_tree().paused = true
+	_compute_layout()
+	queue_redraw()
+
+
+func _close_death() -> void:
+	_death_open = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	get_tree().paused = false
+	if not _should_show():
+		visible = false
+	queue_redraw()
+
+
+func _respawn_from_death() -> void:
+	var player := _get_player()
+	_close_death()
+	if player != null and player.has_method("respawn_from_death"):
+		player.call("respawn_from_death")
+
+
+func toggle_map() -> void:
+	if _death_open:
+		return
+	if _map_open:
+		_close_map()
+		return
+	if _paused:
+		return
+	_map_open = true
+	_craft_open = false
+	_bag_open = false
+	_selected_island = null
+	_cancel_drag()
+	visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_tree().paused = true
+	_compute_layout()
+	queue_redraw()
+
+
+func toggle_crafting() -> void:
+	if _craft_open:
+		_close_crafting()
+		return
+	if _paused:
+		return
+	_craft_open = true
+	_map_open = false
+	_bag_open = false
+	_cancel_drag()
+	visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_tree().paused = true
+	_compute_layout()
+	queue_redraw()
+
+
+func _close_map() -> void:
+	_map_open = false
+	get_tree().paused = _paused
+	if not _paused and not _death_open:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if not _should_show():
+		visible = false
+	queue_redraw()
+
+
+func _close_crafting() -> void:
+	_craft_open = false
+	get_tree().paused = _paused
+	if not _paused and not _death_open:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if not _should_show():
+		visible = false
+	queue_redraw()
+
+
+func _touch_ui_active() -> bool:
 	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
 		return true
 	var mc: Node = get_parent().get_node_or_null("MobileControls")
 	return mc != null and bool(mc.get("force_show")) == true
+
+
+func _should_show() -> bool:
+	return _touch_ui_active() or _map_open or _craft_open or _bag_open or _death_open
 
 
 func _on_size_changed() -> void:
@@ -153,7 +272,7 @@ func _process(_delta: float) -> void:
 # PUBLIC — coordination with MobileControls
 # ============================================================
 func is_blocking() -> bool:
-	return visible and _bag_open
+	return visible and (_bag_open or _map_open or _craft_open or _paused or _death_open)
 
 
 ## Should MobileControls treat this screen point as HUD territory (never
@@ -161,9 +280,9 @@ func is_blocking() -> bool:
 func claims_touch(pos: Vector2) -> bool:
 	if not visible:
 		return false
-	if _bag_open:
+	if _bag_open or _map_open or _craft_open or _paused or _death_open:
 		return true
-	if _bag_rect.has_point(pos):
+	if _bag_rect.has_point(pos) or _map_button_rect.has_point(pos) or _craft_button_rect.has_point(pos):
 		return true
 	for r in _hotbar_rects:
 		if r.has_point(pos):
@@ -231,6 +350,14 @@ func _compute_layout() -> void:
 		_pill_rects.append(Rect2(px, py, w, ph))
 		px += w + gap
 
+	# Always-visible touch actions sit under the resource row at upper-left.
+	var tool_button_w: float = cr * 2.05
+	var tool_button_h: float = cr * 0.96
+	var tool_button_y: float = top_safe + ph + gap
+	_map_button_rect = Rect2(m, tool_button_y, tool_button_w, tool_button_h)
+	_craft_button_rect = Rect2(m, tool_button_y + tool_button_h + gap * 0.65,
+			tool_button_w, tool_button_h)
+
 	# bottom bar: normal = inventory slots + bag button; build = piece slots
 	_slot = clampf(_vp.y * 0.105, 54.0, 86.0)
 	var sg: float = _slot * 0.14
@@ -283,6 +410,80 @@ func _compute_layout() -> void:
 	else:
 		_save_rect = Rect2()
 
+	# Full-screen chart modal, projected from the raft's current world position.
+	_map_markers.clear()
+	if _map_open:
+		var map_pad: float = clampf(_vp.y * 0.025, 12.0, 24.0)
+		var map_w: float = minf(_vp.x * 0.94, 900.0)
+		var map_h: float = minf(_vp.y * 0.86, 820.0)
+		_map_panel_rect = Rect2((_vp.x - map_w) * 0.5, (_vp.y - map_h) * 0.5, map_w, map_h)
+		var close_r: float = clampf(map_h * 0.045, 20.0, 30.0)
+		_map_close_rect = Rect2(_map_panel_rect.end.x - map_pad - close_r * 2.0,
+				_map_panel_rect.position.y + map_pad * 0.65, close_r * 2.0, close_r * 2.0)
+		var head_h: float = clampf(map_h * 0.12, 68.0, 96.0)
+		var foot_h: float = clampf(map_h * 0.13, 78.0, 106.0)
+		_map_area_rect = Rect2(_map_panel_rect.position.x + map_pad,
+				_map_panel_rect.position.y + map_pad + head_h,
+				map_w - map_pad * 2.0, map_h - map_pad * 2.0 - head_h - foot_h)
+		_map_center = _map_area_rect.get_center()
+		_map_plot_radius = maxf(24.0, minf(_map_area_rect.size.x, _map_area_rect.size.y) * 0.43)
+		var course_w: float = minf(map_w - map_pad * 2.0, 420.0)
+		var course_h: float = clampf(map_h * 0.085, 48.0, 64.0)
+		_map_course_rect = Rect2(_map_panel_rect.get_center().x - course_w * 0.5,
+				_map_panel_rect.end.y - map_pad - course_h, course_w, course_h)
+		var raft := _get_raft()
+		var origin := raft.global_position if raft != null else Vector3.ZERO
+		for island in get_tree().get_nodes_in_group("island"):
+			if not (island is Node3D) or not is_instance_valid(island):
+				continue
+			var island_node := island as Node3D
+			var offset := island_node.global_position - origin
+			var relative := Vector2(offset.x, offset.z)
+			var map_pos := _map_center + relative / MAP_RANGE_METERS * _map_plot_radius
+			var label: String = str(island_node.get_meta("map_label", island_node.name))
+			_map_markers.append({
+				"node": island_node,
+				"label": label,
+				"pos": map_pos,
+				"distance": relative.length(),
+			})
+		if _selected_island != null and not is_instance_valid(_selected_island):
+			_selected_island = null
+	else:
+		_map_panel_rect = Rect2()
+		_map_close_rect = Rect2()
+		_map_course_rect = Rect2()
+		_map_area_rect = Rect2()
+		_map_center = Vector2.ZERO
+		_map_plot_radius = 0.0
+
+	# Compact two-column equipment bench, sized for both portrait phones and PC.
+	_craft_card_rects.clear()
+	if _craft_open:
+		var craft_pad: float = clampf(_vp.y * 0.03, 14.0, 24.0)
+		var craft_w: float = minf(_vp.x * 0.92, 760.0)
+		var craft_h: float = minf(_vp.y * 0.76, 680.0)
+		_craft_panel_rect = Rect2((_vp.x - craft_w) * 0.5, (_vp.y - craft_h) * 0.5, craft_w, craft_h)
+		var craft_close_r: float = clampf(craft_h * 0.04, 20.0, 28.0)
+		_craft_close_rect = Rect2(_craft_panel_rect.end.x - craft_pad - craft_close_r * 2.0,
+				_craft_panel_rect.position.y + craft_pad * 0.65,
+				craft_close_r * 2.0, craft_close_r * 2.0)
+		var grid_top: float = _craft_panel_rect.position.y + craft_pad + clampf(craft_h * 0.17, 78.0, 108.0)
+		var grid_bottom: float = _craft_panel_rect.end.y - craft_pad
+		var cg: float = clampf(craft_w * 0.025, 10.0, 18.0)
+		var card_w: float = (craft_w - craft_pad * 2.0 - cg) * 0.5
+		var row_gap: float = clampf(craft_h * 0.025, 10.0, 16.0)
+		var card_h: float = (grid_bottom - grid_top - row_gap * 2.0) / 3.0
+		for idx in range(CRAFT_ORDER.size()):
+			var col: int = idx % 2
+			var row: int = int(idx / 2)
+			_craft_card_rects.append(Rect2(
+					_craft_panel_rect.position.x + craft_pad + float(col) * (card_w + cg),
+						grid_top + float(row) * (card_h + row_gap), card_w, card_h))
+	else:
+		_craft_panel_rect = Rect2()
+		_craft_close_rect = Rect2()
+
 	# toast pill (above the bottom bar)
 	_toast_rect = Rect2()
 	var now := Time.get_ticks_msec() / 1000.0
@@ -313,6 +514,22 @@ func _compute_layout() -> void:
 		_pause_resume_rect = Rect2()
 		_pause_quit_rect = Rect2()
 
+	if _death_open:
+		var death_pad: float = clampf(_vp.y * 0.035, 16.0, 28.0)
+		var death_w: float = minf(_vp.x * 0.82, 460.0)
+		var death_h: float = clampf(_vp.y * 0.36, 250.0, 330.0)
+		_death_panel_rect = Rect2((_vp.x - death_w) * 0.5, (_vp.y - death_h) * 0.5, death_w, death_h)
+		var button_h: float = clampf(death_h * 0.2, 52.0, 68.0)
+		var button_w: float = death_w - death_pad * 2.0
+		var button_x: float = _death_panel_rect.position.x + death_pad
+		var button_y: float = _death_panel_rect.position.y + death_h * 0.5
+		_death_respawn_rect = Rect2(button_x, button_y, button_w, button_h)
+		_death_menu_rect = Rect2(button_x, button_y + button_h + death_pad * 0.5, button_w, button_h)
+	else:
+		_death_panel_rect = Rect2()
+		_death_respawn_rect = Rect2()
+		_death_menu_rect = Rect2()
+
 
 func _row_of(idx: int) -> int:
 	if idx < HOTBAR_COUNT:
@@ -337,6 +554,8 @@ func _build_cache_key() -> String:
 	var p := _get_player()
 	var key := str(_vp)
 	key += "|bag" + str(_bag_open)
+	key += "|map" + str(_map_open) + "|craft" + str(_craft_open) + "|death" + str(_death_open)
+	key += "|map_selected" + (_selected_island.name if _selected_island != null and is_instance_valid(_selected_island) else "")
 	if p == null:
 		return key
 	key += "|bm" + str(p.get("build_mode") == true)
@@ -412,25 +631,187 @@ func _cancel_drag() -> void:
 # INPUT — touches on hotbar / bag / panel
 # ============================================================
 func _input(event: InputEvent) -> void:
+	if _death_open:
+		if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
+			if event.is_action_pressed("ui_accept") or (event as InputEventKey).keycode == KEY_ENTER:
+				_respawn_from_death()
+			elif event.is_action_pressed("ui_cancel") or (event as InputEventKey).keycode == KEY_ESCAPE:
+				_quit_to_menu()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventScreenTouch or event is InputEventMouseButton:
+			_handle_death_pointer(event)
+		return
+	# Keyboard shortcuts also work when the desktop HUD is normally hidden.
+	if event is InputEventKey and (event as InputEventKey).pressed \
+			and not (event as InputEventKey).echo:
+		if event.is_action_pressed("ui_cancel") or (event as InputEventKey).keycode == KEY_ESCAPE:
+			if _map_open:
+				_close_map()
+			elif _craft_open:
+				_close_crafting()
+			elif _bag_open:
+				_bag_open = false
+				_cancel_drag()
+				queue_redraw()
+			elif _paused:
+				_set_paused(false)
+			else:
+				_set_paused(true)
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("toggle_map"):
+			toggle_map()
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("toggle_crafting"):
+			toggle_crafting()
+			get_viewport().set_input_as_handled()
+			return
 	if not visible:
+		return
+	if _map_open or _craft_open:
+		_handle_modal_pointer(event)
 		return
 	if _paused:
 		# While paused only the overlay buttons react; nothing else moves.
 		if event is InputEventScreenTouch:
 			_handle_pause_input(event as InputEventScreenTouch)
-		return
-	if not (event is InputEventScreenTouch or event is InputEventScreenDrag):
+		elif event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT \
+				and (event as InputEventMouseButton).pressed:
+			_handle_pause_mouse((event as InputEventMouseButton).position)
 		return
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
-		if touch.pressed and _pause_btn_rect.size.x > 0.0 and _pause_btn_rect.has_point(touch.position):
-			_set_paused(true)
-			get_viewport().set_input_as_handled()
-			return
+		if touch.pressed:
+			if _pause_btn_rect.has_point(touch.position):
+				_set_paused(true)
+				get_viewport().set_input_as_handled()
+				return
+			if _map_button_rect.has_point(touch.position):
+				toggle_map()
+				get_viewport().set_input_as_handled()
+				return
+			if _craft_button_rect.has_point(touch.position):
+				toggle_crafting()
+				get_viewport().set_input_as_handled()
+				return
+	elif event is InputEventMouseButton:
+		var mouse := event as InputEventMouseButton
+		if mouse.button_index == MOUSE_BUTTON_LEFT and mouse.pressed:
+			if _map_button_rect.has_point(mouse.position):
+				toggle_map()
+				get_viewport().set_input_as_handled()
+				return
+			if _craft_button_rect.has_point(mouse.position):
+				toggle_crafting()
+				get_viewport().set_input_as_handled()
+				return
+	if not (event is InputEventScreenTouch or event is InputEventScreenDrag):
+		return
 	if _bag_open:
 		_handle_bag_input(event)
 	else:
 		_handle_bar_input(event)
+
+
+func _handle_death_pointer(event: InputEvent) -> void:
+	var pointer := Vector2.ZERO
+	var pressed := false
+	if event is InputEventScreenTouch:
+		var touch := event as InputEventScreenTouch
+		pointer = touch.position
+		pressed = touch.pressed
+	elif event is InputEventMouseButton:
+		var mouse := event as InputEventMouseButton
+		if mouse.button_index != MOUSE_BUTTON_LEFT:
+			return
+		pointer = mouse.position
+		pressed = mouse.pressed
+	if pressed:
+		if _death_respawn_rect.has_point(pointer):
+			_respawn_from_death()
+		elif _death_menu_rect.has_point(pointer):
+			_quit_to_menu()
+		get_viewport().set_input_as_handled()
+
+
+func _handle_modal_pointer(event: InputEvent) -> void:
+	var pointer := Vector2.ZERO
+	var pressed := false
+	if event is InputEventScreenTouch:
+		var touch := event as InputEventScreenTouch
+		pointer = touch.position
+		pressed = touch.pressed
+	elif event is InputEventMouseButton:
+		var mouse := event as InputEventMouseButton
+		if mouse.button_index != MOUSE_BUTTON_LEFT:
+			return
+		pointer = mouse.position
+		pressed = mouse.pressed
+	else:
+		return
+	if not pressed:
+		return
+	if _map_open:
+		if _map_close_rect.has_point(pointer):
+			_close_map()
+		elif _map_course_rect.has_point(pointer):
+			_start_selected_course()
+		else:
+			for marker in _map_markers:
+				var marker_pos: Vector2 = marker.get("pos", Vector2.ZERO)
+				if pointer.distance_to(marker_pos) <= maxf(24.0, _map_plot_radius * 0.16):
+					_selected_island = marker.get("node") as Node3D
+					queue_redraw()
+					break
+	elif _craft_open:
+		if _craft_close_rect.has_point(pointer):
+			_close_crafting()
+		else:
+			for i in range(_craft_card_rects.size()):
+				if _craft_card_rects[i].has_point(pointer):
+					_craft_item(CRAFT_ORDER[i])
+					break
+	get_viewport().set_input_as_handled()
+
+
+func _start_selected_course() -> void:
+	var raft := _get_raft()
+	if raft != null and raft.has_method("has_active_course") and bool(raft.call("has_active_course")):
+		raft.call("clear_course")
+		_show_toast("COURSE CANCELLED")
+		queue_redraw()
+		return
+	if _selected_island == null or not is_instance_valid(_selected_island):
+		_show_toast("SELECT AN ISLAND FIRST")
+		return
+	var player := _get_player()
+	if player == null or not player.has_method("request_course_to"):
+		_show_toast("NO RAFT AVAILABLE")
+		return
+	var nav_speed: float = float(raft.call("get_navigation_speed")) if raft != null and raft.has_method("get_navigation_speed") else 0.0
+	if nav_speed <= 0.0:
+		_show_toast("CRAFT A SAIL KIT TO TRAVEL")
+		toggle_crafting()
+		return
+	if bool(player.call("request_course_to", _selected_island)):
+		_close_map()
+
+
+func _craft_item(item_name: String) -> void:
+	if Inventory.craft_item(item_name):
+		_show_toast("CRAFTED " + item_name.to_upper())
+	else:
+		_show_toast("NEED MATERIALS FOR " + item_name.to_upper())
+	queue_redraw()
+
+
+func _handle_pause_mouse(pointer: Vector2) -> void:
+	if _pause_resume_rect.has_point(pointer):
+		_set_paused(false)
+	elif _pause_quit_rect.has_point(pointer):
+		_quit_to_menu()
+	get_viewport().set_input_as_handled()
 
 
 func _handle_bar_input(event: InputEvent) -> void:
@@ -541,6 +922,9 @@ func _set_paused(p: bool) -> void:
 	if p:
 		_cancel_drag()
 		_bag_open = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	get_tree().paused = p
 	queue_redraw()
 
@@ -550,6 +934,11 @@ func _quit_to_menu() -> void:
 	if p != null and p.has_method("_flush_save"):
 		p.call("_flush_save")
 	_set_paused(false)
+	_map_open = false
+	_craft_open = false
+	_death_open = false
+	get_tree().paused = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 
@@ -561,6 +950,10 @@ func _refresh_selection_after_move() -> void:
 
 func _get_player() -> Node:
 	return get_tree().get_first_node_in_group("player")
+
+
+func _get_raft() -> Node3D:
+	return get_tree().get_first_node_in_group("raft") as Node3D
 
 
 # ============================================================
@@ -578,14 +971,21 @@ func _draw() -> void:
 		_draw_bag_panel()
 	else:
 		_draw_bottom_bar()
+	if _touch_ui_active() and not _map_open and not _craft_open:
+		_draw_map_button()
+		_draw_craft_button()
 	if _toast != "" and _toast_rect.size.x > 0.0:
 		_draw_toast()
-	# drag ghost rides above everything
 	if _dragging and _drag_from >= 0:
 		_draw_drag_ghost()
-	# pause overlay is the top-most layer
 	if _paused:
 		_draw_pause_overlay()
+	if _craft_open:
+		_draw_crafting_overlay()
+	if _map_open:
+		_draw_map_overlay()
+	if _death_open:
+		_draw_death_overlay()
 
 
 func _draw_pause_btn() -> void:
@@ -599,6 +999,197 @@ func _draw_pause_btn() -> void:
 	var bh: float = r * 0.72
 	draw_rect(Rect2(c.x - r * 0.3, c.y - bh * 0.5, bw, bh), Color(1, 1, 1, 0.95))
 	draw_rect(Rect2(c.x + r * 0.3 - bw, c.y - bh * 0.5, bw, bh), Color(1, 1, 1, 0.95))
+
+
+func _draw_map_button() -> void:
+	var rect := _map_button_rect
+	_draw_rounded(rect, rect.size.y * 0.45, Color(0.035, 0.12, 0.16, 0.78))
+	_draw_rounded(rect, rect.size.y * 0.45, Color(0.55, 0.88, 0.92, 0.48), false, 1.5)
+	var left := Vector2(rect.position.x + rect.size.x * 0.2, rect.position.y + rect.size.y * 0.28)
+	var right := Vector2(rect.position.x + rect.size.x * 0.48, rect.position.y + rect.size.y * 0.72)
+	draw_polyline(PackedVector2Array([left, left + Vector2(8, -3), right + Vector2(8, -3), right]),
+			Color(0.7, 0.92, 0.9, 0.95), 2.0, true)
+	draw_line(left + Vector2(8, -3), right + Vector2(8, -3), Color(0.7, 0.92, 0.9, 0.95), 2.0, true)
+	var fs: int = int(clampf(rect.size.y * 0.38, 12.0, 16.0))
+	_draw_text("MAP", Vector2(rect.position.x + rect.size.x * 0.59,
+			rect.position.y + rect.size.y * 0.59 + fs * 0.34), fs, Color(1, 1, 1, 0.96))
+
+
+func _draw_craft_button() -> void:
+	var rect := _craft_button_rect
+	_draw_rounded(rect, rect.size.y * 0.45, Color(0.12, 0.09, 0.055, 0.8))
+	_draw_rounded(rect, rect.size.y * 0.45, Color(0.96, 0.73, 0.38, 0.5), false, 1.5)
+	var center := Vector2(rect.position.x + rect.size.x * 0.25, rect.get_center().y)
+	Icons.hammer(self, center, rect.size.y * 0.32, 2.0, Color(1.0, 0.86, 0.61, 0.96))
+	var fs: int = int(clampf(rect.size.y * 0.34, 11.0, 15.0))
+	_draw_text("CRAFT", Vector2(rect.position.x + rect.size.x * 0.42,
+			rect.position.y + rect.size.y * 0.59 + fs * 0.34), fs, Color(1, 1, 1, 0.96))
+
+
+func _draw_map_overlay() -> void:
+	draw_rect(Rect2(Vector2.ZERO, _vp), Color(0.01, 0.035, 0.055, 0.86))
+	var panel := _map_panel_rect
+	_draw_rounded(panel, 24.0, Color(0.045, 0.1, 0.13, 0.99))
+	_draw_rounded(panel, 24.0, Color(0.56, 0.82, 0.79, 0.48), false, 2.0)
+	var title_fs: int = int(clampf(panel.size.y * 0.055, 22.0, 34.0))
+	var sub_fs: int = int(clampf(title_fs * 0.43, 12.0, 16.0))
+	_draw_text("VOYAGE CHART", Vector2(panel.position.x + panel.size.x * 0.07,
+			panel.position.y + panel.size.y * 0.075 + title_fs * 0.36), title_fs, Color(0.9, 0.95, 0.85, 0.98))
+	_draw_text("NORTH UP   •   ISLANDS, DISTANCES & ACTIVE COURSE", Vector2(panel.position.x + panel.size.x * 0.07,
+			panel.position.y + panel.size.y * 0.12 + title_fs * 0.48 + sub_fs), sub_fs,
+			Color(0.65, 0.81, 0.81, 0.9))
+	var close_center := _map_close_rect.get_center()
+	draw_circle(close_center, _map_close_rect.size.x * 0.5, Color(1, 1, 1, 0.08))
+	Icons.cross(self, close_center, _map_close_rect.size.x * 0.36, 2.5, Color(1, 1, 1, 0.9))
+
+	_draw_rounded(_map_area_rect, 18.0, Color(0.025, 0.14, 0.19, 0.96))
+	_draw_rounded(_map_area_rect, 18.0, Color(0.35, 0.72, 0.72, 0.25), false, 1.0)
+	for ring in range(1, 5):
+		var radius := _map_plot_radius * float(ring) / 4.0
+		draw_arc(_map_center, radius, 0.0, TAU, 56, Color(0.55, 0.82, 0.78, 0.20), 1.0, true)
+		if ring < 4:
+			var range_label := str(int(roundf(MAP_RANGE_METERS * float(ring) / 4.0))) + " m"
+			_draw_text(range_label, _map_center + Vector2(-_map_plot_radius * float(ring) / 4.0 - 3.0, -4.0),
+					int(clampf(sub_fs * 0.82, 10.0, 13.0)), Color(0.65, 0.84, 0.83, 0.55))
+	draw_line(_map_center - Vector2(_map_plot_radius, 0), _map_center + Vector2(_map_plot_radius, 0),
+			Color(0.55, 0.82, 0.78, 0.13), 1.0, true)
+	draw_line(_map_center - Vector2(0, _map_plot_radius), _map_center + Vector2(0, _map_plot_radius),
+			Color(0.55, 0.82, 0.78, 0.13), 1.0, true)
+	_draw_text("N", _map_center + Vector2(-4.0, -_map_plot_radius - 6.0),
+			int(clampf(sub_fs, 11.0, 16.0)), Color(0.85, 0.94, 0.88, 0.85))
+
+	var selected_pos := Vector2.ZERO
+	for marker in _map_markers:
+		var island := marker.get("node") as Node3D
+		if island == null or not is_instance_valid(island):
+			continue
+		var marker_pos: Vector2 = marker.get("pos", _map_center)
+		if island == _selected_island:
+			selected_pos = marker_pos
+	var raft := _get_raft()
+	if _selected_island != null and is_instance_valid(_selected_island) and raft != null:
+		var course_from := _map_center
+		var course_to := selected_pos
+		var route := PackedVector2Array([course_from, course_to])
+		draw_polyline(route, Color(1.0, 0.85, 0.45, 0.72), 2.5, true)
+		for dot in range(1, 6):
+			var point := course_from.lerp(course_to, float(dot) / 6.0)
+			draw_circle(point, 2.2, Color(1.0, 0.91, 0.62, 0.9))
+
+	for marker in _map_markers:
+		var island := marker.get("node") as Node3D
+		if island == null or not is_instance_valid(island):
+			continue
+		var pos: Vector2 = marker.get("pos", _map_center)
+		var label: String = str(marker.get("label", island.name))
+		var dist: float = float(marker.get("distance", 0.0))
+		var chosen := island == _selected_island
+		var r: float = 10.0 if chosen else 8.0
+		var sea_ring := Color(1.0, 0.81, 0.43, 0.9) if chosen else Color(0.72, 0.86, 0.64, 0.75)
+		draw_circle(pos, r + 4.0, Color(sea_ring.r, sea_ring.g, sea_ring.b, 0.15))
+		draw_arc(pos, r + 2.0, 0.0, TAU, 28, sea_ring, 1.8, true)
+		var island_shape := PackedVector2Array([
+			pos + Vector2(-r, 1.0), pos + Vector2(-r * 0.45, -r * 0.75),
+			pos + Vector2(r * 0.65, -r * 0.55), pos + Vector2(r, r * 0.12),
+			pos + Vector2(r * 0.35, r * 0.8), pos + Vector2(-r * 0.55, r * 0.65),
+		])
+		draw_colored_polygon(island_shape, Color(0.68, 0.68, 0.39, 0.98) if chosen else Color(0.52, 0.68, 0.46, 0.95))
+		var label_fs: int = int(clampf(sub_fs * 0.95, 11.0, 15.0))
+		var label_text := "%s  %dm" % [label, int(roundf(dist))]
+		var label_w: float = ThemeDB.fallback_font.get_string_size(label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_fs).x
+		var label_x := clampf(pos.x - label_w * 0.5, _map_area_rect.position.x + 5.0,
+				_map_area_rect.end.x - label_w - 5.0)
+		var label_y := pos.y + r + label_fs * 1.3
+		if label_y > _map_area_rect.end.y - label_fs:
+			label_y = pos.y - r - label_fs * 0.55
+		_draw_text(label_text, Vector2(label_x, label_y), label_fs, Color(0.93, 0.96, 0.86, 0.95))
+
+	# Current raft marker stays at chart center as the world origin.
+	draw_circle(_map_center, 12.0, Color(0.26, 0.86, 0.95, 0.2))
+	draw_arc(_map_center, 10.0, 0.0, TAU, 28, Color(0.45, 0.92, 1.0, 0.96), 2.0, true)
+	var player_arrow := PackedVector2Array([
+		_map_center + Vector2(0.0, -8.0), _map_center + Vector2(6.0, 6.0),
+		_map_center + Vector2(0.0, 3.0), _map_center + Vector2(-6.0, 6.0),
+	])
+	draw_colored_polygon(player_arrow, Color(0.45, 0.92, 1.0, 0.96))
+
+	var detail_fs: int = int(clampf(sub_fs * 1.05, 12.0, 16.0))
+	var detail := "Select an island to plot a course."
+	if _selected_island != null and is_instance_valid(_selected_island):
+		var selected_name: String = str(_selected_island.get_meta("map_label", _selected_island.name))
+		var distance_m: float = _get_raft().global_position.distance_to(_selected_island.global_position) if _get_raft() != null else 0.0
+		var speed: float = float(raft.call("get_navigation_speed")) if raft != null and raft.has_method("get_navigation_speed") else 0.0
+		var eta: String = "" if speed <= 0.0 else "   •   ETA %d:%02d" % [int(distance_m / speed / 60.0), int(int(distance_m / speed) % 60)]
+		detail = "%s  •  %dm%s" % [selected_name, int(roundf(distance_m)), eta]
+	_draw_text(detail, Vector2(_map_area_rect.position.x + 8.0,
+			_map_course_rect.position.y - detail_fs * 0.45), detail_fs, Color(0.88, 0.92, 0.82, 0.94))
+	var button_label := "SELECT AN ISLAND"
+	var button_enabled := false
+	if raft != null and raft.has_method("has_active_course") and bool(raft.call("has_active_course")):
+		button_label = "CANCEL ACTIVE COURSE"
+		button_enabled = true
+	elif _selected_island != null and is_instance_valid(_selected_island):
+		var nav_speed: float = float(raft.call("get_navigation_speed")) if raft != null and raft.has_method("get_navigation_speed") else 0.0
+		button_label = "SET COURSE TO " + str(_selected_island.get_meta("map_label", _selected_island.name)).to_upper() if nav_speed > 0.0 else "CRAFT SAIL KIT TO TRAVEL"
+		button_enabled = true
+	var btn_bg := Color(0.13, 0.35, 0.27, 0.97) if button_enabled else Color(0.12, 0.16, 0.18, 0.95)
+	_draw_rounded(_map_course_rect, _map_course_rect.size.y * 0.42, btn_bg)
+	_draw_rounded(_map_course_rect, _map_course_rect.size.y * 0.42,
+			Color(0.75, 0.91, 0.62, 0.7) if button_enabled else Color(1, 1, 1, 0.16), false, 1.5)
+	var btn_fs: int = int(clampf(_map_course_rect.size.y * 0.28, 13.0, 19.0))
+	var btn_w: float = ThemeDB.fallback_font.get_string_size(button_label, HORIZONTAL_ALIGNMENT_LEFT, -1, btn_fs).x
+	var shown_label := button_label
+	if btn_w > _map_course_rect.size.x * 0.92:
+		shown_label = "CANCEL COURSE" if button_label.begins_with("CANCEL") else ("CRAFT SAIL KIT" if button_label.begins_with("CRAFT") else "SET COURSE")
+		btn_w = ThemeDB.fallback_font.get_string_size(shown_label, HORIZONTAL_ALIGNMENT_LEFT, -1, btn_fs).x
+	_draw_text(shown_label, Vector2(_map_course_rect.get_center().x - btn_w * 0.5,
+			_map_course_rect.get_center().y + btn_fs * 0.34), btn_fs,
+			Color(0.95, 0.99, 0.88, 0.98) if button_enabled else Color(0.74, 0.81, 0.79, 0.8))
+
+
+func _draw_crafting_overlay() -> void:
+	draw_rect(Rect2(Vector2.ZERO, _vp), Color(0.01, 0.025, 0.035, 0.84))
+	var panel := _craft_panel_rect
+	_draw_rounded(panel, 24.0, Color(0.075, 0.09, 0.095, 0.99))
+	_draw_rounded(panel, 24.0, Color(0.82, 0.69, 0.45, 0.52), false, 2.0)
+	var title_fs: int = int(clampf(panel.size.y * 0.055, 22.0, 34.0))
+	var sub_fs: int = int(clampf(title_fs * 0.45, 12.0, 16.0))
+	_draw_text("FIELD CRAFTING", Vector2(panel.position.x + panel.size.x * 0.07,
+			panel.position.y + panel.size.y * 0.075 + title_fs * 0.36), title_fs, Color(0.98, 0.9, 0.7, 0.98))
+	_draw_text("CRAFT SURVIVAL GEAR AND UPGRADE YOUR RAFT TO SAIL.",
+			Vector2(panel.position.x + panel.size.x * 0.07,
+				panel.position.y + panel.size.y * 0.12 + title_fs * 0.48 + sub_fs),
+			sub_fs, Color(0.75, 0.79, 0.75, 0.9))
+	var close_center := _craft_close_rect.get_center()
+	draw_circle(close_center, _craft_close_rect.size.x * 0.5, Color(1, 1, 1, 0.08))
+	Icons.cross(self, close_center, _craft_close_rect.size.x * 0.36, 2.5, Color(1, 1, 1, 0.9))
+	for i in range(_craft_card_rects.size()):
+		var item_name: String = CRAFT_ORDER[i]
+		var rect: Rect2 = _craft_card_rects[i]
+		var can_afford := Inventory.can_afford_item(item_name)
+		var can_store := Inventory.can_store_craft_result(item_name)
+		var ready_to_craft := can_afford and can_store
+		var bg := Color(0.12, 0.22, 0.18, 0.97) if ready_to_craft else Color(0.11, 0.13, 0.14, 0.96)
+		_draw_rounded(rect, 16.0, bg)
+		_draw_rounded(rect, 16.0, Color(0.7, 0.83, 0.68, 0.36) if ready_to_craft else Color(1, 1, 1, 0.13), false, 1.3)
+		var icon_center := Vector2(rect.position.x + rect.size.x * 0.16, rect.position.y + rect.size.y * 0.42)
+		Icons.item_icon(self, item_name, icon_center, minf(rect.size.y * 0.18, 24.0))
+		var name_fs: int = int(clampf(rect.size.y * 0.19, 14.0, 21.0))
+		_draw_text(item_name.to_upper(), Vector2(rect.position.x + rect.size.x * 0.29,
+				rect.position.y + rect.size.y * 0.25 + name_fs * 0.34), name_fs, Color(0.96, 0.93, 0.83, 0.98))
+		var cost_parts: Array[String] = []
+		var recipe: Dictionary = Inventory.ITEM_RECIPES.get(item_name, {})
+		for ingredient in recipe:
+			cost_parts.append("%s %d" % [str(ingredient).substr(0, 3).to_upper(), int(recipe[ingredient])])
+		var cost_fs: int = int(clampf(rect.size.y * 0.12, 11.0, 15.0))
+		var cost_text := "   ".join(cost_parts)
+		_draw_text(cost_text, Vector2(rect.position.x + rect.size.x * 0.29,
+				rect.position.y + rect.size.y * 0.49 + cost_fs * 0.34), cost_fs, Color(0.73, 0.79, 0.75, 0.88))
+		var status := "TAP TO CRAFT" if ready_to_craft else ("BAG FULL" if can_afford else "NEED MATERIALS")
+		var status_fs: int = int(clampf(rect.size.y * 0.12, 11.0, 15.0))
+		_draw_text(status, Vector2(rect.position.x + rect.size.x * 0.29,
+				rect.position.y + rect.size.y * 0.77 + status_fs * 0.34), status_fs,
+				Color(0.55, 0.93, 0.66, 0.95) if ready_to_craft else Color(0.89, 0.68, 0.57, 0.88))
 
 
 func _draw_pause_overlay() -> void:
@@ -616,6 +1207,27 @@ func _draw_pause_overlay() -> void:
 			rect.position.y + rect.size.y * 0.1 + tfs * 0.36), tfs, Color(1, 1, 1, 0.97))
 	_draw_pause_button(_pause_resume_rect, "RESUME", true)
 	_draw_pause_button(_pause_quit_rect, "QUIT TO MENU", false)
+
+
+func _draw_death_overlay() -> void:
+	draw_rect(Rect2(Vector2.ZERO, _vp), Color(0.035, 0.012, 0.015, 0.82))
+	var rect := _death_panel_rect
+	if rect.size.x <= 0.0:
+		return
+	_draw_rounded(rect, 24.0, Color(0.09, 0.055, 0.055, 0.99))
+	_draw_rounded(rect, 24.0, Color(0.96, 0.4, 0.3, 0.52), false, 2.0)
+	var title := "LOST AT SEA"
+	var title_fs: int = int(clampf(rect.size.y * 0.12, 28.0, 42.0))
+	var title_w: float = ThemeDB.fallback_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_fs).x
+	_draw_text(title, Vector2(rect.get_center().x - title_w * 0.5,
+			rect.position.y + rect.size.y * 0.24 + title_fs * 0.36), title_fs, Color(1.0, 0.72, 0.62, 0.98))
+	var subtitle := "Your supplies ran out. The raft is still here."
+	var sub_fs: int = int(clampf(rect.size.y * 0.052, 14.0, 18.0))
+	var sub_w: float = ThemeDB.fallback_font.get_string_size(subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_fs).x
+	_draw_text(subtitle, Vector2(rect.get_center().x - sub_w * 0.5,
+			rect.position.y + rect.size.y * 0.39 + sub_fs * 0.36), sub_fs, Color(0.83, 0.78, 0.74, 0.9))
+	_draw_pause_button(_death_respawn_rect, "RESPAWN ON RAFT", true)
+	_draw_pause_button(_death_menu_rect, "QUIT TO MENU", false)
 
 
 func _draw_pause_button(btn: Rect2, label: String, primary: bool) -> void:
@@ -708,8 +1320,8 @@ func _draw_status() -> void:
 		_draw_text(label, Vector2(center.x - tw * 0.5, center.y + cr + fs * 0.15), fs, col)
 
 
-## Current in-game hour (float, Sky3D.current_time). Day number + hh:mm derive
-## from it; falls back to 12.0 (noon) while the sky node is unavailable.
+## Current in-game hour (float, Sky3D.current_time). Falls back to noon while
+## the sky node is unavailable.
 func _time_now() -> float:
 	if _sky == null or not is_instance_valid(_sky):
 		var sc: Node = get_tree().current_scene
@@ -720,6 +1332,23 @@ func _time_now() -> float:
 	return 12.0
 
 
+func _day_now() -> int:
+	var player := _get_player()
+	if player != null and player.has_method("get_survival_day"):
+		return maxi(1, int(player.call("get_survival_day")))
+	var sky := _sky if _sky != null and is_instance_valid(_sky) else null
+	if sky == null:
+		var scene := get_tree().current_scene
+		if scene != null:
+			sky = scene.get_node_or_null("Sky3D")
+			_sky = sky
+	if sky != null:
+		var time_of_day := sky.get_node_or_null("TimeOfDay")
+		if time_of_day != null and time_of_day.get("day") != null:
+			return maxi(1, int(time_of_day.get("day")))
+	return 1
+
+
 ## Day/night clock: split circle (sun above / moon + stars below) with the
 ## saved day and clock time printed underneath, at the far top-right corner.
 func _draw_clock() -> void:
@@ -728,7 +1357,7 @@ func _draw_clock() -> void:
 	if r <= 4.0 or _clock_center == Vector2.ZERO:
 		return
 	var t := _time_now()
-	var day: int = int(floorf(t / 24.0)) + 1
+	var day: int = _day_now()
 	var hh: int = int(t) % 24
 	var mm: int = int((t - floorf(t)) * 60.0) % 60
 	var font := ThemeDB.fallback_font

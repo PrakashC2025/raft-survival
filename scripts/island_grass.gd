@@ -37,6 +37,11 @@ const RETRY_FRAMES := 30
 
 var _rng := RandomNumberGenerator.new()
 var _retries_left := RETRY_FRAMES
+var _build_generation := 0
+
+# Hundreds of Mesh-vs-ray queries in one frame can stall phones while the
+# island's dense trimesh is being scattered. Time-slice the work instead.
+const RUNTIME_RAY_BATCH_SIZE := 64
 
 func _ready() -> void:
 	if not Engine.is_editor_hint():
@@ -72,38 +77,40 @@ func _notification(what: int) -> void:
 		rebuild()
 
 func rebuild() -> void:
-	# Drop previous field
+	_build_generation += 1
+	var generation := _build_generation
+	# Drop the previous field and cancel any older in-progress scatter pass.
 	for c in get_children():
 		if c is MultiMeshInstance3D:
 			c.queue_free()
+	call_deferred("_build_field", generation)
 
+
+func _build_field(generation: int) -> void:
+	if not is_inside_tree() or generation != _build_generation:
+		return
 	var src := _load_blade_mesh(grass_mesh_path)
 	if src == null:
 		push_warning("IslandGrass: no Mesh found at %s (is the .glb imported?)" % grass_mesh_path)
 		return
 
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_custom_data = true   # REQUIRED: grass_wind.gdshader reads INSTANCE_CUSTOM
-	mm.mesh = src
-	mm.instance_count = instance_count
-
-	var space := get_world_3d().direct_space_state
+	var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
 	_rng.seed = scatter_seed
-
-	var oc := get_tree().get_first_node_in_group("ocean") if is_inside_tree() else null
+	var oc := get_tree().get_first_node_in_group("ocean")
 	# World -> this node's local space (the MultiMeshInstance is our child, so
 	# its transforms are interpreted in OUR frame, not the world frame).
 	var world_to_local := global_transform.affine_inverse()
 
-	# Sample first, then fill: collect up to instance_count valid placements
-	# with a global attempt budget (retries are shared, never per-blade spinning).
+	# Sample first, then fill. Runtime queries are split over physics frames so
+	# this 4,500-blade field cannot monopolize the main thread on mobile.
 	var xforms: Array[Transform3D] = []
 	var customs: Array[Color] = []
-	var attempts := instance_count * 3
+	var attempts := maxi(instance_count, 0) * 3
 	var misses := 0
+	var rays_since_yield := 0
 	while xforms.size() < instance_count and attempts > 0:
 		attempts -= 1
+		rays_since_yield += 1
 		var a := _rng.randf() * TAU
 		var r := sqrt(_rng.randf()) * scatter_radius
 		var local := Vector3(cos(a) * r, 0.0, sin(a) * r)
@@ -114,48 +121,58 @@ func rebuild() -> void:
 		var hit := space.intersect_ray(q)
 		if hit.is_empty():
 			misses += 1
-			# Nothing hit at all after 60 samples: there is no collider yet
-			# (island_setup.gd generates it after our _ready). Bail out early
-			# instead of burning the whole attempt budget every retry frame.
+			# Nothing hit at all after 60 samples: there is no collider yet.
+			# Bail early, then retry after another physics frame.
 			if misses > 60 and xforms.is_empty():
 				break
-			continue
-		var n: Vector3 = hit["normal"]
-		if n.dot(Vector3.UP) < min_surface_flatness:
-			continue # too steep
-		var pos: Vector3 = hit["position"]
-		# Grass belongs on the lower slopes: reject points high above sea level
-		if oc != null and pos.y - float(oc.call("get_height", pos)) > max_height_above_water:
-			continue
-
-		var sc := _rng.randf_range(0.8, 1.3)
-		var b := Basis()
-		if align_to_normal:
-			var helper := Vector3.RIGHT if absf(n.dot(Vector3.RIGHT)) < 0.9 else Vector3.FORWARD
-			var z := (helper - n * helper.dot(n)).normalized()
-			var x := n.cross(z) # right-handed: det = +1
-			b = Basis(x, n, z)
-			b = b.scaled(Vector3(sc, sc * _rng.randf_range(0.85, 1.25), sc))
-			b = b.rotated(n, _rng.randf() * TAU)
 		else:
-			b = Basis.IDENTITY.scaled(Vector3.ONE * sc)
-		# Store the blade in LOCAL space (world hit transformed into our frame)
-		xforms.append(world_to_local * Transform3D(b, pos + n * 0.02))
-		customs.append(Color(_rng.randf(), _rng.randf(), 0.0, 1.0))
+			var n: Vector3 = hit["normal"]
+			if n.dot(Vector3.UP) >= min_surface_flatness:
+				var pos: Vector3 = hit["position"]
+				# Grass belongs on the lower slopes; skip the high mound top.
+				if oc == null or pos.y - float(oc.call("get_height", pos)) <= max_height_above_water:
+					var sc := _rng.randf_range(0.8, 1.3)
+					var b := Basis()
+					if align_to_normal:
+						var helper := Vector3.RIGHT if absf(n.dot(Vector3.RIGHT)) < 0.9 else Vector3.FORWARD
+						var z := (helper - n * helper.dot(n)).normalized()
+						var x := n.cross(z) # right-handed: det = +1
+						b = Basis(x, n, z)
+						b = b.scaled(Vector3(sc, sc * _rng.randf_range(0.85, 1.25), sc))
+						b = b.rotated(n, _rng.randf() * TAU)
+					else:
+						b = Basis.IDENTITY.scaled(Vector3.ONE * sc)
+					# Store the blade in LOCAL space (world hit transformed into our frame).
+					xforms.append(world_to_local * Transform3D(b, pos + n * 0.02))
+					customs.append(Color(_rng.randf(), _rng.randf(), 0.0, 1.0))
 
+		if not Engine.is_editor_hint() and rays_since_yield >= RUNTIME_RAY_BATCH_SIZE:
+			rays_since_yield = 0
+			await get_tree().physics_frame
+			if not is_inside_tree() or generation != _build_generation:
+				return
+			# Refresh the direct-space handle after yielding to the physics loop.
+			space = get_world_3d().direct_space_state
+
+	if not is_inside_tree() or generation != _build_generation:
+		return
 	if xforms.is_empty():
-		# Expected on the very first (editor-order) _ready pass at runtime;
-		# the island collider is generated a moment later by island_setup.gd.
+		# The island collider is created after this node's _ready. Retry a
+		# bounded number of times; don't spin through the full ray budget.
 		if Engine.is_editor_hint():
 			push_warning("IslandGrass: no valid ground found — is the island collision generated yet?")
 		elif _retries_left > 0:
 			_retries_left -= 1
-			_retry_rebuild.call_deferred()
+			call_deferred("_retry_rebuild", generation)
 		else:
 			print("[IslandGrass] gave up: no island collision found")
 		return
 	_retries_left = RETRY_FRAMES
 
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_custom_data = true # REQUIRED: grass_wind.gdshader reads INSTANCE_CUSTOM
+	mm.mesh = src
 	mm.instance_count = xforms.size()
 	for i in xforms.size():
 		mm.set_instance_transform(i, xforms[i])
@@ -170,14 +187,12 @@ func rebuild() -> void:
 	add_child(mmi)
 	print("[IslandGrass] placed %d blades" % xforms.size())
 
-## One-frame-later retry (runtime only) while waiting for the island collider.
-func _retry_rebuild() -> void:
+## Retry on a later physics frame while waiting for the island collider.
+func _retry_rebuild(generation: int) -> void:
 	if not is_inside_tree():
 		return
-	# Physics frames, not process frames: the island collider generated by
-	# island_setup.gd only becomes raycastable after a physics step.
 	await get_tree().physics_frame
-	if is_inside_tree():
+	if is_inside_tree() and generation == _build_generation:
 		rebuild()
 
 func _load_blade_mesh(path: String) -> Mesh:

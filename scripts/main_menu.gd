@@ -22,6 +22,8 @@ var _vp := Vector2.ZERO
 var _title_w := 0.0
 
 func _ready() -> void:
+	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+		Engine.max_fps = 60
 	anchor_left = 0.0
 	anchor_top = 0.0
 	anchor_right = 1.0
@@ -43,7 +45,7 @@ func _save_sub(slot: String) -> String:
 	var info: Dictionary = Inventory.save_info(slot)
 	if info.has("game_time"):
 		var gt: float = float(info["game_time"])
-		var day: int = int(floorf(gt / 24.0)) + 1
+		var day: int = maxi(1, int(info.get("game_day", 1)))
 		var h: int = int(gt) % 24
 		var m: int = int((gt - floorf(gt)) * 60.0) % 60
 		return "DAY %d  ·  %02d:%02d" % [day, h, m]

@@ -162,7 +162,7 @@ void fragment() {
 	// moving chop rather than a repeating pattern. Fades out with distance so
 	// distant water smooths into atmospheric cobalt.
 	float dist = distance(world_pos, CAMERA_POSITION_WORLD);
-	float fine = smoothstep(120.0, 18.0, dist);
+	float fine = 1.0 - smoothstep(18.0, 120.0, dist);
 	vec2 mdir1 = vec2(0.6, 0.8);
 	vec2 mdir2 = vec2(0.9, -0.4);
 	vec2 mdir3 = vec2(-0.72, 0.55);
@@ -278,7 +278,7 @@ void fragment() {
 	// Highlights only land on crest bands, break into elongated streaks via
 	// chop, and fade out with distance — no round dots, no far-field grid.
 	float sdot = max(dot(r, sun_n), 0.0);
-	float glitter_dist = smoothstep(120.0, 30.0, dist);
+	float glitter_dist = 1.0 - smoothstep(30.0, 120.0, dist);
 	float glitter = (pow(sdot, 26.0) * 0.05 + pow(sdot, 110.0) * 0.22) * chop
 		* (0.30 + 0.70 * crest_up) * glitter_dist
 		* sparkle_strength * 0.40 * (1.0 - night_factor);

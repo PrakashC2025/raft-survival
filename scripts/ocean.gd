@@ -29,8 +29,8 @@ class_name Ocean
 @export var haze_color := Color(0.5, 0.66, 0.82)
 @export var sparkle_strength := 0.35
 
-# Dev-only time keys. F3 is the build overlay, so the debug keys use F5-F9.
-@export var dev_time_keys := true
+# Optional editor-only time shortcuts. F5 is reserved for the player's quick-save.
+@export var dev_time_keys := false
 
 # --- Underwater veil (display-space 2D colors) ---
 @export_range(0.0, 1.2) var under_alpha_max := 0.78
@@ -61,16 +61,24 @@ var _last_moon := 0.0
 var _sun_elev := 1.0
 var _moon_elev := -1.0
 
-const _UNDER_SHADER := "
+const _UNDER_SHADER := """
 shader_type canvas_item;
 uniform vec4 top_col : source_color;
 uniform vec4 bottom_col : source_color;
 void fragment() {
 	COLOR = mix(bottom_col, top_col, UV.y);
 }
-"
+"""
 
 func _ready() -> void:
+	# The broad, slow ocean swells do not need a 160x160 grid on a phone.
+	# Keep enough tessellation for a smooth silhouette while cutting roughly
+	# a third of the per-vertex wave work and triangle count.
+	if (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")) \
+			and mesh is PlaneMesh:
+		var plane := mesh as PlaneMesh
+		plane.subdivide_width = mini(plane.subdivide_width, 128)
+		plane.subdivide_depth = mini(plane.subdivide_depth, 128)
 	# Groups work across scene-file boundaries (unlike %UniqueName), so any
 	# runtime-instanced node (debris, etc.) can always find this node.
 	add_to_group("ocean")
@@ -153,15 +161,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
-			KEY_F5:
-				_force_time(12.0)
 			KEY_F6:
-				_force_time(18.6)
+				_force_time(12.0)
 			KEY_F7:
-				_force_time(0.4)
+				_force_time(18.6)
 			KEY_F8:
-				_force_time(6.4)
+				_force_time(0.4)
 			KEY_F9:
+				_force_time(6.4)
+			KEY_F4:
 				_show_debug = not _show_debug
 				_ensure_debug_label()
 				if _label != null:

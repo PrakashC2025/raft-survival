@@ -33,8 +33,12 @@ var _fade_duration: float = 1.5
 var _is_fading_in: bool = true
 var _is_fading_out: bool = false
 var _fade_material: StandardMaterial3D = null
+var _model_visual: Node3D = null
 
 const BUOY_DAMPING: float = 3.0
+const WOOD_LOG_SCENE: PackedScene = preload("res://models/kenney_log.glb")
+const BARREL_SCENE: PackedScene = preload("res://models/kenney_barrel.glb")
+const STONE_SCENE: PackedScene = preload("res://models/kenney_rock_small.glb")
 
 # Each entry controls how "floaty" that item looks (rides higher/lower).
 const ITEM_PROFILES := {
@@ -76,6 +80,10 @@ func _ready() -> void:
 		global_position.y = float(ocean.get_height(global_position)) + freeboard
 
 func start_fade_out() -> void:
+	# Stop the spawn fade and restart the timer for despawning. The timer must
+	# run even for items without a profile material (for example, seed debris),
+	# otherwise those objects never become eligible for cleanup.
+	_is_fading_in = false
 	_is_fading_out = true
 	_fade_timer = 0.0
 
@@ -83,22 +91,118 @@ func is_fade_done() -> bool:
 	return _is_fading_out and _fade_timer >= _fade_duration
 
 func _apply_profile() -> void:
-	if ITEM_PROFILES.has(item_name):
-		var prof = ITEM_PROFILES[item_name]
-		mass_kg = prof["mass"]
-		freeboard = prof["freeboard"]
-		# Apply colour to the mesh so different debris is visually distinct
-		var mesh_inst := get_node_or_null("MeshInstance3D")
-		if mesh_inst and mesh_inst.get_surface_override_material(0) == null:
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = prof["color"]
-			mat.emission_enabled = true
-			mat.emission = prof["color"] * 0.3
-			mat.emission_energy_multiplier = 0.4
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.albedo_color.a = 0.0
-			mesh_inst.set_surface_override_material(0, mat)
-			_fade_material = mat
+	if not ITEM_PROFILES.has(item_name):
+		return
+	var profile: Dictionary = ITEM_PROFILES[item_name]
+	mass_kg = float(profile["mass"])
+	freeboard = float(profile["freeboard"])
+	var mesh_instance := get_node_or_null("MeshInstance3D") as MeshInstance3D
+	var model_scene: PackedScene = null
+	var target_size := 0.0
+	match item_name:
+		"Wood":
+			model_scene = WOOD_LOG_SCENE
+			target_size = 0.86
+			_set_collision_box_size(Vector3(0.32, 0.24, 0.9))
+		"Barrel":
+			model_scene = BARREL_SCENE
+			target_size = 0.5
+			_set_collision_box_size(Vector3(0.46, 0.44, 0.46))
+		"Stone":
+			model_scene = STONE_SCENE
+			target_size = 0.48
+			_set_collision_box_size(Vector3(0.44, 0.24, 0.44))
+
+	if model_scene != null and mesh_instance != null:
+		_model_visual = _create_model_visual(model_scene, target_size)
+		if _model_visual != null:
+			mesh_instance.visible = false
+			_set_visual_alpha(0.0)
+			return
+
+	# Keep a simple tinted fallback for item types without a dedicated model.
+	if mesh_instance != null and mesh_instance.get_surface_override_material(0) == null:
+		var material := StandardMaterial3D.new()
+		material.albedo_color = profile["color"]
+		material.roughness = 0.82
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		material.albedo_color.a = 0.0
+		mesh_instance.set_surface_override_material(0, material)
+		_fade_material = material
+
+
+func _set_collision_box_size(size: Vector3) -> void:
+	var collision_shape := get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if collision_shape == null or not (collision_shape.shape is BoxShape3D):
+		return
+	# Shape resources may be shared by instances of debris.tscn. Duplicate before
+	# resizing so one barrel cannot silently change every log's collider.
+	var box := collision_shape.shape.duplicate() as BoxShape3D
+	box.size = size
+	collision_shape.shape = box
+
+
+func _create_model_visual(scene: PackedScene, desired_max_size: float) -> Node3D:
+	var model := scene.instantiate() as Node3D
+	if model == null:
+		return null
+	model.name = "AssetVisual"
+	add_child(model)
+	var bounds := _node_local_aabb(model)
+	var largest := maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z))
+	if largest <= 0.001:
+		model.queue_free()
+		return null
+	var model_scale: float = desired_max_size / largest
+	model.scale = Vector3.ONE * model_scale
+	model.position = -bounds.get_center() * model_scale
+	return model
+
+
+func _node_local_aabb(root: Node3D) -> AABB:
+	var found := false
+	var lower := Vector3.ZERO
+	var upper := Vector3.ZERO
+	for candidate in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := candidate as MeshInstance3D
+		if mesh_instance == null or mesh_instance.mesh == null:
+			continue
+		var relative := mesh_instance.transform
+		var ancestor := mesh_instance.get_parent()
+		while ancestor != null and ancestor != root:
+			if ancestor is Node3D:
+				relative = (ancestor as Node3D).transform * relative
+			ancestor = ancestor.get_parent()
+		if ancestor != root:
+			continue
+		var mesh_bounds := mesh_instance.mesh.get_aabb()
+		for corner in range(8):
+			var point: Vector3 = relative * mesh_bounds.get_endpoint(corner)
+			if not found:
+				lower = point
+				upper = point
+				found = true
+			else:
+				lower = lower.min(point)
+				upper = upper.max(point)
+	return AABB(lower, upper - lower) if found else AABB()
+
+
+func _set_visual_alpha(alpha: float) -> void:
+	var clamped_alpha := clampf(alpha, 0.0, 1.0)
+	if _model_visual != null and is_instance_valid(_model_visual):
+		_model_visual.visible = clamped_alpha > 0.001
+		var instances: Array[GeometryInstance3D] = []
+		if _model_visual is GeometryInstance3D:
+			instances.append(_model_visual as GeometryInstance3D)
+		for candidate in _model_visual.find_children("*", "GeometryInstance3D", true, false):
+			var geometry := candidate as GeometryInstance3D
+			if geometry != null:
+				instances.append(geometry)
+		for geometry in instances:
+			geometry.transparency = 1.0 - clamped_alpha
+	elif _fade_material != null:
+		_fade_material.albedo_color.a = clamped_alpha
 
 func _physics_process(delta: float) -> void:
 	# Skip all buoyancy/current math while the rope system is holding this
@@ -109,39 +213,38 @@ func _physics_process(delta: float) -> void:
 	# RigidBody3D's frozen state to absorb it.
 	if freeze or is_hooked or collected:
 		return
-	if ocean == null:
-		return
+	if ocean != null:
+		var water_y: float = float(ocean.get_height(global_position))
 
-	var water_y: float = float(ocean.get_height(global_position))
+		# ---- Vertical buoyancy: rest at the surface, follow the waves gently ----
+		var rest_y: float = water_y + freeboard
+		var y_error: float = rest_y - global_position.y
+		linear_velocity.y += (buoyancy * y_error - BUOY_DAMPING * linear_velocity.y) * delta
+		linear_velocity.y = clamp(linear_velocity.y, -max_vertical_speed, max_vertical_speed)
 
-	# ---- Vertical buoyancy: rest at the surface, follow the waves gently ----
-	var rest_y: float = water_y + freeboard
-	var y_error: float = rest_y - global_position.y
-	linear_velocity.y += (buoyancy * y_error - BUOY_DAMPING * linear_velocity.y) * delta
-	linear_velocity.y = clamp(linear_velocity.y, -max_vertical_speed, max_vertical_speed)
+		# ---- Horizontal current: one dominant direction + small variation ----
+		var dir: Vector3 = Vector3(current_direction.x, 0.0, current_direction.z).normalized()
+		var side: Vector3 = Vector3(-dir.z, 0.0, dir.x).normalized()
+		var target_velocity: Vector3 = dir * current_speed * _speed_variation + side * _side_drift
+		var k: float = 1.0 - exp(-3.0 * delta)
+		linear_velocity.x = lerpf(linear_velocity.x, target_velocity.x, k)
+		linear_velocity.z = lerpf(linear_velocity.z, target_velocity.z, k)
 
-	# ---- Horizontal current: one dominant direction + small variation ----
-	var dir: Vector3 = Vector3(current_direction.x, 0.0, current_direction.z).normalized()
-	var side: Vector3 = Vector3(-dir.z, 0.0, dir.x).normalized()
-	var target_velocity: Vector3 = dir * current_speed * _speed_variation + side * _side_drift
-	var k: float = 1.0 - exp(-3.0 * delta)
-	linear_velocity.x = lerpf(linear_velocity.x, target_velocity.x, k)
-	linear_velocity.z = lerpf(linear_velocity.z, target_velocity.z, k)
-
-	# ---- Gentle natural tumble ----
-	var t: float = Time.get_ticks_msec() / 1000.0 + _wander_seed
-	angular_velocity = Vector3(sin(t * 0.5) * 0.2, _rot_speed, cos(t * 0.4) * 0.2)
+		# ---- Gentle natural tumble ----
+		var t: float = Time.get_ticks_msec() / 1000.0 + _wander_seed
+		angular_velocity = Vector3(sin(t * 0.5) * 0.2, _rot_speed, cos(t * 0.4) * 0.2)
 
 	# ---- Fade in on spawn ----
-	if _is_fading_in and _fade_material != null:
+	# Advance the timer regardless of whether this item has a fade material.
+	# Seed items do not use ITEM_PROFILES, but still need to finish their
+	# lifecycle normally.
+	if _is_fading_in:
 		_fade_timer += delta
-		var alpha: float = clampf(_fade_timer / _fade_duration, 0.0, 1.0)
-		_fade_material.albedo_color.a = alpha
-		if alpha >= 1.0:
+		_set_visual_alpha(clampf(_fade_timer / _fade_duration, 0.0, 1.0))
+		if _fade_timer >= _fade_duration:
 			_is_fading_in = false
-
-	# ---- Fade out before despawn ----
-	if _is_fading_out and _fade_material != null:
+			_fade_timer = 0.0
+	elif _is_fading_out:
+		# ---- Fade out before despawn ----
 		_fade_timer += delta
-		var alpha: float = clampf(1.0 - _fade_timer / _fade_duration, 0.0, 1.0)
-		_fade_material.albedo_color.a = alpha
+		_set_visual_alpha(clampf(1.0 - _fade_timer / _fade_duration, 0.0, 1.0))
