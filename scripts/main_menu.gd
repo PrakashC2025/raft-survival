@@ -10,6 +10,9 @@ extends Control
 ## ============================================================
 
 const GAME_SCENE := "res://scenes/main.tscn"
+## Device tiering: phones get longer prewarm/stall windows (statics via
+## preload so the menu logic works even before the autoload tree exists).
+const MobilePerf := preload("res://scripts/mobile_perf.gd")
 
 # button ids in display order
 var _buttons: Array = []          # of {id, label, sub}
@@ -20,6 +23,50 @@ var _busy := false
 var _t := 0.0
 var _vp := Vector2.ZERO
 var _title_w := 0.0
+
+# --- threaded world loading (never blocks the menu) ---
+var _loading := false          # loading overlay is up
+var _load_prog := 0.0          # smoothed 0..1 for the rope bar
+var _load_real := 0.0          # engine-reported progress (or time-fallback)
+var _tip := ""
+# --- prewarm chain: ONE heavy bake at a time ---
+# Requesting the scene AND all 5 big bakes at once made the resource loader
+# thrash and stall at ~92% forever (user report 2026-09-15). Sequential
+# requests + a watchdog keep it always moving.
+# Mobile builds prewarm the LIGHT apple bake (plant_instance._mobile_bake
+# resolves the same way) so the desktop tree never touches phone RAM;
+# desktop prewarms only the full bake. _request_next_prewarm skips paths
+# that don't exist in the export (the Android preset excludes the desktop
+# apple tree).
+static func _prewarm_paths() -> Array:
+	if OS.has_feature("mobile"):
+		return [
+			"res://grass/baked/apple_tree_mobile.res",
+			"res://grass/baked/palm_island.res",
+			"res://grass/baked/coconut_mature.res",
+			"res://grass/baked/coconut_young.res",
+			"res://grass/baked/coconut_sprout.res",
+		]
+	return [
+		"res://grass/baked/apple_tree.res",
+		"res://grass/baked/palm_island.res",
+		"res://grass/baked/coconut_mature.res",
+		"res://grass/baked/coconut_young.res",
+		"res://grass/baked/coconut_sprout.res",
+	]
+var _prewarm_idx := 0
+var _prewarm_path := ""        # the bake currently loading ("" = none)
+var _prewarm_wait := 0.0       # seconds waited with the scene already ready
+var _stall_t := 0.0            # seconds without any real progress
+var _last_prog := 0.0
+const LOADING_TIPS := [
+	"Hold E to chop trees for wood",
+	"Seeds grow in pots on your raft",
+	"The beacon light marks the island",
+	"Ripe fruit twinkles — pick it with E",
+	"Swim close to the raft and press E to climb",
+	"Build walls before the storm hits",
+]
 
 func _ready() -> void:
 	anchor_left = 0.0
@@ -59,9 +106,11 @@ func _process(delta: float) -> void:
 	if not visible:
 		return
 	_vp = size
+	if _loading:
+		_poll_load(delta)
 	# hover tracking (mouse)
 	if not OS.has_feature("mobile") and not OS.has_feature("android") \
-			and not OS.has_feature("ios"):
+			and not OS.has_feature("ios") and get_viewport() != null:
 		var mp := get_global_mouse_position()
 		_hover = _btn_at(mp)
 	queue_redraw()  # animated waves need a redraw every frame
@@ -117,12 +166,94 @@ func _activate(btn_idx: int, _pos: Vector2) -> void:
 		Inventory.load_game("quick")
 	else:
 		Inventory.new_game_reset()
-	get_tree().change_scene_to_file(GAME_SCENE)
+	_start_threaded_load()
 
 
 # ============================================================
-# LAYOUT
+# THREADED WORLD LOADING — the menu stays alive and animates while the
+# island builds. The old code changed scene synchronously: on phones the
+# 1–2 s island generation froze everything with no feedback, which felt
+# like the game had hung when tapping Continue.
 # ============================================================
+func _start_threaded_load() -> void:
+	_loading = true
+	_load_prog = 0.0
+	_load_real = 0.0
+	_prewarm_idx = 0
+	_prewarm_path = ""
+	_prewarm_wait = 0.0
+	_stall_t = 0.0
+	_last_prog = 0.0
+	_tip = LOADING_TIPS[randi() % LOADING_TIPS.size()]
+	ResourceLoader.load_threaded_request(GAME_SCENE, "", true)
+	_request_next_prewarm()
+
+
+## Start the NEXT prewarm request only when the previous one finished.
+func _request_next_prewarm() -> void:
+	_prewarm_path = ""
+	var paths := _prewarm_paths()
+	while _prewarm_idx < paths.size():
+		var p: String = paths[_prewarm_idx]
+		_prewarm_idx += 1
+		if ResourceLoader.exists(p):
+			_prewarm_path = p
+			ResourceLoader.load_threaded_request(p, "", true)
+			return
+
+
+func _poll_load(delta: float) -> void:
+	# Advance the one-at-a-time prewarm chain.
+	if _prewarm_path != "":
+		var pst := ResourceLoader.load_threaded_get_status(_prewarm_path)
+		if pst != ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			_prewarm_path = ""
+			_request_next_prewarm()
+	# Progress is filled into the array passed to the status call (Godot 4 API).
+	var prog_arr: Array = []
+	var status := ResourceLoader.load_threaded_get_status(GAME_SCENE, prog_arr)
+	# Engine progress (0..1 array) when it reports; else creep with time so
+	# the bar never sits at zero on fast compiles.
+	if prog_arr.size() > 0:
+		_load_real = maxf(_load_real, float(prog_arr[0]))
+	else:
+		_load_real = minf(_load_real + delta * 0.25, 0.9)
+	# Smooth toward the real progress; snap when done.
+	var target := maxf(_load_real, 0.08)
+	_load_prog = lerpf(_load_prog, target, minf(delta * 6.0, 1.0))
+	# --- STALL WATCHDOG: never let the bar freeze at ~92% again ---
+	# If the engine reports no new progress for 15 s (a wedged loader thread,
+	# a blocked import, anything), fall back to the synchronous scene load so
+	# the game ALWAYS gets through.
+	if _load_real > _last_prog + 0.005:
+		_last_prog = _load_real
+		_stall_t = 0.0
+	else:
+		_stall_t += delta
+	var scene_ready := status == ResourceLoader.THREAD_LOAD_LOADED
+	if scene_ready and _prewarm_path != "":
+		# Scene is parsed; give the prewarm chain a tier-based window (mobile
+		# parses the 16 MB apple bake — fixed 8 s kept cutting it off and
+		# paying the parse cost again during gameplay), then enter the game.
+		_prewarm_wait += delta
+		if _prewarm_wait > MobilePerf.prewarm_window():
+			_prewarm_path = ""
+	if (scene_ready and _prewarm_path == "") or _stall_t > MobilePerf.stall_window():
+		_load_prog = 1.0
+		var scene: PackedScene = null
+		if scene_ready:
+			scene = ResourceLoader.load_threaded_get(GAME_SCENE)
+		if scene != null:
+			get_tree().change_scene_to_packed(scene)
+		else:
+			get_tree().change_scene_to_file(GAME_SCENE)
+		_loading = false
+	elif status == ResourceLoader.THREAD_LOAD_FAILED \
+			or status == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+		# Never trap the player on a broken save/load: fall back to the
+		# synchronous path (worst case it freezes for a second like before).
+		_loading = false
+		get_tree().change_scene_to_file(GAME_SCENE)
 func _layout_buttons() -> void:
 	_btn_rects.clear()
 	var s := _vp
@@ -160,9 +291,76 @@ func _draw() -> void:
 	_draw_sky(s, horizon)
 	_draw_sun(s, horizon)
 	_draw_ocean(s, horizon)
+	if _loading:
+		_draw_loading(s)
+		return
 	_draw_title(s)
 	_draw_buttons(s)
 	_draw_footer(s)
+
+
+## Game-styled loading overlay: the same ocean now carries a bobbing raft,
+## a rope progress bar on a wooden plaque, a survival tip, and the day
+## counter ticks as the island builds. Player sees motion, not a freeze.
+func _draw_loading(s: Vector2) -> void:
+	var font := ThemeDB.fallback_font
+	var cx: float = s.x * 0.5
+	var cy: float = s.y * 0.42
+	# --- bobbing raft on the existing waves ---
+	var bob := sin(_t * 2.2) * 5.0
+	var tilt := sin(_t * 1.7) * 0.05
+	var rw: float = minf(s.x * 0.34, 260.0)
+	var rh: float = rw * 0.22
+	var rc := Vector2(cx, cy + bob)
+	draw_set_transform(rc, tilt, Vector2.ONE)
+	# hull planks
+	var hull := Rect2(-rw * 0.5, -rh * 0.5, rw, rh)
+	_draw_rounded(hull, 8.0, Color(0.32, 0.22, 0.12, 0.98))
+	_draw_rounded(hull, 8.0, Color(0.5, 0.36, 0.2, 0.9), false, 2.0)
+	for i in range(3):
+		var py: float = hull.position.y + rh * (0.25 + 0.25 * float(i))
+		draw_line(Vector2(hull.position.x + 6, py), Vector2(hull.end.x - 6, py), Color(0, 0, 0, 0.2), 2.0)
+	# mast + sail
+	draw_line(Vector2(0, -rh * 0.5), Vector2(0, -rh * 2.1), Color(0.25, 0.17, 0.1), 4.0)
+	var sway := sin(_t * 2.6) * 4.0
+	var sail := PackedVector2Array([
+		Vector2(2, -rh * 2.0), Vector2(rw * 0.34 + sway, -rh * 1.2), Vector2(2, -rh * 0.55),
+	])
+	draw_colored_polygon(sail, Color(0.88, 0.84, 0.74, 0.96))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	# wake lines under the raft
+	draw_line(Vector2(rc.x - rw * 0.62, rc.y + rh * 0.5), Vector2(rc.x - rw * 0.3, rc.y + rh * 0.55), Color(0.8, 0.95, 1.0, 0.30), 2.0)
+	draw_line(Vector2(rc.x + rw * 0.3, rc.y + rh * 0.55), Vector2(rc.x + rw * 0.62, rc.y + rh * 0.5), Color(0.8, 0.95, 1.0, 0.30), 2.0)
+	# --- "LOADING THE ISLAND" text ---
+	var fs: int = int(clampf(s.y * 0.032, 16.0, 26.0))
+	var msg := "LOADING THE ISLAND…"
+	var tw: float = font.get_string_size(msg, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	_draw_text(msg, Vector2(cx - tw * 0.5, cy + rh * 2.2), fs, Color(1.0, 0.9, 0.66, 0.98))
+	# --- rope progress bar on a small wooden plaque ---
+	var bw: float = minf(s.x * 0.6, 380.0)
+	var bh: float = 14.0
+	var bp := Vector2(cx - bw * 0.5, cy + rh * 2.2 + fs * 1.6)
+	var plaque := Rect2(bp.x - 12, bp.y - 12, bw + 24, bh + 24)
+	_draw_rounded(plaque, 10.0, Color(0.14, 0.09, 0.05, 0.92))
+	_draw_rounded(plaque, 10.0, Color(0.38, 0.26, 0.13, 0.9), false, 2.0)
+	draw_rect(Rect2(bp, Vector2(bw, bh)), Color(0.05, 0.04, 0.03, 0.9))
+	var fill_w: float = bw * clampf(_load_prog, 0.0, 1.0)
+	if fill_w > 2.0:
+		draw_rect(Rect2(bp, Vector2(fill_w, bh)), Color(0.72, 0.52, 0.26, 1.0))
+		# rope-twist texture: light dashes along the fill
+		var dash_x := bp.x
+		while dash_x < bp.x + fill_w - 4.0:
+			draw_rect(Rect2(dash_x, bp.y + 2, 3.0, bh - 4.0), Color(0.85, 0.66, 0.38, 0.5))
+			dash_x += 9.0
+	# percent text
+	var pct := "%d%%" % int(roundf(_load_prog * 100.0))
+	var pfs: int = int(fs * 0.8)
+	_draw_text(pct, Vector2(cx - font.get_string_size(pct, HORIZONTAL_ALIGNMENT_LEFT, -1, pfs).x * 0.5, bp.y + bh + pfs * 1.3), pfs, Color(1, 1, 1, 0.75))
+	# --- rotating survival tip ---
+	if _tip != "":
+		var tfs: int = int(clampf(s.y * 0.024, 13.0, 18.0))
+		var ttw: float = font.get_string_size(_tip, HORIZONTAL_ALIGNMENT_LEFT, -1, tfs).x
+		_draw_text(_tip, Vector2(cx - ttw * 0.5, bp.y + bh + pfs * 3.1), tfs, Color(0.6, 0.85, 0.95, 0.9))
 
 
 func _lerp_color(a: Color, b: Color, k: float) -> Color:
