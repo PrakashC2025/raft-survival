@@ -15,7 +15,18 @@ extends Node3D
 ## - Rebuilds the grass one frame later, once the island collider exists.
 
 const TERRAIN_SHADER_PATH := "res://shaders/island_terrain.gdshader"
-const ISLAND_TARGET_SIZE := 24.0  # old island_terrain.glb footprint (m)
+## Footprint the imported beach scan is normalised to (metres, widest X/Z axis).
+## The raw scan is ~284 m of dunes that reach 46 m above its own water line, so
+## it has to be shrunk hard to read as a small island next to the raft. 36 m
+## gives a real islet: ~32 m of sand at the water line rising ~3 m to a dune
+## crown — big enough that the palms and the grass field are visible from the
+## raft instead of disappearing into a flat sand bank.
+const ISLAND_TARGET_SIZE := 36.0
+## Where the scan's own water line sits in its local frame. The scan is authored
+## with y = 0 at the sea surface (the mesh continues ~22 m below it), so placing
+## the island root at y = 0 drops the shoreline exactly on the live water level
+## and the waves wash over the beach edge.
+const SCAN_WATER_LINE := 0.0
 
 @export var island_root: NodePath = ^"../Island"
 @export var generate_collision := true
@@ -143,10 +154,13 @@ func _is_gameplay_descendant(node: Node, island: Node3D) -> bool:
 		current = current.get_parent()
 	return false
 
-## The scan spans ~283 m with dunes ±30 m tall — far bigger than the 24 m
-## gameplay island. Scale every imported root down so the widest mesh's XZ
-## footprint matches ISLAND_TARGET_SIZE, and hide stray props (raft/shell
-## debris) that would shrink into sub-decimeter specks.
+## The scan spans ~284 m of dunes reaching 46 m above its own water line — far
+## bigger than a gameplay island. Scale every imported root down so the widest
+## mesh's XZ footprint matches ISLAND_TARGET_SIZE, then drop the whole island so
+## the scan's water line rides the live sea surface (the mesh continues ~22 m
+## below that line, so without this lift the island stays mostly submerged and
+## reads as a flat, tree-less sand bank). Stray props (raft/shell debris) that
+## would shrink into sub-decimeter specks are hidden.
 func _normalize_sketchfab_island(island: Node3D) -> void:
 	var max_extent := 0.0
 	for mi in island.find_children("*", "MeshInstance3D", true, false):
@@ -163,6 +177,9 @@ func _normalize_sketchfab_island(island: Node3D) -> void:
 		# field, beacon) keep their real-world sizes and offsets.
 		if child is Node3D and not _is_gameplay_node(child):
 			(child as Node3D).scale = Vector3.ONE * k
+	# Lift the island so the scan's own water line sits on the real sea surface.
+	var water_y := _water_height_at(island.global_position)
+	island.global_position.y = water_y - k * SCAN_WATER_LINE
 	for mi in island.find_children("*", "MeshInstance3D", true, false):
 		if _is_gameplay_descendant(mi, island):
 			continue
@@ -170,7 +187,17 @@ func _normalize_sketchfab_island(island: Node3D) -> void:
 			var s := (mi as MeshInstance3D).mesh.get_aabb().size
 			if maxf(s.x, s.z) * k < 1.0:
 				(mi as MeshInstance3D).visible = false
-	print("[IslandSetup] beach scan rescaled x%.4f -> %d m footprint" % [k, int(ISLAND_TARGET_SIZE)])
+	print("[IslandSetup] beach scan rescaled x%.4f -> %d m footprint, shoreline at y=%.2f"
+			% [k, int(ISLAND_TARGET_SIZE), island.global_position.y])
+
+
+## Live sea-surface height (world Y) at a position; 0.0 if the ocean has not
+## registered itself in the "ocean" group yet.
+func _water_height_at(world_pos: Vector3) -> float:
+	var oc := get_tree().get_first_node_in_group("ocean")
+	if oc != null and oc.has_method("get_height"):
+		return float(oc.call("get_height", world_pos))
+	return 0.0
 
 ## Replace the glb's near-white placeholder materials with the terrain shader.
 ## Surfaces are matched by imported surface name (IslandGrass / Sand from the
@@ -279,9 +306,12 @@ func _snap_palm_trees() -> void:
 	for palm in palms:
 		for body in palm.find_children("*", "StaticBody3D", true, false):
 			exclude.append((body as CollisionObject3D).get_rid())
+	# Long probe: the island crown now rises ~3 m and palms are authored a
+	# little above the sand, so a short ±5/±10 ray can start *below* a dune
+	# crest and miss the ground entirely (palm left floating / buried).
 	for palm in palms:
-		var from: Vector3 = palm.global_position + Vector3.UP * 5.0
-		var to: Vector3 = palm.global_position + Vector3.DOWN * 10.0
+		var from: Vector3 = palm.global_position + Vector3.UP * 16.0
+		var to: Vector3 = palm.global_position + Vector3.DOWN * 16.0
 		var q := PhysicsRayQueryParameters3D.create(from, to, 1, exclude)
 		var hit: Dictionary = space.intersect_ray(q)
 		if hit.is_empty():

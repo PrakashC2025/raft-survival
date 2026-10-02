@@ -30,15 +30,11 @@ func _ready() -> void:
 
 func _spawn_pickups() -> void:
 	# Wait for the island's terrain collider instead of guessing a fixed delay;
-	# imported islands can take different numbers of physics frames to cook.
-	var setup := get_node_or_null("IslandSetup")
-	if setup != null:
-		for _frame in range(180):
-			if not is_inside_tree():
-				return
-			if bool(setup.get("setup_complete")):
-				break
-			await get_tree().physics_frame
+	# imported islands can take different numbers of physics frames to cook, and
+	# the home island's IslandSetup lives outside this node.
+	await _wait_for_island_collider()
+	if not is_inside_tree():
+		return
 	var space := get_world_3d().direct_space_state
 	var rng := RandomNumberGenerator.new()
 	rng.seed = pickup_seed
@@ -63,3 +59,19 @@ func _spawn_pickups() -> void:
 		add_child(pickup)
 		pickup.global_position = Vector3(hit["position"]) + Vector3.UP * 0.38
 		pickup.rotation.y = rng.randf_range(0.0, TAU)
+
+
+## Blocks until island_setup.gd has finished cooking this island's collider, so
+## the spawn raycasts have ground to hit.
+func _wait_for_island_collider() -> void:
+	for _frame in range(360):
+		if not is_inside_tree():
+			return
+		var setup := get_node_or_null("IslandSetup")
+		if setup != null and bool(setup.get("setup_complete")):
+			return
+		# Any StaticBody3D under this island means the trimesh / palm bodies
+		# are already in place (island_setup.gd cooks the terrain first).
+		if find_children("*", "StaticBody3D", true, false).size() > 0:
+			return
+		await get_tree().physics_frame

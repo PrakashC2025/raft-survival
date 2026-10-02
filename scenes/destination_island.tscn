@@ -32,11 +32,24 @@ scale = Vector3(2.5, 2.5, 2.5)
 transform = Transform3D(0.5, 0, 0.866025, 0, 1, 0, -0.866025, 0, 0.5, 4.0, 1.4, 2.6)
 scale = Vector3(1.9, 1.9, 1.9)
 
+[node name="PalmTreeFour" parent="." instance=ExtResource("7_palm_short")]
+transform = Transform3D(-2.221629, 0, 0.595284, 0, 2.3000, 0, -0.595284, 0, -2.221629, -5.506, 1.70, 1.475)
+
+[node name="PalmTreeFive" parent="." instance=ExtResource("6_palm_tall")]
+transform = Transform3D(0.183027, 0, 2.092009, 0, 2.1000, 0, -2.092009, 0, 0.183027, 0.567, 1.60, 6.475)
+
+[node name="PalmTreeSix" parent="." instance=ExtResource("6_palm_tall")]
+transform = Transform3D(-1.916725, 0, -1.444356, 0, 2.4000, 0, 1.444356, 0, -1.916725, -5.990, 1.50, -4.514)
+
 [node name="IslandGrass" type="Node3D" parent="."]
 position = Vector3(0, 4, 0)
 script = ExtResource("4_grass")
-instance_count = 800
-scatter_radius = 11.0
+instance_count = 2200
+scatter_radius = 10.0
+raycast_up = 10.0
+raycast_down = 16.0
+max_height_above_water = 2.4
+min_height_above_water = -0.15
 scatter_seed = 2468
 
 [node name="IslandSetup" type="Node3D" parent="."]
