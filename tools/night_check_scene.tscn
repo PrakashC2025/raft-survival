@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://uu7f453hcffl"]
+
+[ext_resource type="Script" path="res://tools/night_check.gd" id="1_nc"]
+
+[node name="NightCheck" type="Node"]
+script = ExtResource("1_nc")
