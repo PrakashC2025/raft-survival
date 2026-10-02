@@ -136,6 +136,6 @@ func _run() -> void:
 	print("FOUNDATION SMOKE: %d checks, %d failures" % [checks, failures])
 	var ambience := current_scene.get_node_or_null("OceanAmbience") as AudioStreamPlayer
 	if ambience != null:
-		ambience.stop()
-	await process_frame
+		ambience.call("stop_environment")
+	await create_timer(0.1).timeout
 	quit(0 if failures == 0 else 1)

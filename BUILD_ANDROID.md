@@ -1,12 +1,44 @@
 # Android build and mobile play
 
-The 1.1.1 update (version code 4) fixes the New Game / Continue loading failure.
+The current preset is **1.1.2 (version code 5)** for manual phone testing.
+It retains the New Game / Continue loading fix first delivered in 1.1.1.
 The previous export excluded `models/sand_raftsurvival_Image_*`, although the
 imported island scene still depends on six of those textures. Godot consequently
 reported threaded load status 2 and scene error 19. Keep required island textures
 in the export; reducing their size should be done through import settings.
 
 ## Build
+
+### Export from the editor
+
+1. Close and reopen this Godot project before exporting. An editor left open can
+   overwrite externally corrected presets with its cached old settings.
+2. Open **Project → Export**, then select **Android**.
+3. Check **Resources → Export all resources in the project**. The exclusion
+   field must not contain `models/sand_raftsurvival_Image_*` or
+   `textures/sand_raftsurvival_*`; the island needs those textures.
+4. Under **Options**, use **APK**, **Use Gradle Build: Off**,
+   **Arm64-v8a: On**, **Version Code: 5**, **Version Name: 1.1.2**,
+   **Unique Name: com.praka.oceansurvival**, and **Signed: On**.
+   Leave SDK version overrides and custom templates empty to use the installed
+   Godot templates. Keep the existing debug signing key.
+5. Click **Export Project**, save to `build/OceanSurvival-updated.apk`, leave
+   **Export With Debug** checked for this testing build, then click **Save**.
+6. Copy the newly exported APK to the phone and install it as an update.
+
+Matching **4.7.1.stable.mono** Android export templates and Android SDK build
+tools are installed locally. If Godot reports missing prerequisites, check
+**Editor → Manage Export Templates** and **Editor → Editor Settings → Export →
+Android**. The Android SDK directory is
+`C:\Users\praka\AppData\Local\Android\Sdk`; Java SDK Path must point to the
+installed JDK directory (currently
+`C:\Program Files\Eclipse Adoptium\jdk-25.0.4.101-hotspot`). See the
+[official Android export instructions](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_android.html).
+
+This preset is for an APK installed directly on your phone. Play Store submission
+uses an AAB, Gradle, and release signing instead.
+
+### Optional command line export and package check
 
 Use the installed Godot 4.7.1 editor and matching Android export templates, JDK,
 Android SDK, and existing debug keystore. This local APK uses debug signing so it

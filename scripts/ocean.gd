@@ -116,6 +116,7 @@ func _ready() -> void:
 		_mat.set_shader_parameter("wave_height", wave_height)
 		_mat.set_shader_parameter("wave_speed", wave_speed)
 		_push_factors(0.0, 0.0, 0.0)
+	_create_far_water()
 
 func _process(delta: float) -> void:
 	_time += delta
@@ -141,6 +142,32 @@ func _process(delta: float) -> void:
 	_push_factors(night, twilight, moon_factor)
 	_update_debug_hud(night, twilight, moon_factor)
 	_update_underwater()
+
+func _create_far_water() -> void:
+	if _mat == null or not (mesh is PlaneMesh):
+		return
+	# Four broad strips fill the horizon beyond the playable, detailed plane.
+	# They have a hole in the center: no full-screen overlapping water pass.
+	var inner := (mesh as PlaneMesh).size * 0.5
+	var extent := 12000.0
+	var corners: Array[Vector3] = [Vector3(-inner.x, 0, -inner.y), Vector3(inner.x, 0, -inner.y),
+		Vector3(inner.x, 0, inner.y), Vector3(-inner.x, 0, inner.y)]
+	var outer: Array[Vector3] = [Vector3(-extent, 0, -extent), Vector3(extent, 0, -extent),
+		Vector3(extent, 0, extent), Vector3(-extent, 0, extent)]
+	var builder := SurfaceTool.new()
+	builder.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for edge in range(4):
+		var next := (edge + 1) % 4
+		var points: Array[Vector3] = [corners[edge], outer[edge], outer[next], corners[edge], outer[next], corners[next]]
+		for point in points:
+			builder.set_normal(Vector3.UP)
+			builder.add_vertex(point)
+	var far_water := MeshInstance3D.new()
+	far_water.name = "FarWater"
+	far_water.mesh = builder.commit()
+	far_water.material_override = _mat
+	far_water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(far_water)
 
 func _push_factors(night: float, twilight: float, moon_factor: float) -> void:
 	_last_night = night

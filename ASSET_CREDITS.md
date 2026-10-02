@@ -14,3 +14,8 @@ The assets below are separate from the Raft Survival source-code license. They a
 - **Ocean ambience** — Norwayjohn, [Freesound sound 404686](https://freesound.org/people/norwayjohn/sounds/404686/), CC0 1.0. The included MP3 is the source project's conversion of the CC0 WAV, from [Wave/Length](https://github.com/dougwhite/wave-length/); it loops quietly during gameplay.
 - **Wood and island footsteps** — TinyWorlds, [Different Steps on Wood, Stone, Leaves, Gravel and Mud](https://opengameart.org/content/different-steps-on-wood-stone-leaves-gravel-and-mud), CC0. The OGG files are included through the [OGA Footsteps pack](https://kenney.nl/assets/oga-footsteps): three wood variations for raft surfaces and gravel for island ground.
 - **Pickup rustle and chopping sounds** — Kenney RPG Audio, CC0: [official pack](https://kenney.nl/assets/rpg-audio).
+- **Sea wind, foliage rustle, and rain ambience beds** — original procedural project audio, generated offline by `tools/generate_environment_audio.py`. These WAVs use filtered seeded noise and periodic stereo envelopes; they are not downloaded recordings. The credited recorded ocean above remains the main wave layer.
+
+## Procedural environment detail
+
+`scripts/vegetation_visual.gd` generates original curved grass tufts and pinnate palm fronds, used with the existing credited palm trunks. Leaf/bark/water shaders add original project surface detail and motion without external textures or copied reference-game artwork.

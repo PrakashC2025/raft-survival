@@ -182,17 +182,17 @@ static func _capsule(batches: Dictionary, material: Material, radius: float, hei
 
 static func _append(batches: Dictionary, material: Material, mesh: Mesh, transform: Transform3D) -> void:
 	if not batches.has(material):
-		var surface := SurfaceTool.new()
-		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-		batches[material] = surface
+		var new_batch := SurfaceTool.new()
+		new_batch.begin(Mesh.PRIMITIVE_TRIANGLES)
+		batches[material] = new_batch
 	var surface: SurfaceTool = batches[material]
 	surface.append_from(mesh, 0, transform)
 
 static func _tube(batches: Dictionary, material: Material, points: PackedVector3Array, radius: float, sides: int) -> void:
 	if not batches.has(material):
-		var surface := SurfaceTool.new()
-		surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-		batches[material] = surface
+		var new_batch := SurfaceTool.new()
+		new_batch.begin(Mesh.PRIMITIVE_TRIANGLES)
+		batches[material] = new_batch
 	var surface: SurfaceTool = batches[material]
 	for segment in range(points.size() - 1):
 		var direction := (points[segment + 1] - points[segment]).normalized()

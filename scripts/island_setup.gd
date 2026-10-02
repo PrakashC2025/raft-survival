@@ -15,6 +15,7 @@ extends Node3D
 ## - Rebuilds the grass one frame later, once the island collider exists.
 
 const TERRAIN_SHADER_PATH := "res://shaders/island_terrain.gdshader"
+const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
 ## Footprint the imported beach scan is normalised to (metres, widest X/Z axis).
 ## The raw scan is ~284 m of dunes that reach 46 m above its own water line, so
 ## it has to be shrunk hard to read as a small island next to the raft. 36 m
@@ -54,6 +55,7 @@ func _ready() -> void:
 		await _create_island_collision()
 	if apply_terrain_material:
 		_apply_terrain_materials()
+	_apply_palm_visuals()
 	if snap_palms:
 		if generate_collision:
 			# Freshly created colliders only enter the physics space after a
@@ -87,6 +89,14 @@ func _process(_delta: float) -> void:
 func island_root_path() -> String:
 	var p := String(island_root)
 	return p if not p.is_empty() else "../Island"
+
+func _apply_palm_visuals() -> void:
+	var island := get_node_or_null(island_root) as Node3D
+	if island == null:
+		return
+	for child in island.get_children():
+		if child is Node3D and child.name.begins_with("Palm"):
+			VEGETATION_VISUAL.apply_palm(child as Node3D)
 
 func _create_island_collision() -> void:
 	var island := get_node_or_null(island_root) as Node3D

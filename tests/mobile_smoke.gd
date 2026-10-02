@@ -226,7 +226,7 @@ func _run() -> void:
 	print("MOBILE SMOKE: %d checks, %d failures" % [checks, failures])
 	var ambience := current_scene.get_node_or_null("OceanAmbience") as AudioStreamPlayer
 	if ambience != null:
-		ambience.stop()
+		ambience.call("stop_environment")
 	# Continue starts asynchronous island setup; let its pending work settle.
 	await create_timer(1.0).timeout
 	quit(0 if failures == 0 else 1)

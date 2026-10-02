@@ -512,7 +512,7 @@ func _compute_layout() -> void:
 		var card_h: float = (grid_bottom - grid_top - row_gap * 2.0) / 3.0
 		for idx in range(CRAFT_ORDER.size()):
 			var col: int = idx % 2
-			var row: int = int(idx / 2)
+			var row: int = int(float(idx) / 2.0)
 			_craft_card_rects.append(Rect2(
 					_craft_panel_rect.position.x + craft_pad + float(col) * (card_w + cg),
 						grid_top + float(row) * (card_h + row_gap), card_w, card_h))
@@ -593,7 +593,7 @@ func _build_cache_key() -> String:
 	var key := str(_vp)
 	key += "|bag" + str(_bag_open)
 	key += "|map" + str(_map_open) + "|craft" + str(_craft_open) + "|death" + str(_death_open)
-	key += "|map_selected" + (_selected_island.name if _selected_island != null and is_instance_valid(_selected_island) else "")
+	key += "|map_selected" + (str(_selected_island.name) if _selected_island != null and is_instance_valid(_selected_island) else "")
 	if p == null:
 		return key
 	key += "|bm" + str(p.get("build_mode") == true)

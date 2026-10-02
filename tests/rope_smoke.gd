@@ -127,7 +127,7 @@ func _run() -> void:
 	print("ROPE SMOKE: %d checks, %d failures" % [checks, failures])
 	var ambience := current_scene.get_node_or_null("OceanAmbience") as AudioStreamPlayer
 	if ambience != null:
-		ambience.stop()
+		ambience.call("stop_environment")
 	# Let the dummy audio backend flush playback before engine shutdown.
 	await create_timer(0.1).timeout
 	quit(0 if failures == 0 else 1)

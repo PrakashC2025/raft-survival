@@ -22,6 +22,7 @@ enum Stage { SEED, SPROUT, GROWING, MATURE, FALLING, STUMP }
 const CAT_ROOT := "ROOT"
 const CAT_FRUIT := "FRUIT_TREE"
 const PALM_TALL_SCENE: PackedScene = preload("res://models/kenney_palm_detailed_tall.glb")
+const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
 const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
 const BANANA_SCENE: PackedScene = preload("res://models/kenney_banana.glb")
 const CHOP_SOUND: AudioStream = preload("res://audio/chop.ogg")
@@ -127,9 +128,9 @@ func save_state() -> Dictionary:
 		saved_health = 1
 	var fruit_states: Array[Dictionary] = []
 	for fruit in _fruits:
-		var position: Vector3 = fruit.get("pos", Vector3.ZERO)
+		var fruit_position: Vector3 = fruit.get("pos", Vector3.ZERO)
 		fruit_states.append({
-			"p": [position.x, position.y, position.z],
+			"p": [fruit_position.x, fruit_position.y, fruit_position.z],
 			"r": float(fruit.get("rotation_y", 0.0)),
 			"e": float(fruit.get("elapsed", 0.0)),
 			"g": float(fruit.get("regrow", 60.0)),
@@ -374,10 +375,10 @@ func _build_tree_visual(stage: int) -> void:
 func _build_coconut_palm_visual(stage: int) -> void:
 	if stage == Stage.SEED:
 		var seed_mesh := MeshInstance3D.new()
-		var seed := SphereMesh.new()
-		seed.radius = 0.035
-		seed.height = 0.07
-		seed_mesh.mesh = seed
+		var seed_shape := SphereMesh.new()
+		seed_shape.radius = 0.035
+		seed_shape.height = 0.07
+		seed_mesh.mesh = seed_shape
 		seed_mesh.position = Vector3(0.0, 0.02, 0.0)
 		var seed_material := StandardMaterial3D.new()
 		seed_material.albedo_color = Color(0.36, 0.24, 0.12)
@@ -392,6 +393,7 @@ func _build_coconut_palm_visual(stage: int) -> void:
 		return
 	palm.name = "CoconutPalm"
 	_container.add_child(palm)
+	VEGETATION_VISUAL.apply_palm(palm)
 	var bounds := _node_local_aabb(palm)
 	if bounds.size.y <= 0.001:
 		push_warning("[Plant] Kenney palm model has no measurable height")

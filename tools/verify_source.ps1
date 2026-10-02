@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][string]$GodotPath,
-    [string[]]$Tests = @('rope_smoke.gd', 'testing_resources_smoke.gd', 'mobile_smoke.gd', 'foundation_smoke.gd')
+    [string[]]$Tests = @('rope_smoke.gd', 'testing_resources_smoke.gd', 'mobile_smoke.gd', 'foundation_smoke.gd', 'environment_smoke.gd', 'island_marker_smoke.gd')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -18,13 +18,16 @@ $config = '[application]' + [Environment]::NewLine + 'config/use_custom_user_dir
 foreach ($test in $Tests) {
     $testPath = Join-Path (Join-Path $projectRoot 'tests') $test
     $logPath = Join-Path (Join-Path $projectRoot 'build') ('source-' + [IO.Path]::GetFileNameWithoutExtension($test) + '.log')
-    & $GodotPath --headless --path $sourceRoot --script $testPath --log-file $logPath
+    $processOutput = & $GodotPath --headless --path $sourceRoot --script $testPath --log-file $logPath 2>&1 | Out-String
     $testExit = $LASTEXITCODE
+    $consolePath = Join-Path (Join-Path $projectRoot 'build') ('source-' + [IO.Path]::GetFileNameWithoutExtension($test) + '-console.log')
+    [IO.File]::WriteAllText($consolePath, $processOutput)
     $stream = [IO.File]::Open($logPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
     $reader = [IO.StreamReader]::new($stream)
-    try { $result = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    try { $result = $reader.ReadToEnd() + [Environment]::NewLine + $processOutput } finally { $reader.Dispose() }
     if ($testExit -ne 0 -or $result -match 'SCRIPT ERROR:|ERROR:|FAIL:' -or $result -notmatch '\d+ checks, 0 failures') {
-        throw "Source verification failed: $testPath. Read $logPath"
+        throw "Source verification failed: $testPath. Read $logPath and $consolePath"
     }
+    Write-Output ([regex]::Match($processOutput, '(?m)^.*\d+ checks, 0 failures.*$').Value.Trim())
 }
 Write-Output "Source checks passed without exporting an APK. Test project: $sourceRoot"

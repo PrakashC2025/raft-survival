@@ -77,7 +77,8 @@ var _camera_submerged := false
 @export var water_splash_enabled: bool = true
 
 # --- Audio (optional — assign your own .ogg/.wav in the Inspector) ---
-@export var rain_sound: AudioStream = null
+@export var rain_sound: AudioStream = preload("res://audio/rain_ambience.wav")
+@export_range(-40.0, 0.0) var rain_volume_db := -12.0
 @export var thunder_sounds: Array[AudioStream] = []
 @export var enable_lightning: bool = true
 @export var lightning_chance_per_check: float = 0.12
@@ -255,6 +256,11 @@ func _build_audio() -> void:
 	_audio = AudioStreamPlayer.new()
 	_audio.name = "RainAudio"
 	_audio.stream = rain_sound
+	if _audio.stream is AudioStreamWAV:
+		var looping := _audio.stream.duplicate() as AudioStreamWAV
+		looping.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		looping.loop_end = int(looping.get_length() * looping.mix_rate)
+		_audio.stream = looping
 	_audio.volume_db = -80.0
 	add_child(_audio)
 
@@ -541,7 +547,7 @@ func _update_intensity(delta: float) -> void:
 		_rain_mat.albedo_color.a = clampf(_intensity * 0.55, 0.0, 0.55)
 
 	if rain_sound != null:
-		_audio.volume_db = lerpf(-80.0, -6.0, _intensity)
+		_audio.volume_db = linear_to_db(maxf(db_to_linear(rain_volume_db) * _intensity, 0.0001))
 
 	if _sky != null and _orig_fog_density >= 0.0:
 		_sky.set("fog_density", lerpf(_orig_fog_density, _orig_fog_density + 0.01, _intensity))

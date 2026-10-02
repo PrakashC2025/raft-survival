@@ -4,7 +4,7 @@ Last updated: **2026-10-02**. This is the current project handover for the owner
 
 ## Owner's requirements and current delivery
 
-The owner plays on Android and wants reliable New Game/Continue, working touch buttons, smooth survival gameplay, foundation placement, a convincing rope launcher with longer reach, and temporary supplies for testing building and crafting.
+The owner plays on Android and wants reliable New Game/Continue, working touch buttons, smooth survival gameplay, foundation placement, a convincing rope launcher with longer reach, temporary supplies for testing building and crafting, and a more natural ocean, trees, grass and environmental sound.
 
 The visual reference the owner confirmed is [Ocean Survival by Candy Mobile](https://play.google.com/store/apps/details?id=com.chris.seasurvival). Use it as direction for ocean survival, crafting, shelter, and a useful handheld hook. The project uses its own code and assets. The current scene remains stylized; it is not a complete reproduction of the reference game's graphics or content.
 
@@ -20,8 +20,12 @@ Current changes and fixes:
 - A procedural handheld rope launcher replaces the old rope item visual. It has a barrel, grip, trigger guard, metal hook, rope reel, crank, and holding hand, plus recoil and first/third person visibility.
 - Quick casts start at 20 m; holding charges up to 60 m. Hook flight is arced, follows a locked trajectory, and the braided rope starts at the muzzle.
 - Hotbar selection immediately updates the item shown in the hand. Ocean shading has gentler fine ripple contrast.
+- Water now has irregular noise-based ripple normals, stronger angle-dependent sky reflection, sun/moon highlights and twilight haze. A lightweight distant-water apron fills the old dark horizon gap.
+- Palms use finer procedural arching fronds with individual leaflets, wind motion, leaf backlighting and bark detail. Grass uses curved three-blade tufts, color/dryness variation and traveling wind gusts.
+- Recorded ocean waves are mixed with original generated wind/foliage beds, audible default rain and underwater low-pass filtering. The environment bus is owned and removed by each gameplay scene.
+- Island markers clamp both behind-camera and front-but-offscreen targets, including camera-plane edge cases. Diamonds draw around a local origin to avoid collapsed polygons from enormous projected coordinates. The reported unused-parameter, mixed ternary, integer division and shadowed/confusable name warnings are cleaned up.
 
-Source checks currently total **137 passing checks**: 89 mobile, 17 foundation, 11 testing supplies, 20 rope. First person, casting, and third person screenshots were captured using the desktop Mobile renderer. No Android phone was connected for current on-device performance verification.
+The source suite now has **181 passing checks**: 89 mobile, 17 foundation, 11 testing supplies, 20 rope, 23 environment and 21 island marker. Renderer previews include raft, island, close grass and sunset views; marker cases also run on the actual Mobile renderer. No Android phone was connected for current on-device performance verification.
 
 ## Project and entry points
 
@@ -29,9 +33,10 @@ Source checks currently total **137 passing checks**: 89 mobile, 17 foundation, 
 | --- | --- |
 | Engine | Godot 4.7.1 stable mono installation; gameplay is GDScript |
 | Project | `project.godot`, editor project name RaftSurvival |
-| Android display name | OceanSurvival |
+| Android display name | Ocean Survival |
 | Android package | `com.praka.oceansurvival` |
 | Android export | `export_presets.cfg`, preset Android, output `build/OceanSurvival-updated.apk` |
+| Android preset version | 1.1.2, version code 5; manual debug-signed APK for ARM64 phone testing |
 | Rendering | Mobile renderer; desktop visual validation used D3D12 |
 | Physics | Jolt configured in the project |
 | Display | Landscape, 1280 × 720 design canvas with responsive scaling |
@@ -71,6 +76,7 @@ The first person hand hierarchy is `CamPivot/SpringArm3D/Camera3D/HandPivot`, wi
 | `scripts/food_pickup.gd` | Collectible food/resources, collection behavior |
 | `scripts/ocean.gd` | CPU ocean height sampling used by gameplay |
 | `scripts/ocean_ambience.gd` | Ocean sound behavior |
+| `scripts/vegetation_visual.gd` | Shared procedural grass tufts/palm fronds and natural foliage materials |
 | `scripts/rain_system.gd` | Weather/rain effects |
 | `scripts/island_setup.gd` | Island normalization, collision setup, pickups and foliage preparation |
 | `scripts/island_grass.gd` | Batched surface placement and MultiMesh grass |
@@ -84,6 +90,7 @@ The first person hand hierarchy is `CamPivot/SpringArm3D/Camera3D/HandPivot`, wi
 | `shaders/rope_fiber.gdshader` | Rope braid/fiber appearance |
 | `shaders/wood_planks.gdshader` | Wooden building appearance |
 | `shaders/grass_wind.gdshader` | Grass animation |
+| `shaders/palm_leaf.gdshader` / `palm_bark.gdshader` | Frond motion/backlighting and trunk surface detail |
 | `shaders/island_terrain.gdshader` | Island terrain material |
 | `shaders/raft_foam.gdshader` | Raft foam appearance |
 
@@ -268,17 +275,33 @@ Collision preparation is asynchronous/batched. Palm/grass ground queries must wa
 
 DebrisSpawner maintains floating resource population and prewarms a useful starting set (current mobile cap 48, prewarm 24). Debris contributes Wood, Rope, Plastic and other resources according to its item configuration. Fixed island pickups may share the `debris` group but should not be frozen/reparented as hookable rigid bodies.
 
-Grass uses MultiMesh rather than separate nodes for every blade. Mobile generation is capped (up to 2,500 blades in the current implementation), with batches of 64 ground rays per frame to avoid a single loading stall. Convert ray-hit world positions into the MultiMesh's local space. Per-instance color encodes bending behavior; preserve the COLOR_0 data expected by the grass wind shader.
+Grass uses MultiMesh rather than separate nodes for every blade. Mobile generation is capped at 2,500 instances (three blades each with the default natural tufts), with batches of 64 ground rays per frame to avoid a single loading stall. Convert ray-hit world positions into the MultiMesh's local space. Mesh vertex color encodes bending behavior; preserve the COLOR_0 data expected by the grass wind shader.
+
+The default `natural_tufts` setting substitutes a shared procedural three-blade mesh for the default `models/grass_blade.glb`. Each tuft has 24 triangles with tapered, curved blades. Custom grass mesh paths still load their own mesh. Blade COLOR.r carries the rooted-to-tip bend mask; INSTANCE_CUSTOM RGBA now carries phase, strength, color variation and dryness. The shader creates coherent traveling gusts, slight blade droop, dark roots and leaf backlighting. Tufts shrink over 55–95 m and the field has a 100 m visibility limit to reduce distant foliage cost. Keep MultiMesh custom-data enabled before setting its instance count.
+
+`vegetation_visual.gd` generates one shared palm-frond mesh: eight arched fronds with individually separated paired leaflets and thin central stems. It replaces the visual leaf meshes of existing imported palms and applies shared leaf/bark materials. Trunks and their collision geometry keep their original shape. IslandSetup applies it to home and destination palms; PlantInstance applies it to grown coconut palms while preserving fruit sockets, chopping, growth and saves. Leaf animation stays attached at the crown, with stronger motion near tips. Bark has subtle rings/fibers; leaves have fine vein variation, moderate waxy highlights and backlighting. The overall project still contains low-poly assets; this is a natural-detail pass, not photorealistic replacement art.
 
 ## Ocean, sky, rain, and visual rules
 
 `scripts/ocean.gd` computes CPU surface heights used for swimming, floating, and hook/water behavior. `shaders/main.gdshader` moves visible water vertices. Their wave formula, time convention, amplitudes, frequencies, directions, and envelopes must agree. Raft foam also depends on water contact. Changing vertex waves without equivalent CPU math creates visible floating/swimming errors.
 
-The latest ocean change is fragment shading only: fine normal perturbation strength was reduced from 0.20 to 0.085, and micro-wave color contrast from 0.55 to 0.20. Physics/vertex wave heights were preserved. This softens obvious repeating surface detail without changing buoyancy. Color values in the ocean shader have existing linear-color/tonemapping assumptions; blindly adding `source_color` annotations can wash out the sea. Inspect the actual rendered result after shader edits.
+The earlier ripple-softening pass was followed by analytic value-noise gradients that break up the directional sine pattern. The first noise layer always runs; the second is skipped in Battery Saver using `surface_detail`. Water reflection is an angle-dependent analytic sky/cloud approximation, not screen-space reflection of trees or structures. Highlights respond to sun/moon direction and twilight haze follows the warm reflected horizon. Physics/vertex wave heights remain unchanged; `world_pos` now includes the existing displacement so view/reflection shading uses the actual surface height. Color values in the ocean shader retain their linear-color/tonemapping assumptions; blindly adding `source_color` annotations can wash out the sea. Inspect the actual rendered result after shader edits.
+
+Ocean creates a `FarWater` child with four broad strips (eight triangles) outside the main detailed plane. The apron has a hole matching the detailed plane, avoiding an overlapping full-screen water pass. It shares the driven ocean material and extends the visible sea toward the camera's far limit. It is cosmetic distant water; detailed interaction/buoyancy still uses the existing Ocean sampler and central wave mesh.
 
 Sky3D/TimeOfDay handles the clock, day/calendar changes, sun/sky appearance, and linked weather. Day duration defaults are supplied by the addon/scene; verify them before changing time progression or saved calendar fields. RainSystem schedules weather and checks overhead cover. Script interval defaults are 6–14 minutes, but **the main scene overrides them to 4–8 minutes**. This distinction matters: editing an exported script default may not alter an existing scene override.
 
 First person, third person, underwater rendering, sunrise/noon/night, mobile quality, and raft motion can reveal different visual problems. Prefer changes that fit the existing palette and asset style. When adding realism, retain readable crosshair/controls and budget for mobile geometry, fill rate, shadows, texture memory, and scene load time. Do not claim desktop screenshots prove smooth Android frame rate.
+
+### Environmental audio
+
+`ocean_ambience.gd` keeps the existing credited recorded ocean MP3 as its primary layer. New `audio/sea_wind.wav`, `foliage_rustle.wav` and `rain_ambience.wav` are original procedural stereo sample beds, generated offline by `tools/generate_environment_audio.py` using numpy. They are not field recordings. The wind/rain loops are 16 s and the foliage loop is 12 s, at 22,050 Hz. Filtering and periodic envelopes create gentle gusts/rustling without synthesizing every sample during gameplay. Godot imports the WAVs normally; runtime duplicates the stream to set looping, leaving source resources unmodified.
+
+Each gameplay scene creates one uniquely named `OceanEnvironment_<instance-id>` audio bus feeding Master. Ocean, wind, foliage and rain route through it; the existing settings volume/mute still applies through Master. Cached island positions are sampled every 0.15 s. The shore/foliage mix fades from full strength within 20 m of an island center to zero beyond 65 m. Open water does not play loud close-up leaves. Recorded waves gently fluctuate and become about 5 dB louder near islands.
+
+The active camera's depth below the sampled water blends the environment into a muffled sound, transitioning over depths 0.08–0.85 m. Low-pass cutoff moves from 18 kHz to 850 Hz; wind/foliage also fade underwater. Surfacing restores clear audio. RainSystem now defaults to the generated rain stream, loops it, and fades linear amplitude toward the configurable `rain_volume_db` (default -12 dB). Custom assigned rain streams still work; optional thunder clips remain optional.
+
+`stop_environment()` stops every ambient layer and rain; `_exit_tree()` removes only the scene's own bus. Call this before abrupt test shutdown and allow the dummy audio backend time to flush. Avoid adding effects to Master or leaving buses behind on repeated New Game/Continue transitions.
 
 ## Settings and mobile performance
 
@@ -294,6 +317,8 @@ Settings runs while paused, remembers the previous pause/mouse state, releases g
 | High (3) | 1.0 | On | Fixed profile |
 
 Auto samples frame time over 1.25 s windows, drops scale in 0.08 steps, recovers more slowly in 0.04 steps, and clamps the minimum to 0.55. The 30/60 FPS setting changes the budget. Canvas UI stays clear while 3D resolution changes. The profile also limits shadows and disables expensive effects such as glow on mobile. Current directional shadow distances differ by profile (60/35/60/90 m); inspect the exact light configuration if adjusting them.
+
+Auto, Balanced and High use 2× MSAA for thin grass/frond edges. Battery Saver disables MSAA and skips the second ocean noise-detail layer; it keeps the natural palette, basic ripples, foliage motion and all sound/gameplay. No screen/depth-texture reflection pass or separate node per grass blade was added. Phone frame pacing still needs actual device verification.
 
 `_last_quality` and `_last_fps` prevent unrelated settings changes (look/audio) from restarting adaptive resolution. Preserve this guard. Preview placement updates are throttled around 30 Hz, but an actual PLACE press must refresh exact validation synchronously. Performance optimizations must not turn a stale green preview into an invalid spend/placement.
 
@@ -345,8 +370,10 @@ The default suite runs these scripts:
 | `tests/foundation_smoke.gd` | 17 | Keyboard/mobile foundation placement, transforms, costs, optional socket metadata, saved structures |
 | `tests/testing_resources_smoke.gd` | 11 | 2,000 grants, stack handling, spend, New Game, once-per-save persistence |
 | `tests/rope_smoke.gd` | 20 | Launcher/muzzle, touch charging, quick/long cast, arc/range, rope geometry, catch release, return, camera/hotbar/build interactions |
+| `tests/environment_smoke.gd` | 23 | Island/open-water sound, stereo looping, rain, submersion/surfacing filtering, vegetation setup, water/AA quality choices, audio-bus cleanup and menu scene preloading after teardown |
+| `tests/island_marker_smoke.gd` | 21 | Front/offscreen/behind targets, camera-plane/extreme projection, edge styles, arrival fade and tiny viewport; can also run natively to check real polygon drawing |
 
-Logs are `build/source-<test_name>.log`. The helper requires a successful process exit, a checks/zero-failures summary, and no SCRIPT ERROR, ERROR, or FAIL text. Godot file logs may still be shared with an open process, so the helper reads with FileShare.ReadWrite. New assets may need the normal editor import before testing. Keep tests guarded against running on the real user-data path.
+Logs are `build/source-<test_name>.log` and the matching `-console.log`. The helper captures both engine logs and console output, including shutdown errors after the engine closes its log. It requires a successful process exit, a checks/zero-failures summary, and no SCRIPT ERROR, ERROR, or FAIL text. Godot file logs may still be shared with an open process, so the helper reads with FileShare.ReadWrite. New assets may need the normal editor import before testing. Keep tests guarded against running on the real user-data path.
 
 For a focused rerun:
 
@@ -371,6 +398,8 @@ Use the unique staged project from source verification, a hidden/offscreen nativ
 ## Manual Android export and package checking
 
 Only export when the owner asks or does it themselves. `BUILD_ANDROID.md` has the full workflow. Reload editor export settings to avoid restoring stale exclusions, retain necessary imported scene textures, and use Godot 4.7.1 with matching Android templates/SDK/JDK and the existing signing key.
+
+On 2026-10-02 the editor-written preset had reverted to version code 3 and the old required-texture exclusions. It was corrected again to version code 5/name 1.1.2, the updated APK output path, and exclusions for build/tests/tools without excluding required island textures. Close and reopen the project before manual editor export, then check the exclusion field and version in Project → Export. No APK was rebuilt as part of this settings correction.
 
 When an APK has already been exported, verify that package rather than relying on the source suite:
 
@@ -422,3 +451,5 @@ Add optional fields with backwards-compatible defaults and isolate tests. For re
 Read `ASSET_CREDITS.md` for downloaded model/audio/texture origins and licensing details. Existing project assets include documented Kenney/Quaternius and other credited sources; do not invent permissions for files not documented there. The rope launcher/hook/hand meshes and fiber shader added in this update are original procedural project code. No art was copied from the reference game's Play Store listing.
 
 This guide deliberately documents contracts, files, constants and dependencies rather than embedding full copies of every script. Open the linked project files for exact functions; duplicated source snapshots rapidly become inaccurate after fixes.
+
+The latest environment previews are generated by `tests/environment_visual_preview.gd` using isolated test storage and the desktop Mobile/D3D12 renderer. It checks grass custom-data readback in the real renderer (the headless dummy renderer cannot read that buffer), then captures `build/environment-raft.png`, `environment-island.png`, `environment-grass.png` and `environment-sunset.png`. Sound checks verify transitions/looping/routing; they do not establish listening quality on a phone speaker/headphones. Shader and audio API details were checked against the official [Godot spatial shader reference](https://docs.godotengine.org/en/stable/tutorials/shaders/shader_reference/spatial_shader.html), [AudioStreamWAV](https://docs.godotengine.org/en/stable/classes/class_audiostreamwav.html), and [audio filter reference](https://docs.godotengine.org/en/stable/classes/class_audioeffectfilter.html).

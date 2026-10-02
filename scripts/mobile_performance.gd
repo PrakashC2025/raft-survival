@@ -54,6 +54,7 @@ func _apply_profile() -> void:
 		return
 	_last_quality = GameSettings.quality
 	_last_fps = GameSettings.target_fps
+	_viewport.msaa_3d = Viewport.MSAA_DISABLED if GameSettings.quality == 1 else Viewport.MSAA_2X
 	_sample_seconds = 0.0
 	_frame_seconds = 0.0
 	_frame_count = 0
@@ -70,6 +71,11 @@ func _apply_profile() -> void:
 	_limit_mobile_shadow_distance()
 	var scene := get_tree().current_scene
 	if scene != null:
+		var ocean := get_tree().get_first_node_in_group("ocean") as MeshInstance3D
+		if ocean != null and ocean.mesh is PlaneMesh:
+			var water_material := (ocean.mesh as PlaneMesh).material as ShaderMaterial
+			if water_material != null:
+				water_material.set_shader_parameter("surface_detail", 0.45 if GameSettings.quality == 1 else 1.0)
 		var environment_node := scene.get_node_or_null("Sky3D") as WorldEnvironment
 		if environment_node != null and environment_node.environment != null and _mobile:
 			environment_node.environment.glow_enabled = false

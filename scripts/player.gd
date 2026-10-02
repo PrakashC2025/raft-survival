@@ -1170,17 +1170,17 @@ func _ensure_starter_seeds() -> void:
 		Inventory.place_at(2, "Coconut Seed", 3)
 		Inventory.place_at(3, "Banana Seed", 3)
 		return
-	for seed in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
+	for seed_item in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
 		var already_in_hotbar := false
 		for i in range(Inventory.HOTBAR_COUNT):
-			if Inventory.slot_item(i) == seed:
+			if Inventory.slot_item(i) == seed_item:
 				already_in_hotbar = true
 				break
 		if already_in_hotbar:
 			continue
 		var seed_in_bag := -1
 		for b in range(Inventory.BAG_START, Inventory.SLOT_COUNT):
-			if Inventory.slot_item(b) == seed:
+			if Inventory.slot_item(b) == seed_item:
 				seed_in_bag = b
 				break
 		if seed_in_bag < 0:
