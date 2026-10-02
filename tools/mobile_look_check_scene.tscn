@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://camkmd34k6jah"]
+
+[ext_resource type="Script" path="res://tools/mobile_look_check.gd" id="1_mlc"]
+
+[node name="MobileLookCheck" type="Node"]
+script = ExtResource("1_mlc")
