@@ -1,0 +1,14 @@
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+OpenGL API 3.3.0 NVIDIA 527.99 - Compatibility - Using Device: NVIDIA - NVIDIA GeForce MX450
+
+[MobilePerf] desktop: auto-quality idle (settings untouched)
+[IslandGrass] loaded baked field (7639 clumps)
+[IslandGenerator] terrain heights+paint loaded from cache
+[IslandGenerator] terrain sheet 161x161 verts (min y -12.0)
+[IslandGenerator] phase terrain 10859 ms
+[IslandGenerator] phase pond 10906 ms
+[IslandGenerator] phase props 17109 ms
+[IslandGenerator] phase palms 20266 ms
+[IslandGenerator] rare apple tree placed at (14.402752, 4.430169)
+[IslandGenerator] island built: terrain + 52 palms + 26 bushes + rocks
+PASS: world collision, opening completion, audio, exploration, rescue, saved campaign, journal, mute

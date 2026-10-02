@@ -1,0 +1,7 @@
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+OpenGL API 3.3.0 NVIDIA 527.99 - Compatibility - Using Device: NVIDIA - NVIDIA GeForce MX450
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+[MobilePerf] desktop: auto-quality idle (settings untouched)
+MODEL PREVIEW SAVED

@@ -1,0 +1,70 @@
+00:00.063  reports          | WARNING Unable to open 'C:\Users\praka\AppData\Roaming\Blender Foundation\Blender\5.2\config\userpref.blend': Permission denied
+Blender 5.2.0 LTS (hash fbe6228777e7 built 2026-07-14 01:35:40)
+C:\GodotProjects\raft-survival\tools\convert_mobile_models.py:26: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  mat.use_nodes=True
+Extensions: writing cache failed ([WinError 183] Cannot create a file when that file already exists: 'C:\\Users\\praka\\AppData\\Roaming\\Blender Foundation\\Blender\\5.2\\extensions\\.cache').
+FBX version: 7400
+BASE [('characterMedium', 'MESH', (3.618586778640747, 1.0481441020965576, 3.76468825340271)), ('Root', 'ARMATURE', (3.827531576156616, 1.244671106338501, 4.8741865158081055))]
+FBX version: 7400
+FBX version: 7400
+FBX version: 7400
+INFO Draco is available, use library at C:\Program Files\Blender Foundation\Blender 5.2\5.2\scripts\addons_core\io_scene_gltf2\bf_intern_draco_bridge.dll
+INFO MeshOptimizer is available, use library at C:\Program Files\Blender Foundation\Blender 5.2\5.2\scripts\addons_core\io_scene_gltf2\bf_intern_meshopt_bridge.dll
+18:08:08 | INFO: Starting glTF 2.0 export
+18:08:08 | INFO: Extracting primitive: characterMedium
+18:08:08 | WARNING: The active Vertex Color will not be exported, as it is not used in the node tree of the material
+18:08:08 | INFO: Primitives created: 1
+18:08:09 | INFO: Finished glTF 2.0 export in 0.36903858184814453 s
+00:03.641  blend            | Read blend: "C:\GodotProjects\raft-survival\tools\asset_downloads\boar.blend"
+00:03.641  blend.doversion  | WARNING Region type 4 missing in space type "Info" (id: 7) - removing region
+00:03.641  blend.doversion  | WARNING Region type 5 missing in space type "Buttons" (id: 4) - removing region
+C:\GodotProjects\raft-survival\tools\convert_mobile_models.py:43: DeprecationWarning: 'Material.use_nodes' is expected to be removed in Blender 6.0
+  mat=bpy.data.materials.new('Boar_Brown'); mat.diffuse_color=(0.23,0.12,0.06,1); mat.use_nodes=True
+
+BOAR boar_mesh.000 284 (1.2907097339630127, 3.416987657546997, 2.1198625564575195)
+18:08:09 | INFO: Starting glTF 2.0 export
+18:08:09 | WARNING: Mesh Cube.007 is not valid, and may be exported wrongly
+18:08:09 | INFO: Extracting primitive: Cube.007
+18:08:09 | INFO: Primitives created: 1
+18:08:09 | WARNING: There are more than 4 joint vertex influences.The 4 with highest weight will be used (and normalized).
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | WARNING: Baking animation because of unsupported constraints acting on the bone
+18:08:09 | INFO: Finished glTF 2.0 export in 0.559074878692627 s
+
+CONVERSION COMPLETE
+
+Blender quit

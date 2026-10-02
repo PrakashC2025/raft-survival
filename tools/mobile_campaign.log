@@ -1,0 +1,14 @@
+Godot Engine v4.7.1.stable.mono.official.a13da4feb - https://godotengine.org
+
+[MobilePerf] tier low (ram 15.8 GB, 8 cores, gpu ''): shadow 1024, scale 0.70, rain 250
+[IslandGrass] loaded baked field (5000 clumps)
+[IslandGenerator] terrain heights+paint loaded from cache
+[IslandGenerator] terrain sheet 161x161 verts (min y -12.0)
+[IslandGenerator] phase terrain 496 ms
+[IslandGenerator] phase pond 504 ms
+[IslandGenerator] phase props 573 ms
+[IslandGenerator] phase palms 873 ms
+[IslandGenerator] rare apple tree placed at (8.838858, 23.496809)
+[IslandGenerator] island built: terrain + 28 palms + 26 bushes + rocks
+BONFIRE PLACEMENT: true 
+PASS: world collision, opening completion, audio, exploration, rescue, saved campaign, journal, mute
