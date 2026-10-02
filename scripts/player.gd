@@ -307,6 +307,11 @@ func _setup_audio() -> void:
 	add_child(_interaction_audio)
 
 
+## beach_survivor.glb imports with a blank white base material and carries the
+## survivor's whole look in glTF COLOR_0 (tanned skin, dark hair, weathered
+## shorts). The vertex paint therefore has to multiply the albedo, otherwise the
+## third-person survivor renders as a colourless white mannequin. The check is
+## per-mesh so a model without vertex colours still gets a real skin tone.
 func _setup_survivor_materials() -> void:
 	var survivor := _body_visual.get_node_or_null("BeachSurvivor") as Node3D
 	if survivor == null:
@@ -315,19 +320,37 @@ func _setup_survivor_materials() -> void:
 		var mesh_instance := candidate as MeshInstance3D
 		if mesh_instance == null or mesh_instance.mesh == null:
 			continue
+		var painted := _mesh_has_vertex_colors(mesh_instance.mesh)
 		for surface in range(mesh_instance.mesh.get_surface_count()):
+			var material: BaseMaterial3D = null
 			var source := mesh_instance.get_active_material(surface) as BaseMaterial3D
-			var material: BaseMaterial3D
 			if source != null:
 				material = source.duplicate() as BaseMaterial3D
-			else:
+			if material == null:
 				material = StandardMaterial3D.new()
-			material.vertex_color_use_as_albedo = true
+			if not painted:
+				material.albedo_color = Color(0.74, 0.56, 0.43)
+			# glTF vertex colours are LINEAR — reading them as sRGB turns the
+			# survivor pale and washed out.
+			material.vertex_color_use_as_albedo = painted
 			material.vertex_color_is_srgb = false
 			material.metallic = 0.0
-			material.roughness = 0.88
+			material.roughness = 0.85
 			mesh_instance.set_surface_override_material(surface, material)
 	_setup_survivor_animations(survivor)
+
+
+## True when the mesh really ships a COLOR_0 array (only the first surface is
+## sampled — the survivor is a single-surface skinned mesh).
+func _mesh_has_vertex_colors(mesh: Mesh) -> bool:
+	if not (mesh is ArrayMesh):
+		return false
+	for surface in range(mini(1, mesh.get_surface_count())):
+		var arrays: Array = (mesh as ArrayMesh).surface_get_arrays(surface)
+		var colors: Variant = arrays[Mesh.ARRAY_COLOR]
+		if colors is PackedColorArray and not (colors as PackedColorArray).is_empty():
+			return true
+	return false
 
 
 func _setup_survivor_animations(survivor: Node3D) -> void:
@@ -1474,7 +1497,7 @@ func _update_hand_item() -> void:
 			spear_haft.bottom_radius = 0.032
 			spear_haft.height = 0.78
 			_hand_part(spear_haft, spear_wood, Transform3D(along_forward, Vector3(0.0, -0.02, -0.35)))
-			var spear_tip := ConeMesh.new()
+			var spear_tip := CylinderMesh.new()
 			spear_tip.top_radius = 0.0
 			spear_tip.bottom_radius = 0.08
 			spear_tip.height = 0.22

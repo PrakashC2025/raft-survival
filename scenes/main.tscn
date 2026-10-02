@@ -33,6 +33,7 @@
 [ext_resource type="Script" path="res://scripts/ocean_ambience.gd" id="30_ocean_audio"]
 [ext_resource type="PackedScene" path="res://scenes/destination_island.tscn" id="31_destination"]
 [ext_resource type="Script" path="res://scripts/shark_spawner.gd" id="32_sharks"]
+[ext_resource type="Script" path="res://scripts/island_destination.gd" id="33_island_dressing"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
 render_priority = 0
@@ -85,7 +86,12 @@ size = Vector3(0.12, 0.42, 0.14)
 size = Vector3(0.26, 0.26, 0.26)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_skin"]
-albedo_color = Color(0.7, 0.52, 0.4, 1)
+albedo_color = Color(0.74, 0.57, 0.44, 1)
+roughness = 0.82
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_arm_sleeve"]
+albedo_color = Color(0.76, 0.6, 0.47, 1)
+roughness = 0.82
 
 [sub_resource type="BoxMesh" id="BoxMesh_hand_arm"]
 size = Vector3(0.07, 0.07, 0.3)
@@ -265,7 +271,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.18, -0.3, -0.55)
 [node name="Arm" type="MeshInstance3D" parent="Player/CamPivot/SpringArm3D/Camera3D/HandPivot" unique_id=1729612490]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.16, -0.34, -0.75)
 mesh = SubResource("BoxMesh_hand_arm")
-surface_material_override/0 = SubResource("StandardMaterial3D_shirt")
+surface_material_override/0 = SubResource("StandardMaterial3D_arm_sleeve")
 
 [node name="Fist" type="MeshInstance3D" parent="Player/CamPivot/SpringArm3D/Camera3D/HandPivot" unique_id=1019928594]
 mesh = SubResource("BoxMesh_hand_fist")
@@ -314,7 +320,11 @@ debris_scene = ExtResource("6_7mycd")
 
 [node name="Island" type="Node3D" parent="." unique_id=1580141119]
 unique_name_in_owner = true
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 107.33414, -0.9068012, -91.8569)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 85, 0, -165)
+script = ExtResource("33_island_dressing")
+map_label = "Home Isle"
+pickup_seed = 5317
+pickup_count = 12
 
 [node name="IslandTerrain" parent="Island" instance=ExtResource("21_island")]
 
@@ -322,23 +332,54 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 107.33414, -0.9068012, -91.85
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.2, 0)
 script = ExtResource("25_beacon")
 
-[node name="PalmTree" parent="Island" unique_id=852400309 instance=ExtResource("22_palm")]
-transform = Transform3D(0.965926, 0, 0.258819, 0, 1, 0, -0.258819, 0, 0.965926, -3.5, 1.8, -3)
-scale = Vector3(2.2, 2.2, 2.2)
+[node name="PalmTree" parent="Island" unique_id=447712782 instance=ExtResource("22_palm")]
+transform = Transform3D(1.965965, 0, 1.376583, 0, 2.4000, 0, -1.376583, 0, 1.965965, 11.468, 0.80, 8.030)
 
-[node name="PalmTree2" parent="Island" unique_id=1802697924 instance=ExtResource("29_palm_short")]
-transform = Transform3D(0.766044, 0, 0.642788, 0, 1, 0, -0.642788, 0, 0.766044, 2.5, 2, -4.5)
-scale = Vector3(2.5, 2.5, 2.5)
+[node name="PalmTree2" parent="Island" unique_id=261973069 instance=ExtResource("29_palm_short")]
+transform = Transform3D(-1.802134, 0, 1.261868, 0, 2.2000, 0, -1.261868, 0, -1.802134, -11.632, 0.90, 8.145)
 
-[node name="PalmTree3" parent="Island" unique_id=150675457 instance=ExtResource("22_palm")]
-transform = Transform3D(0.5, 0, 0.866025, 0, 1, 0, -0.866025, 0, 0.5, 4.5, 1.2, 1)
-scale = Vector3(2.0, 2.0, 2.0)
+[node name="PalmTree3" parent="Island" unique_id=523938499 instance=ExtResource("29_palm_short")]
+transform = Transform3D(-0.347296, 0, 1.969616, 0, 2.0000, 0, -1.969616, 0, -0.347296, -2.344, 0.80, 13.295)
+
+[node name="PalmTree4" parent="Island" unique_id=798935572 instance=ExtResource("22_palm")]
+transform = Transform3D(-2.443201, 0, -0.889252, 0, 2.6000, 0, 0.889252, 0, -2.443201, -12.216, 0.70, -4.446)
+
+[node name="PalmTree5" parent="Island" unique_id=151847156 instance=ExtResource("22_palm")]
+transform = Transform3D(-0.786646, 0, -2.161293, 0, 2.3000, 0, 2.161293, 0, -0.786646, -4.002, 0.80, -10.994)
+
+[node name="PalmTree6" parent="Island" unique_id=177777868 instance=ExtResource("29_palm_short")]
+transform = Transform3D(0.543520, 0, -2.028444, 0, 2.1000, 0, 2.028444, 0, 0.543520, 2.511, 0.90, -9.369)
+
+[node name="PalmTree7" parent="Island" unique_id=981836553 instance=ExtResource("22_palm")]
+transform = Transform3D(1.915111, 0, -1.606969, 0, 2.5000, 0, 1.606969, 0, 1.915111, 8.963, 0.80, -7.521)
+
+[node name="PalmTree8" parent="Island" unique_id=675398922 instance=ExtResource("22_palm")]
+transform = Transform3D(1.979899, 0, 1.979899, 0, 2.8000, 0, -1.979899, 0, 1.979899, 8.061, 2.60, 8.061)
+
+[node name="PalmTree9" parent="Island" unique_id=201071364 instance=ExtResource("29_palm_short")]
+transform = Transform3D(-1.261868, 0, 1.802134, 0, 2.2000, 0, -1.802134, 0, -1.261868, -5.564, 2.70, 7.946)
+
+[node name="PalmTree10" parent="Island" unique_id=492655486 instance=ExtResource("22_palm")]
+transform = Transform3D(-1.542690, 0, -1.838507, 0, 2.4000, 0, 1.838507, 0, -1.542690, -3.342, 2.50, -3.983)
+
+[node name="PalmTree11" parent="Island" unique_id=725763863 instance=ExtResource("29_palm_short")]
+transform = Transform3D(-1.879385, 0, 0.684040, 0, 2.0000, 0, -0.684040, 0, -1.879385, -6.578, 2.80, 2.394)
+
+[node name="PalmTree12" parent="Island" unique_id=162275869 instance=ExtResource("22_palm")]
+transform = Transform3D(-0.595284, 0, 2.221629, 0, 2.3000, 0, -2.221629, 0, -0.595284, -3.235, 1.70, 12.074)
+
+[node name="PalmTree13" parent="Island" unique_id=644854973 instance=ExtResource("22_palm")]
+transform = Transform3D(-1.720219, 0, -1.204511, 0, 2.1000, 0, 1.204511, 0, -1.720219, -8.519, 1.50, -5.965)
 
 [node name="IslandGrass" type="Node3D" parent="Island" unique_id=555555555]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 6, 3.316)
 script = ExtResource("24_islandgrass")
-instance_count = 4500
-scatter_radius = 13.0
+instance_count = 9000
+scatter_radius = 15.5
+raycast_up = 14.0
+raycast_down = 22.0
+max_height_above_water = 3.4
+min_height_above_water = -0.15
 
 [node name="IslandSetup" type="Node3D" parent="." unique_id=444444444]
 script = ExtResource("23_islandsetup")
@@ -371,7 +412,7 @@ environment = SubResource("Environment_kq58d")
 camera_attributes = SubResource("CameraAttributesPractical_seu75")
 script = ExtResource("16_0odxb")
 fog_enabled = false
-current_time = 0.47885333329713153
+current_time = 9.5
 sun_energy = 1.6
 ambient_energy = 1.3
 moon_energy = 2.4
@@ -418,7 +459,7 @@ wind_direction = 2.35619451204804
 [node name="TimeOfDay" type="Node" parent="Sky3D" unique_id=1075981311]
 script = ExtResource("18_a6jrf")
 dome_path = NodePath("../SkyDome")
-current_time = 0.47885333329713153
+current_time = 9.5
 day = 5
 celestials_calculations = 0
 

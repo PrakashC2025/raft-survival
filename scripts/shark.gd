@@ -130,14 +130,14 @@ func _build_visual() -> void:
 	belly.rings = 4
 	_add_mesh(visual, "Belly", belly, belly_material, Vector3(0.0, -0.22, 0.02), Vector3(0.48, 0.19, 1.28))
 
-	var fin := ConeMesh.new()
+	var fin := CylinderMesh.new()
 	fin.top_radius = 0.015
 	fin.bottom_radius = 0.33
 	fin.height = 0.83
 	fin.radial_segments = 5
 	fin.rings = 1
 	_add_mesh(visual, "DorsalFin", fin, _body_material, Vector3(0.0, 0.53, 0.05), Vector3.ONE)
-	var rear_fin := ConeMesh.new()
+	var rear_fin := CylinderMesh.new()
 	rear_fin.top_radius = 0.015
 	rear_fin.bottom_radius = 0.28
 	rear_fin.height = 0.82
@@ -151,7 +151,7 @@ func _build_visual() -> void:
 	_add_mesh(_tail_fin, "LowerTail", rear_fin, _body_material,
 			Vector3(0.0, -0.28, 0.0), Vector3(1.0, 0.62, 0.65), Vector3(PI, 0.0, 0.0))
 
-	var pectoral := ConeMesh.new()
+	var pectoral := CylinderMesh.new()
 	pectoral.top_radius = 0.01
 	pectoral.bottom_radius = 0.23
 	pectoral.height = 0.92

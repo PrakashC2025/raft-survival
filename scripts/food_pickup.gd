@@ -171,7 +171,9 @@ func _make_fish_visual() -> Node3D:
 	body.position = Vector3(0.0, 0.11, 0.0)
 	body.material_override = silver
 	root.add_child(body)
-	var tail_mesh := ConeMesh.new()
+	# Godot has no ConeMesh class — a cone is a CylinderMesh whose top radius
+	# is (almost) zero. Keep the taper explicit so the tail reads as a fin.
+	var tail_mesh := CylinderMesh.new()
 	tail_mesh.top_radius = 0.01
 	tail_mesh.bottom_radius = 0.105
 	tail_mesh.height = 0.2
