@@ -23,6 +23,24 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
+## Validate a polygon before sending it to draw_colored_polygon.
+## Prevents "Invalid polygon data, triangulation failed" errors when
+## vertices are degenerate, non-finite, or produce zero area.
+func _is_valid_polygon(pts: PackedVector2Array) -> bool:
+	if pts.size() < 3:
+		return false
+	for p in pts:
+		if not p.is_finite():
+			return false
+	# Check polygon area via shoelace formula — must be > some minimum
+	var area := 0.0
+	var n := pts.size()
+	for i in n:
+		var j := (i + 1) % n
+		area += pts[i].x * pts[j].y
+		area -= pts[j].x * pts[i].y
+	return absf(area) > 100.0  # at least ~5 px² minimum
+
 func _process(_delta: float) -> void:
 	if _beacon == null or not is_instance_valid(_beacon):
 		_beacon = get_tree().get_first_node_in_group(beacon_group)
@@ -46,11 +64,25 @@ func _process(_delta: float) -> void:
 	_dist_m = int(_player.global_position.distance_to(target) + 0.5)
 
 	var vp := get_viewport_rect().size
-	var on_screen: bool = to_target.dot(-cam.global_transform.basis.z) > 0.0
+	var cam_fwd := -cam.global_transform.basis.z
+	var on_screen: bool = to_target.dot(cam_fwd) > 1.0 # > near plane, not just > 0
+	_screen_pos = Vector2.ZERO
 	if on_screen:
-		_screen_pos = cam.unproject_position(target)
-		_clamped = false
-	else:
+		# unproject_position explodes toward +/-huge when the target sits
+		# barely in front of the near plane (w ~ 0) — those giant coordinates
+		# pass every float check but break the GPU triangulator
+		# ("Invalid polygon data, triangulation failed", once per frame).
+		# Anything beyond the viewport + generous margin is off-screen:
+		# fall back to the stable edge-clamp branch instead.
+		var sp := cam.unproject_position(target)
+		var margin := 64.0
+		if sp.is_finite() and sp.x > -margin and sp.y > -margin \
+				and sp.x < vp.x + margin and sp.y < vp.y + margin:
+			_screen_pos = sp
+			_clamped = false
+		else:
+			on_screen = false
+	if not on_screen:
 		# Behind or off the frustum: clamp a direction hint to the screen border
 		var cam_x: Vector3 = cam.global_transform.basis.x
 		var cam_y: Vector3 = cam.global_transform.basis.y
@@ -60,6 +92,7 @@ func _process(_delta: float) -> void:
 		var c := vp * 0.5
 		var half := c - Vector2(edge_margin, edge_margin)
 		var t: float = minf(half.x / absf(dir.x), half.y / absf(dir.y))
+		t = minf(t, half.length()) # never place the hint off-screen
 		_screen_pos = c + dir.normalized() * t
 		_clamped = true
 
@@ -75,23 +108,35 @@ func _draw() -> void:
 	var r := 13.0
 	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 1000.0 * 4.0)
 
+	if not _screen_pos.is_finite():
+		return
+
 	if _clamped:
 		# Edge hint: hollow diamond + distance
 		var d := r * (1.0 + 0.12 * pulse)
+		if d < 1.0:
+			return
 		var pts := PackedVector2Array([
 			_screen_pos + Vector2(0, -d), _screen_pos + Vector2(d, 0),
 			_screen_pos + Vector2(0, d), _screen_pos + Vector2(-d, 0),
 		])
+		# Ensure polygon is valid for triangulation (min area + finite vertices)
+		if not _is_valid_polygon(pts):
+			return
 		draw_colored_polygon(pts, Color(col.r, col.g, col.b, col.a * 0.25))
 		draw_polyline(pts + PackedVector2Array([pts[0]]), col, 3.0, true)
 	else:
 		# On-screen: small filled diamond floating above the island
 		draw_arc(_screen_pos, r + 6.0 + 4.0 * pulse, 0.0, TAU, 32, edge_col, 2.0, true)
 		var d := r * 0.75
+		if d < 1.0:
+			return
 		var pts := PackedVector2Array([
 			_screen_pos + Vector2(0, -d), _screen_pos + Vector2(d, 0),
 			_screen_pos + Vector2(0, d), _screen_pos + Vector2(-d, 0),
 		])
+		if not _is_valid_polygon(pts):
+			return
 		draw_colored_polygon(pts, col)
 
 	var font := ThemeDB.fallback_font
