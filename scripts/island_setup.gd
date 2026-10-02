@@ -22,11 +22,17 @@ const TERRAIN_SHADER_PATH := "res://shaders/island_terrain.gdshader"
 ## crown — big enough that the palms and the grass field are visible from the
 ## raft instead of disappearing into a flat sand bank.
 const ISLAND_TARGET_SIZE := 36.0
-## Where the scan's own water line sits in its local frame. The scan is authored
-## with y = 0 at the sea surface (the mesh continues ~22 m below it), so placing
-## the island root at y = 0 drops the shoreline exactly on the live water level
-## and the waves wash over the beach edge.
-const SCAN_WATER_LINE := 0.0
+## Where the scan's own water line sits in its local (post-import) frame.
+## Measured from the mesh: the beach ring is widest at y ~ 11 and the scan is
+## cut off at y = 4.18, so putting y = 11 on the live sea surface sinks ~0.5 m
+## of skirt under the waves (hides the cut rim) and leaves a ~3 m dune crown.
+## The old value of 0.0 left the whole island floating half a metre ABOVE the
+## water — the "flying saucer" look.
+const SCAN_WATER_LINE := 11.0
+## Vertical squash applied on top of the uniform footprint scale. The scan's
+## dunes are alpine-steep; flattening them to ~62% reads as a beach islet
+## instead of a sand cone and keeps the crown near the palms' canopy height.
+const ISLAND_VERTICAL_SQUASH := 0.62
 
 @export var island_root: NodePath = ^"../Island"
 @export var generate_collision := true
@@ -172,14 +178,15 @@ func _normalize_sketchfab_island(island: Node3D) -> void:
 	if max_extent <= 0.0:
 		return
 	var k := ISLAND_TARGET_SIZE / max_extent
+	var kv := k * ISLAND_VERTICAL_SQUASH
 	for child in island.get_children():
 		# Scale ONLY the scan's mesh wrapper — gameplay nodes (palms, grass
 		# field, beacon) keep their real-world sizes and offsets.
 		if child is Node3D and not _is_gameplay_node(child):
-			(child as Node3D).scale = Vector3.ONE * k
-	# Lift the island so the scan's own water line sits on the real sea surface.
+			(child as Node3D).scale = Vector3(k, kv, k)
+	# Drop the island so the scan's own water line sits on the real sea surface.
 	var water_y := _water_height_at(island.global_position)
-	island.global_position.y = water_y - k * SCAN_WATER_LINE
+	island.global_position.y = water_y - kv * SCAN_WATER_LINE
 	for mi in island.find_children("*", "MeshInstance3D", true, false):
 		if _is_gameplay_descendant(mi, island):
 			continue

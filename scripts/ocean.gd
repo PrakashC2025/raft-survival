@@ -19,29 +19,29 @@ class_name Ocean
 #   horizon (0.04, 0.45, 0.72)  -> bright azure toward the horizon
 #   deep (0.012, 0.10, 0.22)    -> near-black navy foreground/troughs
 #   night (0.018, 0.07, 0.17)   -> blue navy, alive under the moon
-@export var day_color := Color(0.035, 0.28, 0.58)
-@export var twilight_color := Color(0.05, 0.15, 0.33)
-@export var night_color := Color(0.018, 0.07, 0.17)
-@export var deep_color := Color(0.012, 0.10, 0.22)
-@export var horizon_color := Color(0.04, 0.45, 0.72)
-@export var crest_color := Color(0.14, 0.50, 0.74)
+@export var day_color := Color(0.016, 0.13, 0.24)
+@export var twilight_color := Color(0.04, 0.11, 0.22)
+@export var night_color := Color(0.012, 0.05, 0.12)
+@export var deep_color := Color(0.006, 0.05, 0.11)
+@export var horizon_color := Color(0.02, 0.22, 0.34)
+@export var crest_color := Color(0.10, 0.34, 0.46)
 @export var foam_color := Color(1.15, 1.25, 1.42)
-@export var haze_color := Color(0.5, 0.66, 0.82)
-@export var sparkle_strength := 0.35
+@export var haze_color := Color(0.45, 0.6, 0.75)
+@export var sparkle_strength := 0.6
 
 # Optional editor-only time shortcuts. F5 is reserved for the player's quick-save.
 @export var dev_time_keys := false
 
 # --- Underwater veil (display-space 2D colors) ---
 @export_range(0.0, 1.2) var under_alpha_max := 0.78
-@export var under_top_color := Color(0.10, 0.42, 0.66)
+@export var under_top_color := Color(0.05, 0.25, 0.40)
 @export var under_bottom_color := Color(0.008, 0.045, 0.12)
 
 var _under_layer: CanvasLayer = null
 var _under_rect: ColorRect = null
 var _under_mat: ShaderMaterial = null
 
-@export var wave_height := 0.38
+@export var wave_height := 0.42
 @export var wave_speed := 0.45
 var _time := 0.0
 
