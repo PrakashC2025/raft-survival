@@ -123,6 +123,16 @@ toggle_crafting={
 ]
 }
 
+[input_devices]
+
+; Touch must reach the custom-drawn menus/HUD as real InputEventScreenTouch
+; events AND be emulated as mouse so _gui_input() keeps working too. This is
+; the engine default; it is pinned here so an accidental flip can never leave
+; the start screen ignoring taps on a phone.
+; (emulate_touch_from_mouse stays OFF on purpose: the in-game HUD listens for
+; both event types and would fire every action twice on desktop.)
+pointing/emulate_mouse_from_touch=true
+
 [physics]
 
 3d/physics_engine="Jolt Physics"

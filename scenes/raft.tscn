@@ -10,7 +10,8 @@
 size = Vector3(2, 0.3, 2)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0gc0m"]
-albedo_color = Color(0.819972, 0.38978636, 0.22422838, 1)
+albedo_color = Color(0.38, 0.27, 0.17, 1)
+roughness = 0.9
 
 [sub_resource type="BoxMesh" id="BoxMesh_ybjjv"]
 material = SubResource("StandardMaterial3D_0gc0m")

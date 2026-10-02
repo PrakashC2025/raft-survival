@@ -7,9 +7,32 @@ extends Control
 ##   - Autosave present    -> CONTINUE (resumes it)
 ##   - Quick-save present  -> QUICK SAVE (second resume option)
 ## Each resume button shows the saved in-game day/time.
+##
+## MOBILE / TOUCH NOTES (this is the part that used to break on the APK):
+##   * Buttons fire on PRESS-DOWN, not on release. A phone sends
+##     touch -> drag -> drag -> release and the release position is rarely
+##     exactly the press position, so press/release matching silently dropped
+##     taps. Press-down activation is also what the in-game HUD uses.
+##   * Touch is tracked per finger (`index`) so a second thumb resting on the
+##     screen can no longer cancel the first one.
+##   * Screen touches arrive in VIEWPORT coordinates while the button rects are
+##     in this Control's LOCAL space — positions are converted explicitly, so
+##     the menu keeps working if it is ever offset, scaled or resized.
+##   * Hit rects are rebuilt on demand (resize / before every hit test) instead
+##     of only inside _draw(), so the very first tap can never land on an
+##     empty rect list.
+##   * `main.tscn` is heavy (multi-megabyte island GLBs + sky shaders). It is
+##     pre-loaded on a background thread from _ready(), so the tap swaps scenes
+##     instantly instead of freezing the phone for seconds with no feedback.
+##     While it loads the tapped button reads "LOADING…" with a progress bar.
+##   * If the game scene cannot be opened the menu shows the reason on screen
+##     and unlocks again — a dead, silent menu is what made this look broken.
 ## ============================================================
 
 const GAME_SCENE := "res://scenes/main.tscn"
+## Seconds a tap may wait on the background load before we force a normal,
+## blocking load instead. Never reached on a healthy build — pure safety net.
+const ENTER_TIMEOUT := 20.0
 
 # button ids in display order
 var _buttons: Array = []          # of {id, label, sub}
@@ -21,8 +44,20 @@ var _t := 0.0
 var _vp := Vector2.ZERO
 var _title_w := 0.0
 
+# --- touch bookkeeping -------------------------------------------------
+var _touch_ids: Array = []        # fingers currently on the screen
+# --- background load of the game scene ---------------------------------
+var _load_requested := false
+var _load_progress := 0.0
+var _packed_game: PackedScene = null
+var _waiting_to_enter := false    # tapped, waiting for the load to finish
+var _wait_seconds := 0.0          # how long the current wait has been going
+var _pending_idx := -1            # button that is running (draws LOADING)
+var _selected_id := ""            # "new" / "continue" / "quick", applied on go
+var _error := ""                  # non-empty -> drawn as a red banner
+
 func _ready() -> void:
-	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+	if _is_mobile():
 		Engine.max_fps = 60
 	anchor_left = 0.0
 	anchor_top = 0.0
@@ -37,7 +72,26 @@ func _ready() -> void:
 		_buttons.append({"id": "quick", "label": "QUICK SAVE",
 			"sub": _save_sub("quick")})
 	_buttons.append({"id": "new", "label": "NEW GAME", "sub": ""})
+	# Build the hit rects right away: the first tap must never arrive before
+	# the first _draw() has run.
+	_vp = size
+	_layout_buttons()
+	# Start warming the game scene on a worker thread.
+	_request_game_load()
 	queue_redraw()
+
+
+func _is_mobile() -> bool:
+	return OS.has_feature("mobile") or OS.has_feature("android") \
+		or OS.has_feature("ios") or OS.has_feature("web_android")
+
+
+func _notification(what: int) -> void:
+	# Rotation / split-screen / foldables resize the viewport at runtime.
+	if what == NOTIFICATION_RESIZED:
+		_vp = size
+		_layout_buttons()
+		queue_redraw()
 
 
 ## Human label for a save slot: "DAY n · hh:mm" from the saved game time.
@@ -58,14 +112,27 @@ func _save_sub(slot: String) -> String:
 
 func _process(delta: float) -> void:
 	_t += delta
+	_poll_game_load()
+	# The tap came in before the background load finished -> go now.
+	if _waiting_to_enter:
+		_wait_seconds += delta
+		if _packed_game != null:
+			_waiting_to_enter = false
+			_swap_scene(_packed_game)
+			return
+		if _wait_seconds > ENTER_TIMEOUT:
+			# Background load is not answering: fall back to a blocking load so
+			# the button can never strand the player on the menu.
+			_waiting_to_enter = false
+			_wait_seconds = 0.0
+			_swap_scene(null)
+			return
 	if not visible:
 		return
 	_vp = size
-	# hover tracking (mouse)
-	if not OS.has_feature("mobile") and not OS.has_feature("android") \
-			and not OS.has_feature("ios"):
-		var mp := get_global_mouse_position()
-		_hover = _btn_at(mp)
+	# hover tracking (mouse only — phones have no hover)
+	if not _is_mobile():
+		_hover = _hit(get_local_mouse_position())
 	queue_redraw()  # animated waves need a redraw every frame
 
 
@@ -73,53 +140,183 @@ func _process(delta: float) -> void:
 # INPUT — custom buttons (works with mouse and touch)
 # ============================================================
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
-				_press = _btn_at(mb.position)
-			else:
-				if _btn_at(mb.position) == _press:
-					_activate(_press, mb.position)
-				_press = -1
-			queue_redraw()
-			accept_event()
+	var mb := event as InputEventMouseButton
+	if mb == null or mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	var idx := _hit(mb.position)
+	if mb.pressed:
+		_press = idx
+		# Fire immediately: on a phone the release event can be dropped,
+		# reordered or land a few pixels away.
+		if idx >= 0:
+			_activate(idx)
+	else:
+		_press = -1
+	queue_redraw()
+	accept_event()
 
 
 func _input(event: InputEvent) -> void:
+	var handled := false
 	if event is InputEventScreenTouch:
 		var t := event as InputEventScreenTouch
+		var idx := _hit(_to_local(t.position))
 		if t.pressed:
-			_press = _btn_at(t.position)
-		elif _press >= 0:
-			if _btn_at(t.position) == _press:
-				_activate(_press, t.position)
-			_press = -1
+			if not _touch_ids.has(t.index):
+				_touch_ids.append(t.index)
+			_press = idx
+			if idx >= 0:
+				_activate(idx)
+		else:
+			_touch_ids.erase(t.index)
+			if _touch_ids.is_empty():
+				_press = -1
+		handled = true
+	elif event is InputEventScreenDrag:
+		# Keep the pressed highlight under the finger while it slides.
+		var d := event as InputEventScreenDrag
+		if _touch_ids.has(d.index):
+			_press = _hit(_to_local(d.position))
+			handled = true
+	elif event is InputEventKey:
+		# Keyboard / gamepad / TV-remote fallback: Enter or Space takes the
+		# first entry (Continue when a save exists, otherwise New Game).
+		var k := event as InputEventKey
+		if k.pressed and not k.echo and not _busy and not _buttons.is_empty() \
+				and (k.physical_keycode == KEY_ENTER or k.physical_keycode == KEY_KP_ENTER
+					or k.physical_keycode == KEY_SPACE):
+			_activate(0)
+			handled = true
+	if handled:
 		queue_redraw()
 		var vp := get_viewport()
 		if vp != null:
 			vp.set_input_as_handled()
 
 
-func _btn_at(pos: Vector2) -> int:
+## Screen-space (viewport) position -> this Control's local space, so the hit
+## test is correct even if the menu is ever moved, scaled or rotated.
+func _to_local(pos: Vector2) -> Vector2:
+	return get_global_transform().affine_inverse() * pos
+
+
+func _hit(pos: Vector2) -> int:
+	_ensure_layout()
 	for i in range(_btn_rects.size()):
 		if (_btn_rects[i] as Rect2).has_point(pos):
 			return i
 	return -1
 
 
-func _activate(btn_idx: int, _pos: Vector2) -> void:
+## The rects are normally built during _draw(); make sure they exist before
+## any hit test so a tap on the very first frame still lands.
+func _ensure_layout() -> void:
+	if size != _vp or _btn_rects.size() != _buttons.size():
+		_vp = size
+		_layout_buttons()
+
+
+# ============================================================
+# RUN / RESUME — start the game without ever dead-ending the menu
+# ============================================================
+func _activate(btn_idx: int) -> void:
 	if btn_idx < 0 or btn_idx >= _buttons.size() or _busy:
 		return
 	_busy = true
-	var id: String = _buttons[btn_idx]["id"]
-	if id == "continue":
+	_pending_idx = btn_idx
+	_error = ""
+	# Remember the choice; the save slot is only touched once we know the game
+	# scene can really be opened (never wipe a save for a transition that fails).
+	_selected_id = str(_buttons[btn_idx]["id"])
+	_enter_game()
+	queue_redraw()
+
+
+func _apply_selection() -> void:
+	if _selected_id == "continue":
 		Inventory.load_game("main")
-	elif id == "quick":
+	elif _selected_id == "quick":
 		Inventory.load_game("quick")
-	else:
+	elif _selected_id == "new":
 		Inventory.new_game_reset()
-	get_tree().change_scene_to_file(GAME_SCENE)
+	_selected_id = ""
+
+
+func _enter_game() -> void:
+	if _packed_game != null:
+		_swap_scene(_packed_game)
+		return
+	if _load_requested and _error == "":
+		# Warm-up still running: keep the button in its LOADING state and swap
+		# from _process() the instant the scene lands in memory.
+		_waiting_to_enter = true
+		_wait_seconds = 0.0
+		queue_redraw()
+		return
+	# Nothing usable in the background -> fall back to a normal blocking load.
+	_swap_scene(null)
+
+
+func _swap_scene(packed: PackedScene) -> void:
+	var can_pack := packed != null and packed.can_instantiate()
+	if not can_pack and not ResourceLoader.exists(GAME_SCENE):
+		_fail("COULD NOT START GAME  ·  no scene")
+		return
+	_apply_selection()
+	var err: int = get_tree().change_scene_to_packed(packed) if can_pack \
+		else get_tree().change_scene_to_file(GAME_SCENE)
+	if err != OK:
+		_fail("COULD NOT START GAME  ·  err %d" % err)
+
+
+## Never leave the player with a menu that ignores every tap: say why it
+## failed and unlock the buttons so they can try again.
+func _fail(msg: String) -> void:
+	push_error("[MainMenu] " + msg + " (" + GAME_SCENE + ")")
+	_error = msg
+	_busy = false
+	_waiting_to_enter = false
+	_pending_idx = -1
+	_selected_id = ""
+	# Allow the next tap to start the load over instead of waiting forever on a
+	# background request that is never going to answer.
+	_load_requested = false
+	queue_redraw()
+
+
+## Kick off a background (threaded) load of main.tscn so the tap is instant.
+func _request_game_load() -> void:
+	if _load_requested:
+		return
+	_load_requested = true
+	if not ResourceLoader.exists(GAME_SCENE):
+		_fail("MISSING  " + GAME_SCENE)
+		return
+	# Warm the heavy game scene on a worker thread while the player reads the
+	# menu, so tapping a button swaps instantly instead of stalling the phone.
+	if ResourceLoader.load_threaded_request(GAME_SCENE) != OK:
+		_fail("COULD NOT START LOADING  " + GAME_SCENE)
+
+
+func _poll_game_load() -> void:
+	if not _load_requested or _packed_game != null:
+		return
+	var prog: Array = [0.0]
+	var st := ResourceLoader.load_threaded_get_status(GAME_SCENE, prog)
+	if st == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+		if prog.size() > 0:
+			_load_progress = clampf(float(prog[prog.size() - 1]), 0.0, 1.0)
+		return
+	if st == ResourceLoader.THREAD_LOAD_LOADED:
+		var res: Resource = ResourceLoader.load_threaded_get(GAME_SCENE)
+		if res is PackedScene:
+			_packed_game = res
+			_load_progress = 1.0
+			queue_redraw()
+			return
+		_fail(GAME_SCENE + "  IS NOT A SCENE")
+		return
+	_fail("GAME SCENE FAILED TO LOAD  ·  code %d" % int(st))
 
 
 # ============================================================
@@ -164,6 +361,7 @@ func _draw() -> void:
 	_draw_ocean(s, horizon)
 	_draw_title(s)
 	_draw_buttons(s)
+	_draw_error(s)
 	_draw_footer(s)
 
 
@@ -311,15 +509,51 @@ func _draw_buttons(_s: Vector2) -> void:
 		# label + sub (centered, pushed right of the icon)
 		var font := ThemeDB.fallback_font
 		var fs: int = int(clampf(rr.size.y * 0.3, 20.0, 30.0))
-		var lw2: float = font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var show_label := label
+		var show_sub := sub
+		var running: bool = _busy and i == _pending_idx
+		if running:
+			# Immediate feedback: the tap registered, the world is loading.
+			show_label = "LOADING…"
+			show_sub = "%d%%" % int(roundf(_load_progress * 100.0))
+		var lw2: float = font.get_string_size(show_label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var lx: float = rr.position.x + (rr.size.x - lw2) * 0.5 + rr.size.y * 0.2
 		var ly: float = rr.position.y + rr.size.y * 0.44
-		_draw_text(label, Vector2(lx, ly + fs * 0.3), fs, Color(1.0, 0.98, 0.92, 1.0))
-		if sub != "":
+		_draw_text(show_label, Vector2(lx, ly + fs * 0.3), fs, Color(1.0, 0.98, 0.92, 1.0))
+		if show_sub != "":
 			var sfs: int = int(clampf(rr.size.y * 0.2, 13.0, 18.0))
-			var sw3: float = font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x
-			_draw_text(sub, Vector2(rr.position.x + (rr.size.x - sw3) * 0.5, ly + fs * 0.55 + sfs * 0.85),
+			var sw3: float = font.get_string_size(show_sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x
+			_draw_text(show_sub, Vector2(rr.position.x + (rr.size.x - sw3) * 0.5, ly + fs * 0.55 + sfs * 0.85),
 				sfs, Color(0.6, 0.85, 0.95, 0.85))
+		if running:
+			# thin progress bar along the bottom of the plank
+			var bar := Rect2(rr.position.x + 14.0, rr.end.y - 12.0, rr.size.x - 28.0, 5.0)
+			_draw_rounded(bar, 2.5, Color(0.0, 0.0, 0.0, 0.45))
+			var fill_w: float = bar.size.x * clampf(_load_progress, 0.0, 1.0)
+			if fill_w > 2.0:
+				_draw_rounded(Rect2(bar.position, Vector2(fill_w, bar.size.y)), 2.5,
+					Color(1.0, 0.78, 0.35, 0.95))
+
+
+## Red banner shown when the game scene could not be opened — a visible reason
+## beats a menu that silently ignores every tap.
+func _draw_error(s: Vector2) -> void:
+	if _error == "":
+		return
+	var font := ThemeDB.fallback_font
+	var fs := 16
+	var msg := _error
+	var tw: float = font.get_string_size(msg, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var max_w: float = s.x * 0.9
+	if tw > max_w:
+		var keep := int(msg.length() * (max_w / tw)) - 1
+		msg = msg.substr(0, maxi(keep, 8)) + "…"
+		tw = font.get_string_size(msg, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var box := Rect2((s.x - tw) * 0.5 - 16.0, s.y * 0.86, tw + 32.0, fs * 2.4)
+	_draw_rounded(box, 10.0, Color(0.28, 0.06, 0.05, 0.92))
+	_draw_rounded(box, 10.0, Color(0.95, 0.4, 0.35, 0.9), false, 2.0)
+	_draw_text(msg, Vector2((s.x - tw) * 0.5, box.position.y + fs * 1.6), fs,
+		Color(1.0, 0.85, 0.8, 1.0))
 
 
 func _draw_button_icon(c: Vector2, r: float, id: String, col: Color) -> void:

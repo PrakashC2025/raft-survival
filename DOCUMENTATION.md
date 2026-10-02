@@ -223,6 +223,27 @@ option — each labeled with the saved in-game day/time ("DAY 2 · 15:30").
 Continue/Quick Save load that slot and jump straight into `main.tscn`; New
 Game deletes BOTH save files and starts fresh.
 
+**Menu input & scene entry (mobile-hardened).** The planks are custom-drawn,
+so the script owns its own hit-testing. Buttons fire on **press-down** (never
+on release): a phone reports `touch → drag → drag → release` and the release
+position rarely matches the press position exactly, so press/release matching
+used to drop taps — a second thumb on the screen, or a quick double tap whose
+first release arrived after the second press, cancelled the pending button and
+the menu looked completely dead. Touches are now tracked **per finger**
+(`InputEventScreenTouch.index`), screen positions are converted from viewport
+space into the Control's local space before the hit test, and the button rects
+are rebuilt on demand (`_ensure_layout()`, `NOTIFICATION_RESIZED`) instead of
+only inside `_draw()`. `main.tscn` is heavy (multi-megabyte island GLBs plus
+the sky shaders), so it is **pre-loaded on a background thread** from
+`_ready()` (`ResourceLoader.load_threaded_request`) and swapped in with
+`change_scene_to_packed()`; the tapped plank shows `LOADING…` with a progress
+bar meanwhile, a 20 s watchdog falls back to a blocking load, and any failure
+draws a red on-screen banner (`COULD NOT START GAME · err N`) and re-enables
+the buttons instead of failing silently. The chosen save slot is only applied
+once the scene is known to be openable, so a failed transition can never wipe
+a save. See `BUILD_ANDROID.md` for re-exporting the APK (the committed
+`build/OceanSurvival.apk` is a stale pre-menu build).
+
 From `main.tscn` (raft at (0, 0.235, -3), player at (0, 1.2, -3)):
 
 ```
@@ -10509,7 +10530,7 @@ void fragment() {
 
 ## 26. Island
 
-A beach-sculpted island (`models/sand_raftsurvival.glb`) centered **85 m east, 165 m south** of the raft start (≈183 m, ~28° right of the raft's forward axis — inside the 75° FOV, so it is visible from the raft in open ocean). `island_setup.gd` rescales the raw ~284 m scan to a 36 m footprint and lifts it so the scan's own water line rides the live sea surface, leaving a ~32 m islet that rises ~3 m out of the water. Players can find it by the pulsing light pillar (`island_beacon.gd`) and the on-screen diamond/distance hint (`island_marker.gd`), both of which stay readable at night.
+A beach-sculpted island (`models/sand_raftsurvival.glb`) centered **85 m east, 165 m south** of the raft start (≈183 m, ~28° right of the raft's forward axis — inside the 75° FOV, so it is visible from the raft in open ocean). `island_setup.gd` rescales the raw ~284 m scan to a 36 m footprint (squashed vertically to 62 % so the dunes read as a beach islet, not a sand cone) and drops it so the scan's water line — measured from the mesh at local y ≈ 11, the widest beach ring; the scan is cut off at y ≈ 4.2, it does *not* continue below sea level — rides the live sea surface, leaving a ~36 m islet that rises ~3 m out of the water with ~0.5 m of skirt hiding the cut rim. The same transform (`scale 0.12693 / 0.078697 / 0.12693`, y −0.8657) and pre-snapped palm heights are baked into `main.tscn` so the editor viewport matches the running game; the runtime normalisation is idempotent with those values. Players can find it by the pulsing light pillar (`island_beacon.gd`) and the on-screen diamond/distance hint (`island_marker.gd`), both of which stay readable at night.
 
 **Files**
 
@@ -10521,7 +10542,7 @@ A beach-sculpted island (`models/sand_raftsurvival.glb`) centered **85 m east, 1
 | `grass_wind.gdshader` | Wind sway. Reads the blade's `COLOR_0` as the bend mask; `INSTANCE_CUSTOM.x/y` = per-blade phase/strength so every blade sways out of sync. Uniforms: `wind_strength` (0.18), `wind_speed` (1.6), `wind_gustiness` (0.5), `wind_direction` |
 | `island_terrain.gdshader` | Realistic terrain material applied per-surface by `island_setup.gd`: vertex-paint albedo + per-pixel fbm detail, slope-based rock, and a wet-sand band that tracks the live water line (`water_line` uniform pushed every frame) |
 | `island_grass.gd` | `@tool` scatterer: raycasts down at random points inside `scatter_radius`, keeps hits that are flat enough (`min_surface_flatness`), above `min_height_above_water` and below `max_height_above_water` over sea level (the beach scan continues ~22 m *below* the water line, so without the lower bound blades sprout on submerged sand), fills one `MultiMeshInstance3D` (single draw call; `use_custom_data = true` is required by the shader). **Hit transforms are converted world → node-local** before storage: ray hits are world-space, but the MultiMeshInstance sits inside the Island, so raw world transforms would apply the island offset twice (blades landing over open ocean — the "no grass" bug). Retries a few frames if no collider exists yet |
-| `island_setup.gd` | Runtime setup: creates trimesh `StaticBody3D` colliders for the island + each palm (same result as the editor's *Mesh → Create Trimesh Static Body*), applies the terrain shader (grass surface keeps white `base_color` so the vertex paint shows; sand surface gets the sand tint; palms/beacon/grass are excluded), snaps palms onto the terrain, then rebuilds the grass one frame later. Skips meshes under a `no_collision` group node (the beacon visuals). For the beach scan (`sand_raftsurvival.glb`) it also normalises the import: every imported root is scaled by `k = ISLAND_TARGET_SIZE / widest_mesh_footprint` and the whole island is lifted so `SCAN_WATER_LINE` sits on the live water height (`_water_height_at()`), so the shoreline lands on the sea instead of the mound staying 22 m underwater |
+| `island_setup.gd` | Runtime setup: creates trimesh `StaticBody3D` colliders for the island + each palm (same result as the editor's *Mesh → Create Trimesh Static Body*), applies the terrain shader (grass surface keeps white `base_color` so the vertex paint shows; sand surface gets the sand tint; palms/beacon/grass are excluded), snaps palms onto the terrain, then rebuilds the grass one frame later. Skips meshes under a `no_collision` group node (the beacon visuals). For the beach scan (`sand_raftsurvival.glb`) it also normalises the import: every imported root is scaled by `k = ISLAND_TARGET_SIZE / widest_mesh_footprint` and the whole island is dropped so `SCAN_WATER_LINE` (11.0 — the widest beach ring of the scan, whose mesh bottom is y ≈ 4.2) sits on the live water height (`_water_height_at()`); the old value 0.0 left the island floating ~0.5 m above the waves |
 | `island_beacon.gd` | Pulsing light pillar + glowing orb + soft `OmniLight3D` on the mound (`IslandBeacon`, y ≈ 3.2) — visible from the raft even at night. Registers in group `island_beacon`; its meshes join `no_collision` so no trimesh collider is generated for them |
 | `island_marker.gd` | HUD hint (`IslandMarker` under `Player/CanvasLayer`): warm-orange diamond + `N m` distance readout. Sits above the island while on screen, clamps to the screen edge when it isn't (hollow diamond), fades out within `fade_distance` (18 m) of the beacon |
 
