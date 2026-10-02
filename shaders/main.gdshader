@@ -34,73 +34,16 @@ uniform vec3 moon_dir = vec3(0.0, -0.5, -0.8);
 uniform vec3 sun_glint_color = vec3(1.0, 0.95, 0.85);
 uniform vec3 moon_glint_color = vec3(0.72, 0.82, 1.0);
 uniform float sparkle_strength : hint_range(0.0, 4.0) = 0.35;
-// 0..1 pushed from RainSystem (via ocean.gd): storm state roughens the
-// surface, adds rain-churn speckle and darkens the water body.
-uniform float rain_strength : hint_range(0.0, 1.0) = 0.0;
 
 // --- waves (geometry shared with Ocean.get_height()) ---
 uniform float wave_height = 0.32;
 uniform float wave_speed = 0.45;
-
-// --- island interaction (pushed by island_generator.gd at runtime) ---
-// Mirrors the BASE radial profile of IslandGenerator.terrain_height_local
-// (closed-form math only — CPU/GPU identical). Gives the water the real
-// seabed depth: turquoise shallows, sand glow, surf lines on the coast.
-uniform vec2 island_center = vec2(0.0);
-uniform float shore_radius = 32.0;
-uniform float outer_radius = 68.0;
-uniform float deep_depth = 12.0;
-uniform float beach_height = 2.6;
-uniform float island_active = 0.0;
-uniform vec2 foam_rocks[16]; // world XZ of the half-submerged shore rocks
-uniform int foam_rock_count = 0;
 
 // Wave crest level (-1 trough .. +1 crest) interpolated to the fragment
 // so the surface can shade rolling wave bands + crest foam.
 varying float wave_crest;
 varying vec3 world_pos;
 varying vec3 wnormal;  // world-space wave normal (cheaper than INV_VIEW_MATRIX per fragment)
-
-// --- gradient noise (for rain / storm texture) ----------------------------
-// TWO lattice rules learned the hard way:
-// 1. sin(a)*sin(b) products form egg-crate dot lattices — never use them.
-// 2. plain VALUE noise interpolates hashed CELL CORNERS, so its bumps sit ON
-//    a visible square lattice: "boxy" cells across the sea and rain flecks
-//    popping one-per-cell in perfect rows (user screenshots 2026-09-15).
-// GRADIENT noise hashes a random DIRECTION per corner and interpolates dot
-// products — bumps land INSIDE cells at random offsets, no readable grid.
-// The input is pre-rotated so even the underlying lattice has no world-axis
-// alignment.
-float hash21_o(vec2 c) {
-	// PRECISION-SAFE hash. The old fract(sin(dot(c, vec2(127.1,311.7)))*43758)
-	// degenerates at world scale: positions reach ±250 m and the highest octave
-	// multiplies by 2.6, so sin() got ~200,000-radian arguments and float32
-	// quantized its output into correlated diagonal bands — every noise cell
-	// rendered as a straight-edged RECTANGLE patch (the persistent "box grid"
-	// screenshots). Wrapping the cell index keeps the hash input tiny and the
-	// sine-free Hoskins mix keeps full float precision: no correlated bands.
-	c = mod(c, 1024.0);  // 500 m plane * 2.73 max octave = 682 < 1024: no seam in view
-	vec3 p3 = fract(vec3(c.xyx) * 0.1031);
-	p3 += dot(p3, p3.yzx + 33.33);
-	return fract((p3.x + p3.y) * p3.z);
-}
-vec2 gdir_o(float h) {
-	// cheap hashed unit direction (no trig)
-	return normalize(vec2(h - 0.5, fract(h * 7.31) - 0.5) + vec2(0.023, 0.031));
-}
-float gnoise_o(vec2 p) {
-	p = mat2(vec2(0.8, -0.6), vec2(0.6, 0.8)) * p;  // ~37° rotation: no axis-aligned cells
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	float va = dot(gdir_o(hash21_o(i)), f);
-	float vb = dot(gdir_o(hash21_o(i + vec2(1, 0))), f - vec2(1, 0));
-	float vc = dot(gdir_o(hash21_o(i + vec2(0, 1))), f - vec2(0, 1));
-	float vd = dot(gdir_o(hash21_o(i + vec2(1, 1))), f - vec2(1, 1));
-	// gradient noise spans ~[-0.7, 0.7]; remap to full [0, 1] so downstream
-	// amplitudes/thresholds behave like before.
-	return clamp(0.5 + mix(mix(va, vb, u.x), mix(vc, vd, u.x), u.y) * 0.72, 0.0, 1.0);
-}
 
 // Wave-field constants (keep in sync with ocean.gd _WAVES + raft_foam.gdshader).
 // Tuned for a SMOOTH, realistic sea: two long rolling swells dominate and the
@@ -122,19 +65,7 @@ const float L1_S = 0.45;
 const float L2_S = 0.7;
 const float L3_S = 1.05;
 const float L4_S = 1.45;
-// CROSS-SWELL: two extra incommensurate mid-frequency waves from unrelated
-// directions. Four aligned harmonics made the sea read as regular parallel
-// bands; two cross components scramble the interference into the random-looking
-// amplitude mixing of a real sea (keep in sync with ocean.gd _WAVES).
-const vec2 L5_DIR = vec2(0.33, 0.94);
-const vec2 L6_DIR = vec2(-0.95, 0.05);
-const float L5_F = 0.163;
-const float L6_F = 0.317;
-const float L5_A = 0.27;
-const float L6_A = 0.16;
-const float L5_S = 0.87;
-const float L6_S = 1.23;
-const float WAVE_SUM = 2.69;
+const float WAVE_SUM = 2.26;
 
 // Organic-field constants: a slow 2D "meander" that warps the wave sampling
 // position (bending/breaking every crest line so no straight parallel rows
@@ -158,28 +89,6 @@ const float E2_S = 0.10;
 
 varying vec2 v_warp;  // meander offset, shared by the fragment fine-detail layers
 
-// Island seabed height at q (island-local XZ, r = length(q)).
-// KEEP-IN-SYNC with island_generator.gd terrain_height_local() BASE section:
-// coast_wobble + lagoon_mask + radial profile. Closed-form math only.
-float island_base(vec2 q, float r) {
-	float wobble = sin(q.x * 0.052 + 1.3) * cos(q.y * 0.047 + 0.7)
-		+ 0.6 * sin((q.x + q.y) * 0.031 + 2.1);
-	float r_eff = r + wobble * 5.0;
-	float base;
-	if (r_eff <= shore_radius) {
-		base = beach_height * 0.5 * (1.0 + cos(3.14159 * r_eff / shore_radius));
-	} else {
-		float d = clamp((r_eff - shore_radius) / (outer_radius - shore_radius), 0.0, 1.0);
-		base = -deep_depth * (d * d * (3.0 - 2.0 * d));
-	}
-	if (base < 0.0) {
-		float lmask = (r > 0.001) ? clamp((q.x * 0.6216 + q.y * 0.7833) / r, 0.0, 1.0) : 0.0;
-		float floor_depth = -(0.4 + 2.6 * smoothstep(26.0, 48.0, r));
-		base = mix(base, floor_depth, lmask);
-	}
-	return base;
-}
-
 void vertex() {
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	world_pos = wp;
@@ -195,9 +104,7 @@ void vertex() {
 	float h = env * (L1_A * sin(dot(L1_DIR, pw) * L1_F + t * L1_S)
 		+ L2_A * sin(dot(L2_DIR, pw) * L2_F + t * L2_S)
 		+ L3_A * sin(dot(L3_DIR, pw) * L3_F + t * L3_S)
-		+ L4_A * sin(dot(L4_DIR, pw) * L4_F + t * L4_S)
-		+ L5_A * sin(dot(L5_DIR, pw) * L5_F + t * L5_S)
-		+ L6_A * sin(dot(L6_DIR, pw) * L6_F + t * L6_S));
+		+ L4_A * sin(dot(L4_DIR, pw) * L4_F + t * L4_S));
 	VERTEX.y += h * wave_height * 0.33;
 	wave_crest = clamp(h / (WAVE_SUM * max(env, 0.3)), -1.0, 1.0);
 	// Per-vertex wave normal from the analytic slope of the same formula so
@@ -208,15 +115,11 @@ void vertex() {
 	float dhdx = amp * env * (L1_A * L1_F * L1_DIR.x * cos(dot(L1_DIR, pw) * L1_F + t * L1_S)
 		+ L2_A * L2_F * L2_DIR.x * cos(dot(L2_DIR, pw) * L2_F + t * L2_S)
 		+ L3_A * L3_F * L3_DIR.x * cos(dot(L3_DIR, pw) * L3_F + t * L3_S)
-		+ L4_A * L4_F * L4_DIR.x * cos(dot(L4_DIR, pw) * L4_F + t * L4_S)
-		+ L5_A * L5_F * L5_DIR.x * cos(dot(L5_DIR, pw) * L5_F + t * L5_S)
-		+ L6_A * L6_F * L6_DIR.x * cos(dot(L6_DIR, pw) * L6_F + t * L6_S));
+		+ L4_A * L4_F * L4_DIR.x * cos(dot(L4_DIR, pw) * L4_F + t * L4_S));
 	float dhdz = amp * env * (L1_A * L1_F * L1_DIR.y * cos(dot(L1_DIR, pw) * L1_F + t * L1_S)
 		+ L2_A * L2_F * L2_DIR.y * cos(dot(L2_DIR, pw) * L2_F + t * L2_S)
 		+ L3_A * L3_F * L3_DIR.y * cos(dot(L3_DIR, pw) * L3_F + t * L3_S)
-		+ L4_A * L4_F * L4_DIR.y * cos(dot(L4_DIR, pw) * L4_F + t * L4_S)
-		+ L5_A * L5_F * L5_DIR.y * cos(dot(L5_DIR, pw) * L5_F + t * L5_S)
-		+ L6_A * L6_F * L6_DIR.y * cos(dot(L6_DIR, pw) * L6_F + t * L6_S));
+		+ L4_A * L4_F * L4_DIR.y * cos(dot(L4_DIR, pw) * L4_F + t * L4_S));
 	vec3 local_n = normalize(vec3(-dhdx, 1.0, -dhdz));
 	NORMAL = local_n;
 	wnormal = normalize((MODEL_MATRIX * vec4(local_n, 0.0)).xyz);
@@ -254,47 +157,36 @@ void fragment() {
 	vec2 p = world_pos.xz + v_warp;  // warped like the vertex waves: fine detail bends with the swells
 	float t = TIME * wave_speed;
 
-	// Fragment-scale micro ripples (finer than the mesh can displace):
-	// VALUE-NOISE based — the old sum of 3 plane waves formed a regular
-	// hexagonal dot lattice over the whole sea (the screenshot bug). Noise
-	// gives unstructured chop; gradients come from forward differences.
+	// Fragment-scale micro ripples (finer than the mesh can displace): three
+	// incommensurate directional lobes so the near field reads as irregular
+	// moving chop rather than a repeating pattern. Fades out with distance so
+	// distant water smooths into atmospheric cobalt.
 	float dist = distance(world_pos, CAMERA_POSITION_WORLD);
-	float fine = smoothstep(120.0, 18.0, dist);
-	vec2 nq = p * 1.05;
-	float mh = (gnoise_o(nq + vec2(t * 1.1, t * 0.7)) - 0.5) * 0.50
-		+ (gnoise_o(nq * 2.6 + vec2(-t * 1.5, t * 1.1)) - 0.5) * 0.28;
-	float ne = 0.10;
-	float mh_x = (gnoise_o((p + vec2(ne, 0.0)) * 1.05 + vec2(t * 1.1, t * 0.7)) - 0.5) * 0.50
-		+ (gnoise_o((p + vec2(ne, 0.0)) * 2.6 + vec2(-t * 1.5, t * 1.1)) - 0.5) * 0.28;
-	float mh_z = (gnoise_o((p + vec2(0.0, ne)) * 1.05 + vec2(t * 1.1, t * 0.7)) - 0.5) * 0.50
-		+ (gnoise_o((p + vec2(0.0, ne)) * 2.6 + vec2(-t * 1.5, t * 1.1)) - 0.5) * 0.28;
-	float mgx = (mh_x - mh) / ne;
-	float mgz = (mh_z - mh) / ne;
+	float fine = 1.0 - smoothstep(18.0, 120.0, dist);
+	vec2 mdir1 = vec2(0.6, 0.8);
+	vec2 mdir2 = vec2(0.9, -0.4);
+	vec2 mdir3 = vec2(-0.72, 0.55);
+	// Calm-water micro ripples: small amplitude and slow speed so the near
+	// field shimmers gently instead of boiling.
+	float mh = 0.12 * sin(dot(mdir1, p) * 2.8 + t * 1.2)
+		+ 0.09 * sin(dot(mdir2, p) * 4.6 + t * 1.6)
+		+ 0.05 * sin(dot(mdir3, p) * 7.4 + t * 2.0);
+	float mgx = 0.12 * 2.8 * mdir1.x * cos(dot(mdir1, p) * 2.8 + t * 1.2)
+		+ 0.09 * 4.6 * mdir2.x * cos(dot(mdir2, p) * 4.6 + t * 1.6)
+		+ 0.05 * 7.4 * mdir3.x * cos(dot(mdir3, p) * 7.4 + t * 2.0);
+	float mgz = 0.12 * 2.8 * mdir1.y * cos(dot(mdir1, p) * 2.8 + t * 1.2)
+		+ 0.09 * 4.6 * mdir2.y * cos(dot(mdir2, p) * 4.6 + t * 1.6)
+		+ 0.05 * 7.4 * mdir3.y * cos(dot(mdir3, p) * 7.4 + t * 2.0);
 	n = normalize(vec3(n.x - mgx * fine * 0.20, n.y, n.z - mgz * fine * 0.20));
 	ndv = max(dot(n, tocam), 0.0);
-	float micro_w = mh * fine;  // unstructured ripple level near the camera
+	float micro_w = mh * fine;  // -0.65..0.65 ripple level near the camera
 
-	// ---- RAIN: a storm boils the surface ----
-	// NOISE-driven roughening: two scrolling value-noise octaves (different
-	// scales/speeds/directions) = hundreds of tiny random impacts. The old
-	// sine sums made visible parallel wave lines across the whole sea.
-	float rain = clamp(rain_strength, 0.0, 1.0);
-	if (rain > 0.001) {
-		vec2 rp = world_pos.xz;
-		float rx = (gnoise_o(rp * 0.9 + vec2(t * 2.6, t * 1.9)) - 0.5)
-			+ (gnoise_o(rp * 2.3 - vec2(t * 3.4, t * 2.1)) - 0.5) * 0.6;
-		float rz = (gnoise_o(rp * 0.9 + vec2(t * 2.2, -t * 2.8) + 19.7) - 0.5)
-			+ (gnoise_o(rp * 2.3 + vec2(-t * 1.7, t * 3.1) + 7.3) - 0.5) * 0.6;
-		n = normalize(vec3(n.x + rx * 0.30 * rain, n.y, n.z + rz * 0.30 * rain));
-		ndv = max(dot(n, tocam), 0.0);
-	}
-
-	// Irregular high-frequency breakup shared by glitter and whitecaps.
-	// Anisotropically-stretched VALUE NOISE = lazy broken streaks along the
-	// swell with zero preferred axis alignment (the sine product made a
-	// visible diagonal lattice in the glitter path).
-	vec2 cs = vec2(p.x * 0.42 - p.y * 0.25, p.x * 0.22 + p.y * 0.95);
-	float chop = clamp(0.5 + (gnoise_o(cs * 1.15 + vec2(t * 0.7, -t * 0.5)) - 0.5) * 1.6, 0.0, 1.0);
+	// Irregular high-frequency breakup shared by glitter and whitecaps. It is a
+	// product of two moving directional waves, stretched into lazy broken
+	// streaks along the swell — lower frequency than before so the glitter
+	// reads as long silk streaks, never confetti.
+	float chop = 0.5 + 0.5 * sin(dot(vec2(0.53, 0.85), p) * 7.0 + t * 1.8)
+		* sin(dot(vec2(-0.64, 0.77), p) * 5.2 + t * 1.4);
 
 	// ---- Base color: day -> twilight -> night ----
 	vec3 base = mix(water_day_color, water_twilight_color, twilight_factor);
@@ -324,50 +216,6 @@ void fragment() {
 	float near_steep = (1.0 - horizon_k) * smoothstep(0.5, 0.95, ndv);
 	base = mix(base, water_deep_color, near_steep * 0.92);
 	base = mix(base, hz, horizon_k * 0.85);
-
-	// ---- ISLAND: depth-aware shallows + surf (mirrors the real seabed) ----
-	float shore_foam = 0.0;
-	if (island_active > 0.5) {
-		vec2 li = world_pos.xz - island_center;
-		float lr = length(li);
-		if (lr < outer_radius * 1.05) {
-			float tb = island_base(li, lr);
-			float depth = max(-tb, 0.0);
-			// Turquoise shallow body; sunlit sand glows through near the shore.
-			float shallow_k = 1.0 - smoothstep(0.3, 7.0, depth);
-			vec3 sand_glow = vec3(0.50, 0.44, 0.28);
-			vec3 lagoon_col = vec3(0.05, 0.36, 0.38);
-			vec3 shallow_body = mix(lagoon_col, sand_glow, smoothstep(2.8, 0.15, depth) * 0.9);
-			shallow_body = mix(shallow_body, vec3(0.012, 0.10, 0.22), night_factor * 0.75);
-			base = mix(base, shallow_body, shallow_k * shallow_k * 0.9);
-			// Rolling breaker lines: bands collapsing shoreward (depth-based so
-			// they follow the exact coastline shape, lagoon curve included),
-			// broken into flecks so they never read as perfect rings.
-			float t2 = TIME * wave_speed;
-			float breaker_band = smoothstep(0.70, 0.96, sin(depth * 1.9 - t2 * 1.1 + sin(lr * 0.35) * 1.2));
-			// Breakup MUST NOT be axis-aligned: sin(x)*sin(z) paints an invisible
-			// world-axis GRID of foam strength that shows on the glowing submerged
-			// sand. Two rotated, incommensurate waves have no preferred direction
-			// and cannot tile into visible rows/columns.
-			vec2 bdir1 = vec2(0.809, 0.588);  // ~36°
-			vec2 bdir2 = vec2(-0.423, 0.906); // ~115° (not perpendicular to bdir1)
-			float breakup = 0.5 + 0.5 * sin(dot(bdir1, world_pos.xz) * 1.05 + t2 * 1.3)
-				* sin(dot(bdir2, world_pos.xz) * 0.83 - t2 * 0.9);
-			float depth_band = smoothstep(0.12, 0.45, depth) * (1.0 - smoothstep(2.0, 3.4, depth));
-			shore_foam = breaker_band * breakup * depth_band;
-			// Thin wash line hugging the waterline, breathing with the swell.
-			shore_foam += smoothstep(0.22, 0.02, depth) * (0.45 + 0.30 * sin(t2 * 1.5 + lr * 0.8));
-			// Foam collar around the half-submerged shore rocks.
-			for (int i = 0; i < 16; i++) {
-				if (i >= foam_rock_count) { break; }
-				float fr = distance(world_pos.xz, foam_rocks[i]);
-				float ring = smoothstep(2.3, 0.5, fr);
-				float churn = 0.55 + 0.45 * sin(fr * 5.0 - t2 * 2.2 + float(i) * 2.7);
-				shore_foam += ring * churn * 0.8;
-			}
-			shore_foam *= 1.0 - night_factor * 0.45;
-		}
-	}
 
 	// ---- Fresnel sheen toward the sky tone (subtle) ----
 	float fres = pow(1.0 - ndv, 3.0);
@@ -425,14 +273,12 @@ void fragment() {
 	// Night dims the whole water body only gently (the deep/horizon mixes above
 	// are day-scaled); moon glitter is added afterwards so it still reads.
 	base *= mix(1.0, 0.80, night_factor);
-	// Rain darkens + desaturates the body (overcast storm light).
-	base *= 1.0 - rain * 0.14;
 
 	// ---- Specular: broken sun glitter by day, moon shimmer by night ----
 	// Highlights only land on crest bands, break into elongated streaks via
 	// chop, and fade out with distance — no round dots, no far-field grid.
 	float sdot = max(dot(r, sun_n), 0.0);
-	float glitter_dist = smoothstep(120.0, 30.0, dist);
+	float glitter_dist = 1.0 - smoothstep(30.0, 120.0, dist);
 	float glitter = (pow(sdot, 26.0) * 0.05 + pow(sdot, 110.0) * 0.22) * chop
 		* (0.30 + 0.70 * crest_up) * glitter_dist
 		* sparkle_strength * 0.40 * (1.0 - night_factor);
@@ -457,18 +303,6 @@ void fragment() {
 	vec3 foam_col = mix(water_foam_color * 0.9, vec3(0.30, 0.40, 0.52), night_factor);
 	foam_col = mix(foam_col, water_foam_color * 0.5, twilight_factor * 0.6);
 	light_add += cap * foam_col * 0.20 * (1.0 - night_factor * 0.45);
-
-	// Shore surf: breaker lines, waterline wash and rock collars computed above.
-	light_add += shore_foam * foam_col * 0.75;
-
-	// ---- Rain churn: random bright impact glints across the near field.
-	// MUST be hash noise — the old product-of-sines painted a perfect
-	// egg-crate DOT GRID over the whole ocean (the screenshot bug).
-	if (rain > 0.001) {
-		float flicker = gnoise_o(world_pos.xz * 1.7 - vec2(t * 1.1, t * 0.7));
-		float fleck = smoothstep(0.78, 0.95, flicker) * (0.6 + 0.4 * sin(t * 23.0 + flicker * 40.0));
-		light_add += fleck * foam_col * 0.30 * rain * (1.0 - smoothstep(20.0, 45.0, dist));
-	}
 
 	// ---- Atmospheric haze at the very far field ----
 	float haze = smoothstep(90.0, 380.0, dist);

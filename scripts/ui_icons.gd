@@ -193,16 +193,22 @@ static func item_color(item: String) -> Color:
 			return Color(0.75, 0.28, 0.2)
 		"Stone":
 			return Color(0.55, 0.55, 0.58)
-		"Apple":
-			return Color(0.78, 0.15, 0.1)
-		"Apple Seed":
-			return Color(0.45, 0.2, 0.1)
 		"Coconut":
-			return Color(0.42, 0.3, 0.16)
-		"Potato":
-			return Color(0.75, 0.6, 0.4)
+			return Color(0.43, 0.27, 0.14)
 		"Banana":
-			return Color(0.85, 0.78, 0.25)
+			return Color(0.96, 0.78, 0.22)
+		"Fish":
+			return Color(0.45, 0.72, 0.82)
+		"Spear":
+			return Color(0.72, 0.74, 0.76)
+		"Fishing Rod":
+			return Color(0.64, 0.46, 0.25)
+		"Sail Kit":
+			return Color(0.84, 0.76, 0.58)
+		"Motor Kit":
+			return Color(0.42, 0.48, 0.5)
+		"Life Vest":
+			return Color(0.97, 0.42, 0.16)
 	return Color(0.8, 0.8, 0.8)
 
 
@@ -252,25 +258,40 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 				center + Vector2(-r * 0.4, r * 0.45),
 			])
 			c.draw_colored_polygon(pts2, col)
-		"Apple":
-			# round fruit + stem + leaf
-			_circle(c, center + Vector2(0, r * 0.08), r * 0.48, col)
-			_circle(c, center + Vector2(-r * 0.15, -r * 0.08), r * 0.1, Color(1.0, 0.5, 0.45), true)
-			_line(c, center + Vector2(0, -r * 0.38), center + Vector2(r * 0.08, -r * 0.62), r * 0.07, Color(0.35, 0.25, 0.12))
-			c.draw_circle(center + Vector2(r * 0.22, -r * 0.58), r * 0.14, Color(0.25, 0.55, 0.2))
-		"Apple Seed":
-			# small dark pip
-			var pts3 := PackedVector2Array([
-				center + Vector2(0, -r * 0.4),
-				center + Vector2(r * 0.22, 0),
-				center + Vector2(0, r * 0.4),
-				center + Vector2(-r * 0.22, 0),
-			])
-			c.draw_colored_polygon(pts3, col)
 		"Coconut":
-			_circle(c, center, r * 0.45, col)
-			_circle(c, center + Vector2(-r * 0.12, -r * 0.12), r * 0.07, Color(0.2, 0.13, 0.07), true)
-			_circle(c, center + Vector2(r * 0.1, -r * 0.16), r * 0.07, Color(0.2, 0.13, 0.07), true)
+			_circle(c, center, r * 0.48, col)
+			_circle(c, center + Vector2(-r * 0.12, -r * 0.12), r * 0.08, Color(0.83, 0.68, 0.45))
+		"Banana":
+			c.draw_arc(center + Vector2(0, -r * 0.05), r * 0.48, -0.85, 2.4, 22, col, r * 0.24, true)
+			_line(c, center + Vector2(-r * 0.39, -r * 0.32), center + Vector2(-r * 0.5, -r * 0.48), 1.8, Color(0.35, 0.25, 0.12))
+		"Fish":
+			var fish_body := PackedVector2Array([
+				center + Vector2(-r * 0.55, 0), center + Vector2(-r * 0.2, -r * 0.36),
+				center + Vector2(r * 0.34, -r * 0.28), center + Vector2(r * 0.54, 0),
+				center + Vector2(r * 0.34, r * 0.28), center + Vector2(-r * 0.2, r * 0.36),
+			])
+			c.draw_colored_polygon(fish_body, col)
+			var tail := PackedVector2Array([center + Vector2(r * 0.42, 0), center + Vector2(r * 0.72, -r * 0.28), center + Vector2(r * 0.72, r * 0.28)])
+			c.draw_colored_polygon(tail, col.lightened(0.12))
+			_circle(c, center + Vector2(-r * 0.28, -r * 0.08), r * 0.055, Color(0.05, 0.08, 0.1))
+		"Spear":
+			_line(c, center + Vector2(-r * 0.55, r * 0.55), center + Vector2(r * 0.45, -r * 0.45), maxf(r * 0.12, 1.5), col)
+			var spear_tip := PackedVector2Array([center + Vector2(r * 0.72, -r * 0.72), center + Vector2(r * 0.1, -r * 0.48), center + Vector2(r * 0.48, -r * 0.1)])
+			c.draw_colored_polygon(spear_tip, Color(0.82, 0.86, 0.88))
+		"Fishing Rod":
+			_line(c, center + Vector2(-r * 0.5, r * 0.5), center + Vector2(r * 0.36, -r * 0.55), maxf(r * 0.1, 1.5), col)
+			c.draw_arc(center + Vector2(r * 0.4, -r * 0.48), r * 0.2, -0.8, 1.7, 10, Color(0.82, 0.88, 0.9), maxf(r * 0.06, 1.0), true)
+		"Sail Kit":
+			_line(c, center + Vector2(-r * 0.45, r * 0.55), center + Vector2(-r * 0.45, -r * 0.6), maxf(r * 0.08, 1.2), col)
+			var sail_icon := PackedVector2Array([center + Vector2(-r * 0.35, -r * 0.48), center + Vector2(r * 0.58, r * 0.18), center + Vector2(-r * 0.35, r * 0.18)])
+			c.draw_colored_polygon(sail_icon, col)
+		"Motor Kit":
+			c.draw_rect(Rect2(center.x - r * 0.35, center.y - r * 0.35, r * 0.62, r * 0.62), col)
+			_line(c, center + Vector2(-r * 0.05, r * 0.28), center + Vector2(r * 0.24, r * 0.58), maxf(r * 0.09, 1.4), col)
+		"Life Vest":
+			c.draw_rect(Rect2(center.x - r * 0.48, center.y - r * 0.44, r * 0.36, r * 0.88), col)
+			c.draw_rect(Rect2(center.x + r * 0.12, center.y - r * 0.44, r * 0.36, r * 0.88), col)
+			c.draw_rect(Rect2(center.x - r * 0.12, center.y - r * 0.08, r * 0.24, r * 0.16), Color(0.98, 0.86, 0.62))
 		_:
 			_circle(c, center, r * 0.5, col)
 
@@ -304,14 +325,3 @@ static func backpack(c: CanvasItem, center: Vector2, r: float, col: Color) -> vo
 	c.draw_rect(Rect2(center.x + r * 0.14, center.y - r * 0.3, r * 0.16, r * 0.62), Color(0.9, 0.85, 0.7))
 	# pocket
 	c.draw_rect(Rect2(center.x - r * 0.2, center.y - r * 0.1, r * 0.4, r * 0.36), Color(0.85, 0.7, 0.45))
-
-
-# Camera toggle icon (rectangle body + circle lens).
-static func camera(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) -> void:
-	# Camera body
-	c.draw_rect(Rect2(center.x - r * 0.55, center.y - r * 0.3, r * 1.1, r * 0.7), col)
-	# Viewfinder bump on top
-	c.draw_rect(Rect2(center.x - r * 0.15, center.y - r * 0.45, r * 0.3, r * 0.2), col)
-	# Lens circle
-	_circle(c, center + Vector2(0, r * 0.05), r * 0.28, Color(0.06, 0.08, 0.11, 0.9))
-	_circle(c, center + Vector2(0, r * 0.05), r * 0.18, col, false, w * 0.8)

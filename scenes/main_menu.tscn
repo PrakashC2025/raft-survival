@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://bmainmenu0raft"]
+[gd_scene load_steps=2 format=3]
 
-[ext_resource type="Script" uid="uid://8fu31fhyp1mj" path="res://scripts/main_menu.gd" id="1_mm"]
+[ext_resource type="Script" path="res://scripts/main_menu.gd" id="1_main_menu"]
 
 [node name="MainMenu" type="Control"]
 layout_mode = 3
@@ -9,4 +9,4 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-script = ExtResource("1_mm")
+script = ExtResource("1_main_menu")

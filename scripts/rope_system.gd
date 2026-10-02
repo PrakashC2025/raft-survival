@@ -542,9 +542,19 @@ func _release_debris() -> void:
 
 func _collect_one(d: RigidBody3D) -> void:
 	var item_name: String = str(d.get("item_name"))
-	if item_name != "" and item_name != "null":
-		d.set("collected", true)
-		Inventory.add(item_name)
+	if item_name.is_empty() or item_name == "null":
+		d.set("is_hooked", false)
+		d.freeze = false
+		return
+	if Inventory.add(item_name, 1) > 0:
+		# Capacity can change while the rope reels in. Release the catch back to
+		# the ocean instead of deleting it when the last slot has filled up.
+		d.set("is_hooked", false)
+		d.freeze = false
+		d.linear_velocity = Vector3.ZERO
+		d.angular_velocity = Vector3.ZERO
+		return
+	d.set("collected", true)
 	d.queue_free()
 	_collected = true
 

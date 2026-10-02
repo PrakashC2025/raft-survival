@@ -36,15 +36,6 @@ const float L1_S = 0.45;
 const float L2_S = 0.7;
 const float L3_S = 1.05;
 const float L4_S = 1.45;
-// CROSS-SWELL — synced with main.gdshader L5/L6 (realistic wave mixing).
-const vec2 L5_DIR = vec2(0.33, 0.94);
-const vec2 L6_DIR = vec2(-0.95, 0.05);
-const float L5_F = 0.163;
-const float L6_F = 0.317;
-const float L5_A = 0.27;
-const float L6_A = 0.16;
-const float L5_S = 0.87;
-const float L6_S = 1.23;
 
 void vertex() {
 	f_wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -59,9 +50,7 @@ void fragment() {
 	float h = L1_A * sin(dot(L1_DIR, p) * L1_F + t * L1_S)
 		+ L2_A * sin(dot(L2_DIR, p) * L2_F + t * L2_S)
 		+ L3_A * sin(dot(L3_DIR, p) * L3_F + t * L3_S)
-		+ L4_A * sin(dot(L4_DIR, p) * L4_F + t * L4_S)
-		+ L5_A * sin(dot(L5_DIR, p) * L5_F + t * L5_S)
-		+ L6_A * sin(dot(L6_DIR, p) * L6_F + t * L6_S);
+		+ L4_A * sin(dot(L4_DIR, p) * L4_F + t * L4_S);
 	float water_y = h * wave_height * 0.33;
 
 	// How far the wave surface is from the hull-bottom contact line:

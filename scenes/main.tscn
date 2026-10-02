@@ -21,11 +21,18 @@
 [ext_resource type="Script" uid="uid://cjmkcj8hwm7ts" path="res://addons/sky_3d/src/TimeOfDay.gd" id="18_a6jrf"]
 [ext_resource type="Script" uid="uid://dpfwvnwwsrja4" path="res://scripts/mobile_controls.gd" id="19_mobile"]
 [ext_resource type="Script" uid="uid://c5t6sybbgxaqh" path="res://scripts/survival_hud.gd" id="20_hud"]
-[ext_resource type="Script" uid="uid://sr71uwq1l7vi" path="res://scripts/island_generator.gd" id="21_island"]
+[ext_resource type="PackedScene" uid="uid://c1y6s375pbu01" path="res://models/sand_raftsurvival.glb" id="21_island"]
+[ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_tall.glb" id="22_palm"]
+[ext_resource type="Script" uid="uid://diowgnrc2v4dy" path="res://scripts/island_setup.gd" id="23_islandsetup"]
 [ext_resource type="Script" uid="uid://prn6nkf22jbc" path="res://scripts/island_grass.gd" id="24_islandgrass"]
 [ext_resource type="Script" uid="uid://cdfw5dgx18uri" path="res://scripts/island_beacon.gd" id="25_beacon"]
 [ext_resource type="Script" uid="uid://bak02doledtl7" path="res://scripts/island_marker.gd" id="26_marker"]
-[ext_resource type="Script" uid="uid://s2g017p0uuqu" path="res://scripts/footprints.gd" id="27_footprints"]
+[ext_resource type="Script" path="res://scripts/mobile_performance.gd" id="27_performance"]
+[ext_resource type="PackedScene" path="res://models/beach_survivor.glb" id="28_survivor"]
+[ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_short.glb" id="29_palm_short"]
+[ext_resource type="Script" path="res://scripts/ocean_ambience.gd" id="30_ocean_audio"]
+[ext_resource type="PackedScene" path="res://scenes/destination_island.tscn" id="31_destination"]
+[ext_resource type="Script" path="res://scripts/shark_spawner.gd" id="32_sharks"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
 render_priority = 0
@@ -46,23 +53,14 @@ shader_parameter/moon_dir = Vector3(0, -0.5, -0.8)
 shader_parameter/sun_glint_color = Vector3(1, 0.95, 0.85)
 shader_parameter/moon_glint_color = Vector3(0.72, 0.82, 1)
 shader_parameter/sparkle_strength = 1.0
-shader_parameter/rain_strength = 0.0
 shader_parameter/wave_height = 0.38
 shader_parameter/wave_speed = 0.45
-shader_parameter/island_center = Vector2(0, 0)
-shader_parameter/shore_radius = 32.0
-shader_parameter/outer_radius = 68.0
-shader_parameter/deep_depth = 12.0
-shader_parameter/beach_height = 2.6
-shader_parameter/island_active = 0.0
-shader_parameter/foam_rocks = PackedVector2Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-shader_parameter/foam_rock_count = 0
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_ybjjv"]
 material = SubResource("ShaderMaterial_0gc0m")
-size = Vector2(500, 500)
-subdivide_width = 256
-subdivide_depth = 256
+size = Vector2(1000, 1000)
+subdivide_width = 160
+subdivide_depth = 160
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_ybjjv"]
 radius = 0.3
@@ -105,12 +103,12 @@ shader_parameter/atm_darkness = 0.5
 shader_parameter/atm_sun_intensity = 18.0
 shader_parameter/atm_day_tint = Color(0.807843, 0.909804, 1, 1)
 shader_parameter/atm_horizon_light_tint = Color(0.980392, 0.635294, 0.462745, 1)
-shader_parameter/atm_night_tint = Color(0, 0, 0, 0)
+shader_parameter/atm_night_tint = Color(0.26, 0.31, 0.45, 1)
 shader_parameter/atm_level_params = Vector3(1, 0, 0)
 shader_parameter/atm_thickness = 0.7
 shader_parameter/atm_beta_ray = Vector3(5.804544e-06, 1.3562913e-05, 3.311258e-05)
 shader_parameter/atm_beta_mie = Vector3(3.038e-08, 3.038e-08, 3.038e-08)
-shader_parameter/sun_light_color = Color(1, 0.91, 0.75, 1)
+shader_parameter/sun_light_color = Color(1, 0.55, 0.3, 1)
 shader_parameter/sun_disk_color = Color(0.996094, 0.541334, 0.140076, 1)
 shader_parameter/sun_disk_intensity = 30.0
 shader_parameter/sun_disk_size = 0.02
@@ -126,7 +124,7 @@ shader_parameter/moon_texture_flip_u = false
 shader_parameter/moon_texture_flip_v = false
 shader_parameter/moon_size = 0.11
 shader_parameter/atm_moon_mie_tint = Color(0.137255, 0.184314, 0.292196, 1)
-shader_parameter/atm_moon_mie_intensity = 0.0
+shader_parameter/atm_moon_mie_intensity = 2.0
 shader_parameter/atm_moon_partial_mie_phase = Vector3(0.36, 1.64, 1.6)
 shader_parameter/starmap_color = Color(0.709804, 0.709804, 0.709804, 0.854902)
 shader_parameter/starmap_texture = ExtResource("15_1u8w0")
@@ -150,8 +148,8 @@ shader_parameter/cirrus_absorption = 2.0
 shader_parameter/cirrus_sky_tint_fade = 0.5
 shader_parameter/cirrus_size = 1.0
 shader_parameter/cirrus_uv = Vector2(0.16, 0.11)
-shader_parameter/cirrus_position1 = Vector2(0.04896306, 0.04896306)
-shader_parameter/cirrus_position2 = Vector2(0.04896306, 0.04896306)
+shader_parameter/cirrus_position1 = Vector2(0.12417617, 0.12417617)
+shader_parameter/cirrus_position2 = Vector2(0.12417617, 0.12417617)
 shader_parameter/cirrus_texture = ExtResource("10_cegan")
 shader_parameter/cumulus_visible = true
 shader_parameter/cumulus_intensity = 0.6
@@ -161,7 +159,7 @@ shader_parameter/cumulus_absorption = 2.0
 shader_parameter/cumulus_noise_freq = 2.7
 shader_parameter/cumulus_sky_tint_fade = 0.0
 shader_parameter/cumulus_size = 0.5
-shader_parameter/cumulus_position = Vector2(25.313116, 25.313116)
+shader_parameter/cumulus_position = Vector2(0.6208027, 0.6208027)
 shader_parameter/cumulus_texture = ExtResource("11_82xsv")
 shader_parameter/cumulus_partial_mie_phase = Vector3(0.957564, 1.042436, 0.412)
 shader_parameter/cumulus_mie_intensity = 1.0
@@ -171,7 +169,7 @@ shader_parameter/azimuthal_grid_rotation_offset = 0.03
 shader_parameter/show_equatorial_grid = false
 shader_parameter/equatorial_grid_color = Color(0, 0.75, 1, 1)
 shader_parameter/equatorial_grid_rotation_offset = 0.03
-shader_parameter/moon_matrix = Basis(0.9999812, 0.0059060394, -0.0016935294, 0.001570794, 0.020724429, 0.9997841, 0.005939861, -0.9997679, 0.020714764)
+shader_parameter/moon_matrix = Basis(-0.9987981, -0.047117278, 0.013510663, 0.00529071, 0.1703948, 0.9853618, -0.048729707, 0.98424876, -0.16994071)
 
 [sub_resource type="Sky" id="Sky_qsp4k"]
 sky_material = SubResource("ShaderMaterial_xuqvo")
@@ -180,13 +178,12 @@ sky_material = SubResource("ShaderMaterial_xuqvo")
 background_mode = 2
 sky = SubResource("Sky_qsp4k")
 ambient_light_source = 3
-ambient_light_color = Color(1, 0.96, 0.89, 1)
-ambient_light_energy = 0.32
+ambient_light_color = Color(0.26, 0.31, 0.45, 1)
+ambient_light_sky_contribution = 0.7
+ambient_light_energy = 1.3
 reflected_light_source = 2
 tonemap_mode = 3
 tonemap_white = 6.0
-adjustment_enabled = true
-adjustment_color_saturation = 1.3
 
 [sub_resource type="CameraAttributesPractical" id="CameraAttributesPractical_seu75"]
 
@@ -213,32 +210,41 @@ shape = SubResource("CapsuleShape3D_ybjjv")
 [node name="Body" type="Node3D" parent="Player" unique_id=556785338]
 transform = Transform3D(1.1, 0, 0, 0, 1.1, 0, 0, 0, 1.1, 0, -0.042, 0)
 
+[node name="BeachSurvivor" parent="Player/Body" instance=ExtResource("28_survivor")]
+transform = Transform3D(0.9, 0, 0, 0, 0.9, 0, 0, 0, 0.9, 0, -0.84, 0)
+
 [node name="LegL" type="MeshInstance3D" parent="Player/Body" unique_id=1732520519]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, -0.48, 0)
 mesh = SubResource("BoxMesh_human_leg")
 surface_material_override/0 = SubResource("StandardMaterial3D_pants")
 
 [node name="LegR" type="MeshInstance3D" parent="Player/Body" unique_id=1276908548]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, -0.48, 0)
 mesh = SubResource("BoxMesh_human_leg")
 surface_material_override/0 = SubResource("StandardMaterial3D_pants")
 
 [node name="Torso" type="MeshInstance3D" parent="Player/Body" unique_id=1269243988]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.13, 0)
 mesh = SubResource("BoxMesh_human_torso")
 surface_material_override/0 = SubResource("StandardMaterial3D_shirt")
 
 [node name="ArmL" type="MeshInstance3D" parent="Player/Body" unique_id=834379482]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.28, 0.16, 0)
 mesh = SubResource("BoxMesh_human_arm")
 surface_material_override/0 = SubResource("StandardMaterial3D_shirt")
 
 [node name="ArmR" type="MeshInstance3D" parent="Player/Body" unique_id=1517470357]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.28, 0.16, 0)
 mesh = SubResource("BoxMesh_human_arm")
 surface_material_override/0 = SubResource("StandardMaterial3D_shirt")
 
 [node name="Head" type="MeshInstance3D" parent="Player/Body" unique_id=2127867931]
+visible = false
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.57, 0)
 mesh = SubResource("BoxMesh_human_head")
 surface_material_override/0 = SubResource("StandardMaterial3D_skin")
@@ -273,9 +279,6 @@ script = ExtResource("6_getpj")
 min_interval_minutes = 4.0
 max_interval_minutes = 8.0
 
-[node name="Footprints" type="MultiMeshInstance3D" parent="Player" unique_id=1653991523]
-script = ExtResource("27_footprints")
-
 [node name="CanvasLayer" type="CanvasLayer" parent="Player" unique_id=111111111]
 
 [node name="Crosshair" type="Control" parent="Player/CanvasLayer" unique_id=123456789]
@@ -309,71 +312,103 @@ script = ExtResource("26_marker")
 script = ExtResource("5_lquwl")
 debris_scene = ExtResource("6_7mycd")
 
-[node name="Island" type="Node3D" parent="." unique_id=837748087]
+[node name="Island" type="Node3D" parent="." unique_id=1580141119]
 unique_name_in_owner = true
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 60, 0, 40)
-script = ExtResource("21_island")
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 107.33414, -0.9068012, -91.8569)
 
-[node name="IslandBeacon" type="Node3D" parent="Island" unique_id=2112765479]
+[node name="IslandTerrain" parent="Island" instance=ExtResource("21_island")]
+
+[node name="IslandBeacon" type="Node3D" parent="Island" unique_id=1667252892]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.2, 0)
 script = ExtResource("25_beacon")
 
-[node name="IslandGrass" type="Node3D" parent="Island" unique_id=594355574]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 10, 0)
+[node name="PalmTree" parent="Island" unique_id=852400309 instance=ExtResource("22_palm")]
+transform = Transform3D(0.965926, 0, 0.258819, 0, 1, 0, -0.258819, 0, 0.965926, -3.5, 1.8, -3)
+scale = Vector3(2.2, 2.2, 2.2)
+
+[node name="PalmTree2" parent="Island" unique_id=1802697924 instance=ExtResource("29_palm_short")]
+transform = Transform3D(0.766044, 0, 0.642788, 0, 1, 0, -0.642788, 0, 0.766044, 2.5, 2, -4.5)
+scale = Vector3(2.5, 2.5, 2.5)
+
+[node name="PalmTree3" parent="Island" unique_id=150675457 instance=ExtResource("22_palm")]
+transform = Transform3D(0.5, 0, 0.866025, 0, 1, 0, -0.866025, 0, 0.5, 4.5, 1.2, 1)
+scale = Vector3(2.0, 2.0, 2.0)
+
+[node name="IslandGrass" type="Node3D" parent="Island" unique_id=555555555]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 0)
 script = ExtResource("24_islandgrass")
-instance_count = 9000
-scatter_radius = 48.0
-max_height_above_water = 14.0
-cast_shadows = false
-visibility_distance = 140.0
+instance_count = 4500
+scatter_radius = 13.0
+
+[node name="IslandSetup" type="Node3D" parent="." unique_id=444444444]
+script = ExtResource("23_islandsetup")
+
+[node name="ReefIsle" parent="." instance=ExtResource("31_destination")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -155, -0.9, 110)
+map_label = "Reef Isle"
+beacon_color = Color(0.32, 0.82, 1, 1)
+pickup_seed = 24117
+
+[node name="DriftwoodCay" parent="." instance=ExtResource("31_destination")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -225, -0.9, -190)
+map_label = "Driftwood Cay"
+beacon_color = Color(1, 0.62, 0.27, 1)
+pickup_seed = 51293
+
+[node name="FarCove" parent="." instance=ExtResource("31_destination")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 305, -0.9, 235)
+map_label = "Far Cove"
+beacon_color = Color(0.62, 0.5, 1, 1)
+pickup_seed = 88402
+
+[node name="SharkSpawner" type="Node3D" parent="."]
+script = ExtResource("32_sharks")
+shark_count = 3
+patrol_radius = 32.0
 
 [node name="Sky3D" type="WorldEnvironment" parent="." unique_id=9361917]
 environment = SubResource("Environment_kq58d")
 camera_attributes = SubResource("CameraAttributesPractical_seu75")
 script = ExtResource("16_0odxb")
 fog_enabled = false
-current_time = 11.882319999983087
-sun_energy = 1.4
-ambient_energy = 0.32
-moon_energy = 1.8
+current_time = 0.47885333329713153
+sun_energy = 1.6
+ambient_energy = 1.3
+moon_energy = 2.4
 wind_direction = 2.35619451204804
 metadata/_custom_type_script = "uid://deo0gxkmk2ahd"
 
 [node name="SunLight" type="DirectionalLight3D" parent="Sky3D" unique_id=1710928885]
-transform = Transform3D(-0.96126163, 0.2755733, -0.0059398906, 0, 0.021549657, 0.9997678, 0.27563733, 0.9610384, -0.02071486, -0.0059398906, 0.9997678, -0.02071486)
-light_color = Color(1, 0.91, 0.75, 1)
-light_energy = 1.4
-shadow_enabled = true
-shadow_blur = 1.6
-directional_shadow_blend_splits = true
-directional_shadow_max_distance = 90.0
+transform = Transform3D(0.9612617, 0.27129573, 0.04872971, 0, 0.17678921, -0.98424876, -0.27563736, 0.9461206, 0.1699407, 0.04872971, -0.98424876, 0.1699407)
+light_color = Color(1, 0.55, 0.3, 1)
+light_energy = 0.0
+directional_shadow_max_distance = 150.0
 
 [node name="MoonLight" type="DirectionalLight3D" parent="Sky3D" unique_id=1883530152]
-transform = Transform3D(0, -0.99998236, 0.00593986, 0.020715123, -0.0059385854, -0.9997678, 0.9997854, 0.00012304493, 0.020714758, 0.00593986, -0.9997678, 0.020714758)
+transform = Transform3D(0, -0.998812, -0.0487297, -0.17014281, -0.04801919, 0.98424876, -0.9854194, 0.008291008, -0.1699407, -0.0487297, 0.98424876, -0.1699407)
 light_color = Color(0.75, 0.86, 1, 1)
-light_energy = 0.0
-shadow_blur = 1.6
-directional_shadow_blend_splits = true
-directional_shadow_max_distance = 90.0
+light_energy = 2.362197
+shadow_enabled = true
+directional_shadow_max_distance = 150.0
 
 [node name="FillLight" type="DirectionalLight3D" parent="Sky3D" unique_id=1883530153]
 transform = Transform3D(1, 0, 0, 0, 0.2588191, -0.9659258, 0, 0.9659258, 0.2588191, 0, 10, 0)
 light_color = Color(0.68, 0.78, 0.95, 1)
-light_energy = 0.08
+light_energy = 0.42
 
 [node name="SkyDome" type="Node" parent="Sky3D" unique_id=2052497160]
 script = ExtResource("17_lswn8")
 ground_color = Color(0.04, 0.07, 0.12, 1)
 sun_azimuth = 0.27925268
-sun_altitude = -0.021551326
-sun_light_color = Color(1, 0.91, 0.75, 1)
+sun_altitude = 2.9638693
+sun_light_color = Color(1, 0.96, 0.89, 1)
 sun_horizon_light_color = Color(1, 0.55, 0.3, 1)
-sun_light_energy = 1.4
+sun_light_energy = 1.6
 moon_azimuth = 3.4208453
-moon_altitude = 3.1631439
+moon_altitude = 0.17772332
 moon_size = 0.11
 moon_light_color = Color(0.75, 0.86, 1, 1)
-moon_light_energy = 1.8
+moon_light_energy = 2.4
 atm_night_tint = Color(0.26, 0.31, 0.45, 1)
 atm_moon_mie_intensity = 2.0
 fog_visible = false
@@ -383,6 +418,12 @@ wind_direction = 2.35619451204804
 [node name="TimeOfDay" type="Node" parent="Sky3D" unique_id=1075981311]
 script = ExtResource("18_a6jrf")
 dome_path = NodePath("../SkyDome")
-current_time = 11.882319999983087
-month = 3
+current_time = 0.47885333329713153
+day = 5
 celestials_calculations = 0
+
+[node name="MobilePerformance" type="Node" parent="."]
+script = ExtResource("27_performance")
+
+[node name="OceanAmbience" type="AudioStreamPlayer" parent="."]
+script = ExtResource("30_ocean_audio")

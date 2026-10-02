@@ -28,6 +28,9 @@ var items := {"Wood": 0, "Rope": 0, "Plastic": 0, "Barrel": 0, "Stone": 0, "Meta
 ## Meta loaded by load_game() (active hotbar slot, day time, ...) so the game
 ## scene can restore state after a Continue — the menu applies it.
 var loaded_meta: Dictionary = {}
+## One-time island pickups are stored separately from inventory so a Continue
+## cannot respawn the same resource pile every time the world is reloaded.
+var collected_island_pickups: Dictionary = {}
 
 # Test/debug toggle. When true, crafting never consumes resources (handy for
 # trying out the building system). Flip it with the debug key in Player.
@@ -46,6 +49,16 @@ const RECIPES := {
 	"PlanterPot":      {"Wood": 4},
 	"PlanterBox":      {"Wood": 6},
 	"TreePot":         {"Wood": 8, "Rope": 1},
+}
+
+## Portable survival and raft equipment. These recipes produce an inventory
+## item; building recipes above are paid when their structure is placed.
+const ITEM_RECIPES := {
+	"Fishing Rod": {"Wood": 3, "Rope": 2, "Plastic": 1},
+	"Spear": {"Wood": 3, "Stone": 2, "Rope": 1},
+	"Sail Kit": {"Wood": 8, "Rope": 4, "Plastic": 2},
+	"Motor Kit": {"Wood": 10, "Rope": 2, "Plastic": 5, "Metal": 4},
+	"Life Vest": {"Plastic": 5, "Rope": 2},
 }
 
 
@@ -235,6 +248,17 @@ func has(item: String, amount: int) -> bool:
 	return total(item) >= amount
 
 
+func has_collected_island_pickup(pickup_id: String) -> bool:
+	return pickup_id != "" and bool(collected_island_pickups.get(pickup_id, false))
+
+
+func mark_island_pickup_collected(pickup_id: String) -> void:
+	if pickup_id.is_empty() or has_collected_island_pickup(pickup_id):
+		return
+	collected_island_pickups[pickup_id] = true
+	emit_signal("changed")
+
+
 func can_afford(recipe: String) -> bool:
 	if infinite:
 		return true
@@ -249,9 +273,7 @@ func can_afford(recipe: String) -> bool:
 func craft(recipe: String) -> bool:
 	if not RECIPES.has(recipe):
 		return false
-	# Re-check affordability here too, not just in the caller — craft() must
-	# never be the thing that lets an item count go negative, even if some
-	# future caller forgets to check can_afford() first.
+	# Re-check affordability here too — placement must never spend below zero.
 	if not can_afford(recipe):
 		return false
 	if infinite:
@@ -259,6 +281,128 @@ func craft(recipe: String) -> bool:
 	for item in RECIPES[recipe]:
 		remove(item, RECIPES[recipe][item])
 	return true
+
+
+func can_afford_item(item_name: String) -> bool:
+	if not ITEM_RECIPES.has(item_name):
+		return false
+	if infinite:
+		return true
+	for item in ITEM_RECIPES[item_name]:
+		if total(item) < int(ITEM_RECIPES[item_name][item]):
+			return false
+	return true
+
+
+func can_store(item_name: String, amount: int = 1) -> bool:
+	_ensure_slots()
+	var simulated := slots.duplicate(true)
+	return _simulate_add(simulated, item_name, amount) == 0
+
+
+## Tests whether the result fits after its recipe ingredients are consumed. This
+## lets a full inventory craft a tool when the recipe itself frees a slot.
+func can_store_craft_result(item_name: String) -> bool:
+	if not ITEM_RECIPES.has(item_name):
+		return false
+	_ensure_slots()
+	var simulated := slots.duplicate(true)
+	if not infinite:
+		for ingredient in ITEM_RECIPES[item_name]:
+			var missing := _simulate_remove(simulated, str(ingredient), int(ITEM_RECIPES[item_name][ingredient]))
+			if missing > 0:
+				return false
+	return _simulate_add(simulated, item_name, 1) == 0
+
+
+func can_craft_item(item_name: String) -> bool:
+	return ITEM_RECIPES.has(item_name) and can_afford_item(item_name) \
+			and can_store_craft_result(item_name)
+
+
+## Tests several rewards together without mutating the live inventory.
+func can_store_rewards(rewards: Dictionary) -> bool:
+	_ensure_slots()
+	var simulated := slots.duplicate(true)
+	for item_name in rewards:
+		if _simulate_add(simulated, str(item_name), maxi(0, int(rewards[item_name]))) > 0:
+			return false
+	return true
+
+
+func _simulate_add(simulated: Array, item_name: String, amount: int) -> int:
+	var remaining := maxi(0, amount)
+	remaining = _simulate_fill_partial(simulated, item_name, remaining, BAG_START, SLOT_COUNT - 1)
+	remaining = _simulate_fill_partial(simulated, item_name, remaining, 0, BAG_START - 1)
+	remaining = _simulate_fill_empty(simulated, item_name, remaining, BAG_START, SLOT_COUNT - 1)
+	remaining = _simulate_fill_empty(simulated, item_name, remaining, 0, BAG_START - 1)
+	return remaining
+
+
+func _simulate_fill_partial(simulated: Array, item_name: String, amount: int,
+		from_slot: int, to_slot: int) -> int:
+	var remaining := amount
+	for i in range(from_slot, to_slot + 1):
+		if remaining <= 0:
+			break
+		var entry: Dictionary = simulated[i]
+		if entry.is_empty() or str(entry.get("item", "")) != item_name:
+			continue
+		var room := MAX_STACK - int(entry.get("count", 0))
+		if room <= 0:
+			continue
+		var take := mini(remaining, room)
+		entry["count"] = int(entry.get("count", 0)) + take
+		simulated[i] = entry
+		remaining -= take
+	return remaining
+
+
+func _simulate_fill_empty(simulated: Array, item_name: String, amount: int,
+		from_slot: int, to_slot: int) -> int:
+	var remaining := amount
+	for i in range(from_slot, to_slot + 1):
+		if remaining <= 0:
+			break
+		var entry: Dictionary = simulated[i]
+		if not entry.is_empty():
+			continue
+		var take := mini(remaining, MAX_STACK)
+		simulated[i] = {"item": item_name, "count": take}
+		remaining -= take
+	return remaining
+
+
+func _simulate_remove(simulated: Array, item_name: String, amount: int) -> int:
+	var remaining := maxi(0, amount)
+	for i in range(simulated.size() - 1, -1, -1):
+		if remaining <= 0:
+			break
+		var entry: Dictionary = simulated[i]
+		if entry.is_empty() or str(entry.get("item", "")) != item_name:
+			continue
+		var take := mini(remaining, int(entry.get("count", 0)))
+		var left := int(entry.get("count", 0)) - take
+		if left <= 0:
+			simulated[i] = {}
+		else:
+			entry["count"] = left
+			simulated[i] = entry
+		remaining -= take
+	return remaining
+
+
+func craft_item(item_name: String) -> bool:
+	if not ITEM_RECIPES.has(item_name) or not can_afford_item(item_name):
+		return false
+	# Never consume ingredients if the finished tool would be lost to a full bag.
+	if not can_store_craft_result(item_name):
+		emit_signal("bag_full", 1)
+		return false
+	if not infinite:
+		for ingredient in ITEM_RECIPES[item_name]:
+			remove(str(ingredient), int(ITEM_RECIPES[item_name][ingredient]))
+	return add(item_name, 1) == 0
 
 
 func _recompute() -> void:
@@ -299,6 +443,7 @@ func save_game(extra: Dictionary = {}, slot: String = "main") -> void:
 		"version": SAVE_VERSION,
 		"slots": slot_data,
 		"saved_at": Time.get_unix_time_from_system(),
+		"collected_island_pickups": collected_island_pickups.keys(),
 	}
 	for k in extra:
 		data[str(k)] = extra[k]
@@ -330,6 +475,7 @@ func save_info(slot: String = "main") -> Dictionary:
 ## returns the meta it carried. Returns {} when there is no save.
 func load_game(slot: String = "main") -> Dictionary:
 	loaded_meta = {}
+	collected_island_pickups.clear()
 	if not has_save(slot):
 		return {}
 	var f := FileAccess.open(_save_path_for(slot), FileAccess.READ)
@@ -340,6 +486,14 @@ func load_game(slot: String = "main") -> Dictionary:
 	if not (parsed is Dictionary):
 		return {}
 	var data: Dictionary = parsed
+	var saved_pickups: Variant = data.get("collected_island_pickups", [])
+	if saved_pickups is Array:
+		for pickup_id in saved_pickups:
+			collected_island_pickups[str(pickup_id)] = true
+	elif saved_pickups is Dictionary:
+		for pickup_id in saved_pickups:
+			if bool(saved_pickups[pickup_id]):
+				collected_island_pickups[str(pickup_id)] = true
 	_ensure_slots()
 	for i in range(slots.size()):
 		slots[i] = {}
@@ -352,6 +506,7 @@ func load_game(slot: String = "main") -> Dictionary:
 	loaded_meta.erase("version")
 	loaded_meta.erase("slots")
 	loaded_meta.erase("saved_at")
+	loaded_meta.erase("collected_island_pickups")
 	_recompute()
 	emit_signal("changed")
 	return loaded_meta
@@ -364,48 +519,9 @@ func new_game_reset() -> void:
 	for i in range(slots.size()):
 		slots[i] = {}
 	loaded_meta = {}
+	collected_island_pickups.clear()
 	_recompute()
 	emit_signal("changed")
 	for slot in [SAVE_PATH, QUICK_SAVE_PATH]:
 		if FileAccess.file_exists(slot):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(slot))
-
-## Transactional crafting: simulate first so a full bag never destroys inputs.
-func try_exchange(costs: Dictionary, rewards: Dictionary) -> bool:
-	_ensure_slots()
-	for item: String in costs:
-		if int(costs[item]) <= 0 or not has(item, int(costs[item])):
-			return false
-	var next: Array = slots.duplicate(true)
-	for item: String in costs:
-		var left: int = int(costs[item])
-		for i in range(SLOT_COUNT - 1, -1, -1):
-			if str(next[i].get("item", "")) != item:
-				continue
-			var take: int = mini(left, int(next[i].get("count", 0)))
-			next[i]["count"] -= take
-			left -= take
-			if next[i]["count"] <= 0:
-				next[i] = {}
-	for item: String in rewards:
-		var left: int = int(rewards[item])
-		if left <= 0:
-			return false
-		for pass_index in range(2):
-			for i in range(SLOT_COUNT):
-				if left == 0:
-					break
-				if pass_index == 0 and str(next[i].get("item", "")) == item:
-					var take: int = mini(left, MAX_STACK - int(next[i]["count"]))
-					next[i]["count"] += take
-					left -= take
-				elif pass_index == 1 and next[i].is_empty():
-					var take: int = mini(left, MAX_STACK)
-					next[i] = {"item": item, "count": take}
-					left -= take
-		if left > 0:
-			return false
-	slots = next
-	_recompute()
-	changed.emit()
-	return true

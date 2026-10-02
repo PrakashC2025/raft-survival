@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://hsvprobe0132"]
-
-[ext_resource type="Script" path="res://tools/hsv_probe.gd" id="1_hsvp"]
-
-[node name="HsvProbe" type="Node"]
-script = ExtResource("1_hsvp")

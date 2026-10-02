@@ -29,8 +29,8 @@ class_name Ocean
 @export var haze_color := Color(0.5, 0.66, 0.82)
 @export var sparkle_strength := 0.35
 
-# Dev-only time keys. F3 is the build overlay, so the debug keys use F5-F9.
-@export var dev_time_keys := true
+# Optional editor-only time shortcuts. F5 is reserved for the player's quick-save.
+@export var dev_time_keys := false
 
 # --- Underwater veil (display-space 2D colors) ---
 @export_range(0.0, 1.2) var under_alpha_max := 0.78
@@ -61,16 +61,24 @@ var _last_moon := 0.0
 var _sun_elev := 1.0
 var _moon_elev := -1.0
 
-const _UNDER_SHADER := "
+const _UNDER_SHADER := """
 shader_type canvas_item;
 uniform vec4 top_col : source_color;
 uniform vec4 bottom_col : source_color;
 void fragment() {
 	COLOR = mix(bottom_col, top_col, UV.y);
 }
-"
+"""
 
 func _ready() -> void:
+	# The broad, slow ocean swells do not need a 160x160 grid on a phone.
+	# Keep enough tessellation for a smooth silhouette while cutting roughly
+	# a third of the per-vertex wave work and triangle count.
+	if (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")) \
+			and mesh is PlaneMesh:
+		var plane := mesh as PlaneMesh
+		plane.subdivide_width = mini(plane.subdivide_width, 128)
+		plane.subdivide_depth = mini(plane.subdivide_depth, 128)
 	# Groups work across scene-file boundaries (unlike %UniqueName), so any
 	# runtime-instanced node (debris, etc.) can always find this node.
 	add_to_group("ocean")
@@ -141,10 +149,6 @@ func _push_factors(night: float, twilight: float, moon_factor: float) -> void:
 	_mat.set_shader_parameter("night_factor", night)
 	_mat.set_shader_parameter("twilight_factor", twilight)
 	_mat.set_shader_parameter("moon_factor", moon_factor)
-	# Storm state for the water: roughens normals, churn speckle, darker body.
-	var rain_node := get_tree().get_first_node_in_group("rain_system")
-	if rain_node != null:
-		_mat.set_shader_parameter("rain_strength", float(rain_node.get("_intensity")))
 	if _sun_light != null and is_instance_valid(_sun_light):
 		_mat.set_shader_parameter("sun_dir", _sun_light.global_transform.origin.normalized())
 		_mat.set_shader_parameter("sun_glint_color", _sun_light.light_color)
@@ -157,15 +161,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
-			KEY_F5:
-				_force_time(12.0)
 			KEY_F6:
-				_force_time(18.6)
+				_force_time(12.0)
 			KEY_F7:
-				_force_time(0.4)
+				_force_time(18.6)
 			KEY_F8:
-				_force_time(6.4)
+				_force_time(0.4)
 			KEY_F9:
+				_force_time(6.4)
+			KEY_F4:
 				_show_debug = not _show_debug
 				_ensure_debug_label()
 				if _label != null:
@@ -258,10 +262,6 @@ const _WAVES := [
 	[Vector2(-0.4, 0.92), 0.115, 0.75, 0.7],
 	[Vector2(0.8, -0.5), 0.24, 0.38, 1.05],
 	[Vector2(-0.75, -0.65), 0.50, 0.13, 1.45],
-	# CROSS-SWELL (keep in sync with main.gdshader L5/L6): scrambles the
-	# 4-harmonic regularity into random-looking real-sea mixing.
-	[Vector2(0.33, 0.94), 0.163, 0.27, 0.87],
-	[Vector2(-0.95, 0.05), 0.317, 0.16, 1.23],
 ]  # [dir, freq, amp, time_speed]
 
 # Organic-field constants. MUST stay identical to main.gdshader's meander and

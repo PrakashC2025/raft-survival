@@ -21,55 +21,16 @@ enum Stage { SEED, SPROUT, GROWING, MATURE, FALLING, STUMP }
 
 const CAT_ROOT := "ROOT"
 const CAT_FRUIT := "FRUIT_TREE"
+const PALM_TALL_SCENE: PackedScene = preload("res://models/kenney_palm_detailed_tall.glb")
+const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
+const BANANA_SCENE: PackedScene = preload("res://models/kenney_banana.glb")
+const CHOP_SOUND: AudioStream = preload("res://audio/chop.ogg")
+const HARVEST_SOUND: AudioStream = preload("res://audio/pickup_rustle.ogg")
+const ITEM_PICKUP_SCENE: PackedScene = preload("res://scenes/food_pickup.tscn")
 # Height fraction reached at the END of each stage (indexed by Stage.SEED..MATURE)
 const STAGE_FRAC := [0.06, 0.22, 0.55, 1.0]
 
-# ---- REAL-MODEL GROWTH (baked once by tools/bake_island_vegetation.gd
-# from the coconut_palm.glb scan). Planted coconut trees grow through the
-# actual scanned model: seed = tiny frond tuft, growing = short trunk +
-# young crown, mature = full palm with NO coconuts baked in — fruits appear
-# only through the ripening slots below. Falls back to the primitive
-# cylinder/sphere tree automatically if the bake files are missing.
-const GROWTH_VARIANTS := {
-	"Coconut": {
-		Stage.SPROUT: "res://grass/baked/coconut_sprout.res",
-		Stage.GROWING: "res://grass/baked/coconut_young.res",
-		Stage.MATURE: "res://grass/baked/coconut_mature.res",
-	},
-	# Apple tree: ONE baked glb mesh; the continuous container-scale growth
-	# makes it read as small tree -> big tree -> full fruiting tree. A 1.25x
-	# mesh scale at every stage (applied via the stage-entry multipliers below)
-	# makes the island's rare tree a proper BIG tree — at the scanned 5.7 m it
-	# read as a sapling next to the 6-7 m palms.
-	"Apple": {
-		Stage.SPROUT: "res://grass/baked/apple_tree.res",
-		Stage.GROWING: "res://grass/baked/apple_tree.res",
-		Stage.MATURE: "res://grass/baked/apple_tree.res",
-	},
-}
-const PALM_FROND_SHADER := "res://shaders/palm_fronds_sway.gdshader"
-## Preloaded (not class_name-resolved) so it works in every boot mode —
-## the global class cache can lag behind newly added scripts.
-const ApplePickupScript := preload("res://scripts/apple_pickup.gd")
-const CoconutPickupScript := preload("res://scripts/coconut_pickup.gd")
-const ISLAND_DAY_SECONDS := 900.0 # Sky3D cycle: 15 real minutes per in-game day
-const PALM_DROP_DELAY := 20.0     # ripe nut hangs this long before letting go (keeps drops rare)
-const PALM_REGROW_DAYS := 2.0     # a slot grows a NEW coconut every ~2 in-game days
-## Tree collision lives on its OWN layer (16, "aim-only"): the player's
-## CharacterBody and fruit RigidBodies (mask 1) NEVER collide with it, so
-## trees stop being invisible walls and dropped fruit stops being launched
-## into the sky by depenetration out of the canopy box. The player AIM ray
-## (mask 3 | 1<<15) still hits it, so picking/chopping work unchanged.
-const AIM_ONLY_LAYER := 1 << 15
-static var _sway_mat_cache: Dictionary = {} # mesh -> Array[Material] per-surface overrides
-## Extra mesh scale per plant id (on top of growth animation). The scanned
-## apple tree reads small next to palms; 1.25x makes it a real tree.
-const MESH_SCALE := {"Apple": 1.25}
-
 @export var plant_id: String = ""
-## Initial stage. -1 = normal seed growth; world trees (the island's rare
-## apple tree) spawn already MATURE and fruiting via start_stage = 3.
-@export_range(-1, 3) var start_stage: int = -1
 
 var _def: Dictionary = {}
 var _db: Node = null
@@ -80,7 +41,6 @@ var _grow: float = STAGE_FRAC[0]   # current visual growth scale (continuous)
 var _visual: Node3D = null
 var _container: Node3D = null      # scaled stage content (whole-plant growth)
 var _col_shape: CollisionShape3D = null
-var _trunk_shape: CollisionShape3D = null # aim cylinder along the trunk (removed on stump)
 
 # Deterministic per-plant variation (stable for the life of the plant)
 var _rng := RandomNumberGenerator.new()
@@ -90,7 +50,7 @@ var _wind_phase2: float = 0.0
 var _wind_freq: float = 1.0
 
 # One entry per fruit slot:
-# {"pos": Vector3 (local), "elapsed": float, "regrow": float, "mesh": MeshInstance3D}
+# {"pos": Vector3 (local), "elapsed": float, "regrow": float, "mesh": Node3D}
 var _fruits: Array = []
 
 # Hold-to-harvest state (chop / dig / stump removal)
@@ -100,6 +60,8 @@ var _hold_target: float = 1.0
 var _hold_kind: String = ""
 var _health: int = 0
 var _fell_axis: Vector3 = Vector3.FORWARD
+var _pending_dig_drop: Dictionary = {}
+var _pending_fell_drops: Dictionary = {}
 
 # Small debris chips (wood/soil) flying briefly after hits
 var _chips: Array = []
@@ -110,19 +72,10 @@ var _progress_bar: ColorRect = null
 var _prompt_label: Label = null
 var _anim_t: float = 0.0
 
-# Real-model growth state (empty when using primitive fallback):
-var _growth: Dictionary = {} # stage(int) -> Mesh
-var _tree_top := 0.0         # measured mature height (collision + fruit anchor)
-var _crown_y := 0.0          # crown center height on the mature model
-var _crown_r := 0.0          # crown spread radius on the mature model
-var _crown_off := Vector2.ZERO # crown XZ offset (baked palm trunk LEANS — the crown is not above the origin)
-var _regrow_wait := 0.0      # >0 while a felled island stump counts down to automatic regrowth
-var _ms := 1.0               # MESH_SCALE for this plant (metrics multiply by it)
-
 
 func _ready() -> void:
 	add_to_group("plant")
-	collision_layer = AIM_ONLY_LAYER # aim raycast target only — never a physical wall
+	collision_layer = 1
 	collision_mask = 0
 	# Resolve the PlantDB autoload at RUNTIME (/root) rather than by the global
 	# identifier: class_name scripts are parsed before autoload names exist in
@@ -145,9 +98,6 @@ func _ready() -> void:
 	_wind_phase2 = _rng.randf_range(0.0, TAU)
 	_wind_freq = _rng.randf_range(0.9, 1.3)
 	_health = int(_def.get("chop_hits_required", 4))
-	_load_growth_variants()
-	if start_stage >= Stage.SEED and start_stage <= Stage.MATURE:
-		_stage = start_stage
 
 	_col_shape = CollisionShape3D.new()
 	var shape := BoxShape3D.new()
@@ -162,129 +112,80 @@ func _ready() -> void:
 	_container = Node3D.new()
 	_container.name = "StageMesh"
 	_visual.add_child(_container)
-	_grow = STAGE_FRAC[_stage]
+	_grow = STAGE_FRAC[Stage.SEED]
 	_container.scale = Vector3(_grow, _grow, _grow)
 	_rebuild_visual()
 	_build_progress_ui()
 
 
-# ============================================================
-# REAL-MODEL GROWTH (scanned coconut palm)
-# ============================================================
-func _load_growth_variants() -> void:
-	var variants: Dictionary = GROWTH_VARIANTS.get(plant_id, {})
-	if variants.is_empty():
-		return
-	for st in variants:
-		var path: String = _mobile_bake(variants[st])
-		if ResourceLoader.exists(path):
-			var gm: Mesh = load(path)
-			_strip_detail_maps(gm)
-			_growth[int(st)] = gm
-	if not _growth.has(Stage.MATURE):
-		_growth.clear() # incomplete set -> primitive fallback everywhere
-		return
-	# Per-plant mesh scale BEFORE measuring, so all metrics below are the
-	# SCALED ones collision + fruit anchors actually need.
-	_ms = float(MESH_SCALE.get(plant_id, 1.0))
-	# Measure the mature model once: drives collision size + fruit anchors.
-	var mature: Mesh = _growth[Stage.MATURE]
-	var aabb := mature.get_aabb()
-	_tree_top = aabb.position.y + aabb.size.y
-	_crown_y = _tree_top * 0.86
-	_crown_r = maxf(aabb.size.x, aabb.size.z) * 0.5
-	# Canopy-fruit plants (apple tree): measure the REAL foliage mass instead
-	# of guessing. The scanned tree's AABB top is bare upper twigs, so the
-	# 0.86 heuristic anchored apples ~1 m ABOVE the leaves — fruit floating
-	# in the air around the crown. Mean foliage-vertex height = canopy center,
-	# max foliage radius = crown spread. Hang-layout plants (palm) keep the
-	# heuristic: nuts belong just UNDER the fronds, not at frond height.
-	if String(_def.get("fruit_layout", "hang")) == "canopy":
-		var leaf_sum := 0.0
-		var leaf_n := 0
-		var leaf_r := 0.0
-		for s in mature.get_surface_count():
-			var lm := mature.surface_get_material(s)
-			if lm is BaseMaterial3D and (lm as BaseMaterial3D).transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR:
-				var lverts: PackedVector3Array = mature.surface_get_arrays(s)[Mesh.ARRAY_VERTEX]
-				for v in lverts:
-					leaf_sum += v.y
-					leaf_n += 1
-					leaf_r = maxf(leaf_r, Vector2(v.x, v.z).length())
-		if leaf_n > 0:
-			_crown_y = clampf(leaf_sum / float(leaf_n), aabb.position.y * 0.5 + 0.2, _tree_top)
-			_crown_r = maxf(leaf_r * 0.75, 0.5)
-	# Apply the mesh scale to the measured metrics (the anchors stored in mesh
-	# meta are unscaled; fruit positions multiply them by _ms downstream).
-	_tree_top *= _ms
-	_crown_y *= _ms
-	_crown_r *= _ms
-	# HANG-LAYOUT CROWN OFFSET: the baked palm trunk LEANS, so the crown sits
-	# displaced sideways from the plant origin. Fruit slots were placed on a
-	# ring around the ORIGIN — on leaned palms the bunch (and its sparkle)
-	# floated in open air beside the real crown. Mean XZ of the top-quarter
-	# vertices = where the crown actually is.
-	if String(_def.get("fruit_layout", "hang")) != "canopy":
-		var off := Vector2.ZERO
-		var on := 0
-		var top_y: float = aabb.position.y + aabb.size.y
-		for s in mature.get_surface_count():
-			var verts: PackedVector3Array = mature.surface_get_arrays(s)[Mesh.ARRAY_VERTEX]
-			for v in verts:
-				if v.y > top_y * 0.72:
-					off += Vector2(v.x, v.z)
-					on += 1
-		if on > 0:
-			_crown_off = (off / float(on)) * _ms
+func save_state() -> Dictionary:
+	var saved_stage := _stage
+	var saved_health := _health
+	# Do not persist a half-played fall tween: retry the final chop after load.
+	if saved_stage == Stage.FALLING:
+		saved_stage = Stage.MATURE
+		saved_health = 1
+	var fruit_states: Array[Dictionary] = []
+	for fruit in _fruits:
+		var position: Vector3 = fruit.get("pos", Vector3.ZERO)
+		fruit_states.append({
+			"p": [position.x, position.y, position.z],
+			"r": float(fruit.get("rotation_y", 0.0)),
+			"e": float(fruit.get("elapsed", 0.0)),
+			"g": float(fruit.get("regrow", 60.0)),
+		})
+	return {
+		"id": plant_id,
+		"stage": saved_stage,
+		"timer": _stage_timer,
+		"health": saved_health,
+		"fruits": fruit_states,
+	}
 
-## Per-surface material overrides for a growth mesh: the alpha-scissor
-## frond surface renders through the sway shader (keeping its real baked
-## albedo texture); opaque surfaces (trunk, crown layers) keep their own
-## imported materials. Cached statically — every planted tree shares it.
-static func _tree_surface_overrides(mesh: Mesh) -> Array:
-	if _sway_mat_cache.has(mesh):
-		return _sway_mat_cache[mesh]
-	var shader: Shader = null
-	if ResourceLoader.exists(PALM_FROND_SHADER):
-		shader = load(PALM_FROND_SHADER)
-	var overrides: Array = []
-	# ONLY the palm gets the frond sway shader. The apple tree's leaf cards
-	# are alpha-scissor too — sway (keyed to palm crown heights) squeezed the
-	# whole canopy down to the trunk and shredded the silhouette. Baked meshes
-	# carry meta "src" (their source model), so key the shader to the palm.
-	var mesh_src := String(mesh.get_meta("src", ""))
-	var sway_allowed := not mesh_src.containsn("apple")
-	for s in mesh.get_surface_count():
-		var m := mesh.surface_get_material(s)
-		var use: Material = null
-		if sway_allowed and shader != null and m is BaseMaterial3D \
-				and (m as BaseMaterial3D).transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR:
-			var sm := ShaderMaterial.new()
-			sm.shader = shader
-			var tex = (m as BaseMaterial3D).albedo_texture
-			if tex != null:
-				sm.set_shader_parameter("albedo_tex", tex)
-			# Scale the sway band to THIS variant's crown height so young
-			# and sprout models sway too, not just the full-size palm.
-			var aabb := mesh.get_aabb()
-			var top := aabb.position.y + aabb.size.y
-			sm.set_shader_parameter("sway_start", top * 0.55)
-			sm.set_shader_parameter("sway_span", maxf(top * 0.45, 0.2))
-			use = sm
-		overrides.append(use)
-	_sway_mat_cache[mesh] = overrides
-	return overrides
 
-func _build_real_tree_visual(mesh: Mesh) -> void:
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
-	var overrides := _tree_surface_overrides(mesh)
-	for s in overrides.size():
-		if overrides[s] != null:
-			mi.set_surface_override_material(s, overrides[s])
-	mi.scale = Vector3.ONE * _ms
-	_container.add_child(mi)
-	_update_collision()
+func restore_state(state: Dictionary) -> void:
+	if str(state.get("id", plant_id)) != plant_id:
+		return
+	_stage = clampi(int(state.get("stage", Stage.SEED)), Stage.SEED, Stage.STUMP)
+	if _stage == Stage.FALLING:
+		_stage = Stage.MATURE
+		_health = 1
+	else:
+		_health = maxi(0, int(state.get("health", _health)))
+	_stage_timer = maxf(0.0, float(state.get("timer", 0.0)))
+	if _stage < Stage.MATURE:
+		_stage_timer = minf(_stage_timer, _stage_time(_stage))
+	else:
+		_stage_timer = 0.0
+	_rebuild_visual()
+	if _stage < Stage.MATURE:
+		var needed := maxf(_stage_time(_stage), 0.001)
+		var from_scale: float = STAGE_FRAC[_stage]
+		var to_scale: float = STAGE_FRAC[clampi(_stage + 1, 0, Stage.MATURE)]
+		_grow = lerpf(from_scale, to_scale, clampf(_stage_timer / needed, 0.0, 1.0))
+	else:
+		_grow = 1.0
+	_container.scale = Vector3.ONE * _grow
+	if _stage == Stage.STUMP:
+		_container.scale = Vector3.ONE
+		return
+	if _stage != Stage.MATURE or _def.get("category", "") != CAT_FRUIT:
+		return
+	var fruit_states: Variant = state.get("fruits", [])
+	if fruit_states is Array:
+		for i in range(mini(fruit_states.size(), _fruits.size())):
+			var saved_fruit: Variant = fruit_states[i]
+			if not (saved_fruit is Dictionary):
+				continue
+			var fruit: Dictionary = _fruits[i]
+			var coordinates: Array = saved_fruit.get("p", [])
+			if coordinates.size() >= 3:
+				fruit["pos"] = Vector3(float(coordinates[0]), float(coordinates[1]), float(coordinates[2]))
+			fruit["rotation_y"] = float(saved_fruit.get("r", fruit.get("rotation_y", 0.0)))
+			fruit["regrow"] = maxf(0.1, float(saved_fruit.get("g", fruit.get("regrow", 60.0))))
+			fruit["elapsed"] = clampf(float(saved_fruit.get("e", 0.0)), 0.0, float(fruit["regrow"]))
+			_fruits[i] = fruit
+	_update_fruits(0.0)
 
 
 # ============================================================
@@ -302,11 +203,6 @@ func _process(delta: float) -> void:
 	_update_chips(delta)
 
 	if _stage == Stage.FALLING or _stage == Stage.STUMP:
-		# Felled stumps count down to automatic regrowth (~1 in-game day).
-		if _stage == Stage.STUMP and _regrow_wait > 0.0:
-			_regrow_wait -= delta
-			if _regrow_wait <= 0.0:
-				_regrow_plant()
 		_update_interaction(delta)
 		return
 
@@ -357,7 +253,7 @@ func _rebuild_visual() -> void:
 		c.queue_free()
 	_fruits.clear()
 	var cat: String = _def.get("category", "")
-	if _stage == Stage.FALLING:
+	if _stage >= Stage.FALLING:
 		return
 	if _stage == Stage.STUMP:
 		_build_stump_visual()
@@ -440,15 +336,9 @@ func _build_root_visual(stage: int) -> void:
 
 
 func _build_tree_visual(stage: int) -> void:
-	# Real scanned-model growth for plants that have bake variants (coconut):
-	# SEED/SPROUT show the frond tuft, GROWING the young palm, MATURE the
-	# full nut-free palm. The container scale (_grow) animates continuously,
-	# so the model itself visibly grows between stage swaps.
-	if not _growth.is_empty():
-		var gmesh: Mesh = _growth.get(stage, _growth.get(Stage.SPROUT))
-		if gmesh != null:
-			_build_real_tree_visual(gmesh)
-			return
+	if plant_id == "Coconut":
+		_build_coconut_palm_visual(stage)
+		return
 	var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.2)))
 	var trunk_r: float = float(_def.get("trunk_radius", 0.13))
 	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 0.9)))
@@ -481,6 +371,81 @@ func _build_tree_visual(stage: int) -> void:
 	_update_collision()
 
 
+func _build_coconut_palm_visual(stage: int) -> void:
+	if stage == Stage.SEED:
+		var seed_mesh := MeshInstance3D.new()
+		var seed := SphereMesh.new()
+		seed.radius = 0.035
+		seed.height = 0.07
+		seed_mesh.mesh = seed
+		seed_mesh.position = Vector3(0.0, 0.02, 0.0)
+		var seed_material := StandardMaterial3D.new()
+		seed_material.albedo_color = Color(0.36, 0.24, 0.12)
+		seed_material.roughness = 0.95
+		seed_mesh.material_override = seed_material
+		_container.add_child(seed_mesh)
+		return
+
+	var palm := PALM_TALL_SCENE.instantiate() as Node3D
+	if palm == null:
+		push_warning("[Plant] Could not instance Kenney palm model")
+		return
+	palm.name = "CoconutPalm"
+	_container.add_child(palm)
+	var bounds := _node_local_aabb(palm)
+	if bounds.size.y <= 0.001:
+		push_warning("[Plant] Kenney palm model has no measurable height")
+		return
+	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 1.1)))
+	var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.6)))
+	var target_height: float = trunk_h + canopy_r * 0.7
+	var model_scale: float = target_height / bounds.size.y
+	palm.scale = Vector3.ONE * model_scale
+	palm.position = Vector3(
+		-bounds.get_center().x * model_scale,
+		-bounds.position.y * model_scale,
+		-bounds.get_center().z * model_scale
+	)
+
+	# Fruit sockets sit just beneath the crown; keeping this as a lightweight
+	# marker preserves the existing staggered grow/pick/regrow behaviour.
+	if stage >= Stage.MATURE:
+		var canopy := Node3D.new()
+		canopy.name = "Canopy"
+		canopy.position = Vector3(0.0, target_height * 0.76, 0.0)
+		_container.add_child(canopy)
+	_update_collision()
+
+
+func _node_local_aabb(root: Node3D) -> AABB:
+	var found := false
+	var lower := Vector3.ZERO
+	var upper := Vector3.ZERO
+	for candidate in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := candidate as MeshInstance3D
+		if mesh_instance == null or mesh_instance.mesh == null:
+			continue
+		var relative := mesh_instance.transform
+		var ancestor := mesh_instance.get_parent()
+		while ancestor != null and ancestor != root:
+			if ancestor is Node3D:
+				relative = (ancestor as Node3D).transform * relative
+			ancestor = ancestor.get_parent()
+		if ancestor != root:
+			continue
+		var mesh_bounds := mesh_instance.mesh.get_aabb()
+		for corner in range(8):
+			var point: Vector3 = relative * mesh_bounds.get_endpoint(corner)
+			if not found:
+				lower = point
+				upper = point
+				found = true
+			else:
+				lower = lower.min(point)
+				upper = upper.max(point)
+	return AABB(lower, upper - lower) if found else AABB()
+
+
 func _update_collision() -> void:
 	if _col_shape == null or not (_col_shape.shape is BoxShape3D):
 		return
@@ -488,28 +453,6 @@ func _update_collision() -> void:
 	if _stage == Stage.STUMP:
 		box.size = Vector3(0.4, 0.3, 0.4)
 		_col_shape.position = Vector3(0, 0.15, 0)
-		if _trunk_shape != null and is_instance_valid(_trunk_shape):
-			_trunk_shape.queue_free() # no invisible tree trunk left over the stump
-		_trunk_shape = null
-		return
-	if not _growth.is_empty():
-		# AIM box sized from the real mature model. It covers the canopy so the
-		# aim ray can reach the fruit for picking. It is on the aim-only layer:
-		# the player walks straight through it and dropped fruit (rigid mask 1)
-		# ignores it entirely — the old layer-1 box both blocked movement around
-		# every tree AND ejected spawned apples sky-high via depenetration.
-		box.size = Vector3(maxf(_crown_r * 1.6, 0.4), maxf(_tree_top, 0.5), maxf(_crown_r * 1.6, 0.4))
-		_col_shape.position = Vector3(0, box.size.y * 0.5, 0)
-		# Solid trunk cylinder so a chop-aim low on the tree always registers
-		# even when the canopy box is thin there.
-		if _trunk_shape == null or not is_instance_valid(_trunk_shape):
-			_trunk_shape = CollisionShape3D.new()
-			var cyl := CylinderShape3D.new()
-			cyl.radius = clampf(_tree_top * 0.045, 0.14, 0.30)
-			cyl.height = maxf(_tree_top * 0.8, 0.6)
-			_trunk_shape.shape = cyl
-			_trunk_shape.position = Vector3(0, cyl.height * 0.5, 0)
-			_col_shape.add_sibling(_trunk_shape)
 		return
 	var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.2)))
 	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 0.9)))
@@ -549,125 +492,34 @@ func _build_stump_visual() -> void:
 # FRUITS — per-slot progression: bud -> small -> growing -> ripe
 # ============================================================
 func _init_fruit_slots() -> void:
+	var canopy: Node3D = _container.get_node_or_null("Canopy")
+	if canopy == null:
+		return
 	var count: int = int(_def.get("fruit_count", 4))
+	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 0.9)))
 	var regrow: float = float(_def.get("fruit_regrow_time", 60.0))
-	var layout: String = _def.get("fruit_layout", "hang")
 	for i in count:
-		var local_pos: Vector3
-		if not _growth.is_empty() and layout == "canopy":
-			# FRUIT ANCHORS: the bake measured dense points INSIDE the real
-			# foliage (meta "fruit_anchors" on the mesh). Hanging apples from
-			# those puts fruit IN the leaf mass on the twigs — the old random
-			# sphere scatter floated apples in empty air and let them hover
-			# beside branches.
-			var anchors := PackedVector3Array()
-			var mature_mesh: Mesh = _growth.get(Stage.MATURE)
-			if mature_mesh != null and mature_mesh.has_meta("fruit_anchors"):
-				anchors = mature_mesh.get_meta("fruit_anchors")
-			if anchors.size() > 0:
-				# Deterministic shuffle so each tree picks a different subset.
-				var order := []
-				for j in anchors.size():
-					order.append(j)
-				for j in range(order.size() - 1, 0, -1):
-					var k := _rng.randi_range(0, j)
-					var tmp: int = order[j]
-					order[j] = order[k]
-					order[k] = tmp
-				for j in count:
-					var ap: Vector3 = anchors[order[j % order.size()]] * _ms # anchors are in unscaled mesh space
-					local_pos = ap + Vector3(
-						_rng.randf_range(-0.06, 0.06),
-						-_rng.randf_range(0.02, 0.10), # hang just below the leaf point
-						_rng.randf_range(-0.06, 0.06))
-			else:
-				# Fallback (old bake without anchors): scatter in the crown
-				# volume, like a real apple tree.
-				var dir := Vector3(
-					_rng.randf_range(-1.0, 1.0),
-					_rng.randf_range(-0.45, 0.6),
-					_rng.randf_range(-1.0, 1.0)).normalized()
-				local_pos = Vector3(_crown_off.x, _crown_y, _crown_off.y) + dir * _crown_r * _rng.randf_range(0.35, 0.9)
-		else:
-			# Coconut-style hanging cluster tucked well UNDER the frond bases,
-			# hugging the trunk — real bunches nestle in the crown axils. The old
-			# ring (0.30 crown_r, only 0.24 crown_r below the crown center) let
-			# nuts poke THROUGH the drooping fronds. 0.20 radius + 0.45 below
-			# puts the whole cluster in the clear zone under the frond bases.
-			var ring_r: float
-			var ring_y: float
-			if not _growth.is_empty():
-				ring_r = _crown_r * 0.20
-				ring_y = _crown_y - _crown_r * 0.45
-			else:
-				var canopy: Node3D = _container.get_node_or_null("Canopy")
-				if canopy == null:
-					return
-				ring_r = _grow_y(float(_def.get("canopy_radius", 0.9)))
-				ring_y = canopy.position.y
-			# PER-TREE BUNCH PLACEMENT: the bunch sits on a RANDOM side of the
-			# crown (base angle), split across 1-2 arcs — one palm carries its
-			# nuts on the north side, its neighbor on the south, some spread
-			# wide. The old even TAU ring made every tree look identical.
-			var base_ang: float = _rng.randf() * TAU
-			var two_sides: bool = _rng.randf() < 0.5 and count >= 4
-			var ang: float
-			if two_sides:
-				# split the slots between the base side and the opposite side
-				var side: float = 0.0 if i % 2 == 0 else PI
-				@warning_ignore("integer_division")
-				var k := i / 2 # slot pair index (i even -> base side, odd -> opposite)
-				var half: int = int(ceil(float(count) * 0.5))
-				var spread := 0.9 # ~52° arc per bunch
-				ang = base_ang + side + (float(k) / maxf(1.0, float(half - 1)) - 0.5) * spread \
-					+ _rng.randf_range(-0.18, 0.18)
-			else:
-				var spread := _rng.randf_range(1.1, 2.2) # single bunch, size varies per tree
-				ang = base_ang + (float(i) / maxf(1.0, float(count - 1)) - 0.5) * spread \
-					+ _rng.randf_range(-0.15, 0.15)
-			var jitter: float = _rng.randf_range(0.65, 0.95) # tight bunch, like a real cluster
-			local_pos = Vector3(_crown_off.x + cos(ang) * ring_r * jitter, \
-				ring_y - (0.0 if not _growth.is_empty() else ring_r * _rng.randf_range(0.1, 0.25)) \
-					+ _rng.randf_range(-0.06, 0.10), \
-				_crown_off.y + sin(ang) * ring_r * jitter)
-		# PALM CROP VARIATION: every tree gets a random number of ACTIVE slots
-		# — weighted so the island mixes bare palms, sparse 1-2 nut trees and
-			# heavy full bunches (a uniform randi_range made half the island
-			# carry the same 2-3 nuts). Inactive slots stay listed with
-			# slot_active = false so later seasons can promote them.
-		var active := count
-		if String(_def.get("fruit_layout", "hang")) == "hang" and not _growth.is_empty() and _def.get("fruit_variation", false):
-			var roll := _rng.randf()
-			if roll < 0.20:
-				active = 0 # bare this season
-			elif roll < 0.55:
-				active = _rng.randi_range(1, 2)
-			else:
-				active = _rng.randi_range(3, count)
+		var ang: float = float(i) / float(count) * TAU + _rng.randf_range(-0.25, 0.25)
+		var jitter: float = _rng.randf_range(0.62, 0.82)
+		var local_pos: Vector3 = canopy.position \
+			+ Vector3(cos(ang) * canopy_r * jitter, -canopy_r * _rng.randf_range(0.1, 0.25), sin(ang) * canopy_r * jitter)
 		# Staggered start so fruits reach ripeness at different times.
+		var slot_regrow: float = regrow * _rng.randf_range(0.9, 1.1)
 		_fruits.append({
 			"pos": local_pos,
+			"rotation_y": ang + _rng.randf_range(-0.6, 0.6),
 			"elapsed": _rng.randf_range(0.0, regrow * 0.5),
-			"regrow": regrow * _rng.randf_range(0.9, 1.1),
+			"regrow": slot_regrow,
 			"mesh": null,
-			"fall_at": -1.0, # set once ripe when fruit_falls is enabled
-			"slot_active": i < active,
 		})
-
-
-func _fruit_green() -> Color:
-	# Young fruit is green regardless of its ripe color.
-	return Color(0.3, 0.45, 0.22)
 
 
 func _update_fruits(delta: float) -> void:
 	for f in _fruits:
-		if not bool(f.get("slot_active", true)):
-			continue # this palm's crop variation left the slot empty this season
 		f["elapsed"] = float(f["elapsed"]) + delta
 		var regrow: float = float(f["regrow"])
 		var prog: float = clampf(float(f["elapsed"]) / regrow, 0.0, 1.0)
-		var m: MeshInstance3D = f.get("mesh")
+		var m := f.get("mesh") as Node3D
 		if prog < 0.06:
 			if m != null and is_instance_valid(m):
 				m.queue_free()
@@ -676,197 +528,49 @@ func _update_fruits(delta: float) -> void:
 		if m == null or not is_instance_valid(m):
 			m = _make_fruit_mesh()
 			f["mesh"] = m
-			f["tint"] = m.material_override if m.material_override is ShaderMaterial else null
 			_container.add_child(m)
 		m.position = f["pos"]
-		var ripe_col: Color = _def.get("fruit_color", Color(0.8, 0.6, 0.2))
-		var green_col: Color = _def.get("fruit_green_color", _fruit_green())
-		var size_t := prog * prog * (3.0 - 2.0 * prog)  # smoothstep ease
-		m.scale = Vector3.ONE * (0.35 + 0.65 * size_t) * float(_def.get("fruit_scale", 1.0))
-		# Color drifts from green toward the ripe fruit color as it matures
-		# (works for BOTH the real-mesh shader path and the primitive spheres
-		# used by coconuts).
-		var color_t: float = clampf((prog - 0.15) / 0.85, 0.0, 1.0)
-		var tint: ShaderMaterial = f.get("tint")
-		if tint != null:
-			tint.set_shader_parameter("ripeness", color_t) # real-mesh path
-		var mat: StandardMaterial3D = m.material_override as StandardMaterial3D
-		if mat != null:
-			mat.albedo_color = green_col.lerp(ripe_col, color_t)
-			mat.emission = (ripe_col * 0.25) * color_t
-		# RIPE HINT: a twinkle right above the fruit once it's pickable.
-		# Off on mobile: a handful of additive billboards inside the canopy
-		# is several layers of fill-rate overdraw — a real cost on phones.
-		# Bunch-fruit (coconuts) never sparkle: the glowing dot read as the
-		# "yellow balls" next to the bunch.
-		_set_sparkle(f, prog >= 1.0 and not bool(_def.get("fruit_unlit", false)) and not OS.has_feature("mobile"))
-		# NATURAL FRUIT-FALL: a ripe apple left unpicked drops to the ground
-		# after fruit_fall_delay seconds, where it lies as a collectible —
-		# then the slot quietly grows a new apple. Like a real orchard.
-		# ISLAND PALM DROP CYCLE (real-coconut feel): hang layout + palm keys →
-		# ~one ripe nut lets go per DAY (drop times spread across the day by
-			# the staggered ripening, one slot at a time), and the empty slot
-			# regrows its nut over fruit_palm_regrow_days (default 2 days).
-		var is_palm_drop: bool = String(_def.get("fruit_layout", "hang")) == "hang" \
-			and String(_def.get("fruit_fall_item", "")) != "" and float(_def.get("fruit_fall_days", 0.0)) > 0.0
-		if _def.get("fruit_falls", false) or is_palm_drop:
-			if float(f["fall_at"]) < 0.0 and prog >= 1.0:
-				var delay: float = float(_def.get("fruit_fall_delay", 20.0))
-				if is_palm_drop:
-					delay = PALM_DROP_DELAY + _rng.randf_range(0.0, ISLAND_DAY_SECONDS)
-				f["fall_at"] = float(f["elapsed"]) + delay
-			elif float(f["fall_at"]) > 0.0 and float(f["elapsed"]) >= float(f["fall_at"]):
-				_drop_fruit(f)
+		m.rotation.y = float(f.get("rotation_y", 0.0))
+		var size_t := clampf((prog - 0.06) / 0.94, 0.0, 1.0)
+		size_t = size_t * size_t * (3.0 - 2.0 * size_t)
+		m.scale = Vector3.ONE * (0.12 + 0.88 * size_t)
 
 
-const FRUIT_TINT_SHADER := "res://shaders/fruit_tint.gdshader"
-static var _fruit_tint_shader: Shader = null
+func _make_fruit_mesh() -> Node3D:
+	var root := Node3D.new()
+	root.name = "FruitVisual"
+	var fruit_scene: PackedScene = null
+	if plant_id == "Coconut":
+		fruit_scene = COCONUT_SCENE
+	elif plant_id == "Banana":
+		fruit_scene = BANANA_SCENE
+	if fruit_scene != null:
+		var model := fruit_scene.instantiate() as Node3D
+		if model != null:
+			root.add_child(model)
+			var bounds := _node_local_aabb(model)
+			var largest := maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z))
+			if largest > 0.001:
+				var target_size: float = float(_def.get("fruit_radius", 0.1)) * 2.0
+				var model_scale: float = target_size / largest
+				model.scale = Vector3.ONE * model_scale
+				model.position = -bounds.get_center() * model_scale
+				return root
+			model.queue_free()
 
-## Ripeness sparkle: a tiny additive billboard that pops in above a fruit
-## the moment it becomes pickable. Shared quad mesh + one canvas-texture
-## gradient; only the energy animates. Created lazily, freed on pick/drop.
-const SPARKLE_QUAD := 0.22 # meters
-
-static func _sparkle_mesh() -> QuadMesh:
-	if _sparkle_mesh_cache == null:
-		var qm := QuadMesh.new()
-		qm.size = Vector2.ONE * SPARKLE_QUAD
-		_sparkle_mesh_cache = qm
-	return _sparkle_mesh_cache
-
-static var _sparkle_mesh_cache: QuadMesh = null
-static var _sparkle_mat_cache: StandardMaterial3D = null
-
-static func _sparkle_material() -> StandardMaterial3D:
-	if _sparkle_mat_cache == null:
-		# RADIAL soft-dot texture (GradientTexture2D FILL_RADIAL): the old 1D
-		# vertical gradient left hard top/bottom edges, and on the Mobile
-		# renderer the per-instance `transparency` fade is ignored — ripe trees
-		# showed rows of OPAQUE WHITE SQUARES floating in the crown (user
-		# screenshot). A radial falloff makes the quad edge fully transparent on
-		# every renderer, and the twinkle animates via SCALE only.
-		var gt := GradientTexture2D.new()
-		var g := Gradient.new()
-		g.set_color(0, Color(1.0, 0.97, 0.78, 1.0))
-		g.set_color(1, Color(1.0, 0.85, 0.3, 0.0))
-		gt.gradient = g
-		gt.fill = GradientTexture2D.FILL_RADIAL
-		gt.fill_from = Vector2(0.5, 0.5)
-		gt.fill_to = Vector2(0.5, 0.0)
-		gt.width = 64
-		gt.height = 64
-		var mat := StandardMaterial3D.new()
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		mat.billboard_keep_scale = false
-		mat.albedo_texture = gt
-		mat.disable_receive_shadows = true
-		mat.no_depth_test = false
-		_sparkle_mat_cache = mat
-	return _sparkle_mat_cache
-
-func _set_sparkle(f: Dictionary, on: bool) -> void:
-	var s = f.get("sparkle")
-	if on:
-		if s == null or not is_instance_valid(s):
-			s = MeshInstance3D.new()
-			s.mesh = _sparkle_mesh()
-			s.material_override = _sparkle_material()
-			s.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			var fx: float = SPARKLE_QUAD * 0.5 + 0.06 # above the fruit
-			s.position = Vector3(f["pos"]) + Vector3(0, fx, 0)
-			_container.add_child(s)
-			f["sparkle"] = s
-			f["sparkle_seed"] = _rng.randf_range(0.0, TAU)
-		# twinkle — SCALE pulse only: GeometryInstance3D.transparency is ignored
-	# by the Mobile renderer (rendered as an opaque box). The radial texture
-	# already fades the edges to zero alpha, so pulsing size is enough.
-		s.visible = true
-		var t := _anim_t * 2.6 + float(f.get("sparkle_seed", 0.0))
-		s.scale = Vector3.ONE * (0.45 + 0.55 * (0.5 + 0.5 * sin(t)))
-	else:
-		if s != null and is_instance_valid(s):
-			s.queue_free()
-		f["sparkle"] = null
-
-## MOBILE BAKE VARIANTS — heavy bakes ship a `_mobile` twin (half-density
-## leaves / fewer tris / smaller textures, same filenames + metas). On
-## phones the variant loads instead of the desktop bake; any device falls
-## back to the full file when the twin is missing (e.g. a stale export).
-## Desktop is byte-identical to before.
-static func _mobile_bake(path: String) -> String:
-	if path == "" or not OS.has_feature("mobile"):
-		return path
-	var dot := path.rfind(".")
-	var base := path if dot < 0 else path.substr(0, dot)
-	var ext := "" if dot < 0 else path.substr(dot)
-	var twin := base + "_mobile" + ext
-	return twin if ResourceLoader.exists(twin) else path
-
-## Low-end texture memory: on phones, drop NORMAL/ROUGHNESS detail maps from
-## loaded bake materials (~2/3 of the palm's texture VRAM; invisible at
-## phone view distances and 0.85 res scale). Same rule as
-## island_generator._strip_detail_maps — kept separate to avoid a script
-## cycle (island_generator references PlantInstance).
-static var _stripped_meshes: Array = []
-
-static func _strip_detail_maps(mesh: Mesh) -> void:
-	if mesh == null or not OS.has_feature("mobile"):
-		return
-	if _stripped_meshes.has(mesh):
-		return
-	_stripped_meshes.append(mesh)
-	for s in mesh.get_surface_count():
-		var bm := mesh.surface_get_material(s) as BaseMaterial3D
-		if bm != null:
-			bm.normal_texture = null
-			bm.roughness_texture = null
-
-func _make_fruit_mesh() -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	# Real baked fruit model (apple scan, king-coconut bunch): wrap its
-	# texture in the ripening-tint shader so unripe fruit is visibly GREEN
-	# and ripens to the real color.
-	var mesh_path: String = _mobile_bake(_def.get("fruit_mesh", ""))
-	if mesh_path != "" and ResourceLoader.exists(mesh_path):
-		var fm: Mesh = load(mesh_path)
-		mi.mesh = fm
-		if _fruit_tint_shader == null and ResourceLoader.exists(FRUIT_TINT_SHADER):
-			_fruit_tint_shader = load(FRUIT_TINT_SHADER)
-		if _fruit_tint_shader != null:
-			var sm := ShaderMaterial.new()
-			sm.shader = _fruit_tint_shader
-			sm.set_shader_parameter("ripeness", 0.0)
-			var bm := fm.surface_get_material(0) as BaseMaterial3D
-			if bm != null:
-				if bm.albedo_texture != null:
-					sm.set_shader_parameter("albedo_tex", bm.albedo_texture)
-				if bm.normal_texture != null:
-					sm.set_shader_parameter("normal_tex", bm.normal_texture)
-				if bm.roughness_texture != null:
-					sm.set_shader_parameter("roughness_tex", bm.roughness_texture)
-				# UNLIT-ish FRUIT (coconut husks): a scanned bunch lit by the
-				# full PBR stack renders as dark balls with faint emission
-				# patches — the "black coconuts" report. Brighten via COLOR
-				# (hue-preserving), not emission, and kill the normal-map
-				# cavity darkening.
-				if bool(_def.get("fruit_unlit", false)):
-					sm.set_shader_parameter("unlit", 1.0)
-			mi.material_override = sm
-		return mi
-	var sph := SphereMesh.new()
-	var fruit_r: float = float(_def.get("fruit_radius", 0.1))
-	sph.radius = fruit_r
-	sph.height = fruit_r * 2.0
-	mi.mesh = sph
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = _fruit_green()
-	mat.emission_enabled = true
-	mat.emission = Color(0, 0, 0)
-	mi.material_override = mat
-	return mi
+	# Safe visual fallback for custom plant definitions without a matching GLB.
+	var fallback := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	var fruit_radius: float = float(_def.get("fruit_radius", 0.1))
+	sphere.radius = fruit_radius
+	sphere.height = fruit_radius * 2.0
+	fallback.mesh = sphere
+	var material := StandardMaterial3D.new()
+	material.albedo_color = _def.get("fruit_color", Color(0.8, 0.6, 0.2))
+	material.roughness = 0.82
+	fallback.material_override = material
+	root.add_child(fallback)
+	return root
 
 
 # ============================================================
@@ -968,26 +672,7 @@ func _is_player_aiming_here() -> bool:
 	if p.get("aim_collider") != self:
 		return false
 	var dist = p.get("aim_distance")
-	if dist == null:
-		return false
-	# REACH SCALES WITH THE PLANT: the flat 3.5 m meant a palm's crown
-	# (4.65-5.3 m up) was NEVER in reach — you could not pick nuts (or chop)
-	# from a standing tall palm at all. Bushes and small plants keep 3.5 m;
-	# trees extend to just above their crown (real coconut harvesting
-	# reach). _tree_top is measured in the PlantInstance's LOCAL frame, but
-	# island palms sit inside a scaled parent container (up to 1.75x now) —
-	# divide the aim distance by the accumulated parent scale so a BIG tree
-	# is judged at its REAL world height and stays harvestable.
-	var ps := 1.0
-	var anc := get_parent()
-	while anc is Node3D:
-		ps *= (anc as Node3D).scale.x
-		anc = anc.get_parent()
-	# World-unit reach: the tree's real (scaled) crown height + margin;
-	# the 3.5 m floor scales with the plant so a big palm is not a 6 m
-	# interaction magnet, while unscaled plants keep exactly 3.5 m.
-	var reach := maxf(3.5 * ps, _tree_top * ps + 0.6)
-	return float(dist) <= reach
+	return dist != null and float(dist) <= 3.5
 
 
 func _aim_local() -> Vector3:
@@ -1004,11 +689,7 @@ func _aim_local() -> Vector3:
 # nearest to the raycast hit point on the plant (within reach).
 func _nearest_ripe_fruit() -> Dictionary:
 	var aim_local := _aim_local()
-	# Hang-layout fruit (coconut bunches) tucks UNDER the crown — the aim hit
-	# lands on the aim box wall/top beside the cluster, so the match radius
-	# must cover the bunch zone (1.2 m). Canopy fruit (apples sit IN the leaf
-	# mass you aim at directly) keeps the tight 0.55 m.
-	var best := 1.2 if String(_def.get("fruit_layout", "hang")) == "hang" else 0.55
+	var best: float = 0.55
 	var best_f = null
 	for f in _fruits:
 		var regrow: float = float(f["regrow"])
@@ -1113,109 +794,28 @@ func _cancel_hold() -> void:
 func _pick_fruit(fruit) -> void:
 	if fruit == null:
 		return
+	var yield_item: String = str(_def.get("yield_item", ""))
+	var amount: int = randi_range(int(_def.get("yield_min", 1)), int(_def.get("yield_max", 1)))
+	if not yield_item.is_empty() and not Inventory.can_store_rewards({yield_item: amount}):
+		_notify_bag_full()
+		return
 	fruit["elapsed"] = 0.0
-	fruit["fall_at"] = -1.0
-	# Picked slots on a drop-cycle palm regrow over DAYS, not the regrow time.
-	if _def.get("fruit_fall_days", 0.0) > 0.0 and String(_def.get("fruit_layout", "hang")) == "hang":
-		fruit["regrow"] = float(_def.get("fruit_fall_days")) * ISLAND_DAY_SECONDS * _rng.randf_range(0.9, 1.1)
-	_set_sparkle(fruit, false)
 	var m = fruit.get("mesh")
 	if m != null and is_instance_valid(m):
 		m.queue_free()
 	fruit["mesh"] = null
-	var yield_item: String = _def.get("yield_item", "")
-	var amt: int = randi_range(int(_def.get("yield_min", 1)), int(_def.get("yield_max", 1)))
-	if yield_item != "":
-		Inventory.add(yield_item, amt)
+	if not yield_item.is_empty():
+		Inventory.add(yield_item, amount)
+		var player := _get_player()
+		if player != null and player.has_method("play_world_sfx"):
+			player.call("play_world_sfx", HARVEST_SOUND, -9.0)
 	_spawn_chips(_def.get("fruit_color", Color(0.8, 0.6, 0.2)), 3, 0.25)
 
 
-## A ripe fruit lets go: spawn a physical pickup at the fruit's world
-## position, clear the slot (it regrows). Apples spawn ApplePickup, island
-## palms spawn CoconutPickup. Palm slots regrow over fruit_fall_days (the
-## ~2-day "new coconut appears" cycle); apples over the normal regrow time.
-func _drop_fruit(fruit) -> void:
-	fruit["elapsed"] = 0.0
-	fruit["fall_at"] = -1.0
-	_set_sparkle(fruit, false)
-	var m = fruit.get("mesh")
-	var world_pos: Vector3 = _container.to_global(Vector3(fruit["pos"]))
-	if m != null and is_instance_valid(m):
-		m.queue_free()
-	fruit["mesh"] = null
-	var palm_drop: bool = String(_def.get("fruit_fall_item", "")) != "" and float(_def.get("fruit_fall_days", 0.0)) > 0.0 \
-		and String(_def.get("fruit_layout", "hang")) == "hang"
-	if palm_drop:
-		fruit["regrow"] = float(_def.get("fruit_fall_days")) * ISLAND_DAY_SECONDS * _rng.randf_range(0.9, 1.1)
-	else:
-		# APPLE DAY-SPREAD: a natural drop rate of ~4-5 apples per in-game day
-		# regardless of slot count. drops/day = count * day_seconds / regrow,
-		# so regrow = count * 200 s averages ~4.5/day with 8 slots. Picked
-		# apples keep the fast fruit_regrow_time; only SELF-DROPPED slots use
-		# the slow cycle (the tree "spends" its energy on fruit you left).
-		var n_slots: int = maxi(1, int(_def.get("fruit_count", 4)))
-		fruit["regrow"] = float(n_slots) * 200.0 * _rng.randf_range(0.8, 1.2)
-	_spawn_fruit_pickup(world_pos, Vector3(_rng.randf_range(-0.4, 0.4), -0.5, _rng.randf_range(-0.4, 0.4)))
-
-
-## Spawn the physical pickup for this plant's fruit at a world position.
-## Shared by the natural drop and the fell-scatter. Ground-clamped so the
-## fruit never starts inside the terrain (CCD handles the landing impact).
-func _spawn_fruit_pickup(world_pos: Vector3, vel: Vector3) -> void:
-	var palm_drop: bool = String(_def.get("fruit_fall_item", "")) != "" and float(_def.get("fruit_fall_days", 0.0)) > 0.0 \
-		and String(_def.get("fruit_layout", "hang")) == "hang"
-	# if/else instead of a ternary: the two pickup scripts are unrelated
-	# classes, so a ternary trips INCOMPATIBLE_TERNARY in strict checks.
-	var drop: RigidBody3D
-	if palm_drop:
-		drop = CoconutPickupScript.new()
-	else:
-		drop = ApplePickupScript.new()
-	get_tree().current_scene.add_child(drop)
-	# Never spawn under the surface (slope edge cases) — the nut must land
-	# ON the land, not inside it (CCD inside the pickup handles the impact).
-	var gy := _ground_below(world_pos)
-	if world_pos.y < gy + 0.15:
-		world_pos.y = gy + 0.15
-	drop.global_position = world_pos
-	drop.linear_velocity = vel
-
-
-## FELL SCATTER: every grown fruit becomes a physical pickup that tumbles
-## outward around the trunk — cutting a palm rains its coconuts onto the
-## sand (user request). Slots with unripe/no mesh contribute nothing.
-func _scatter_all_fruits() -> void:
-	for f in _fruits:
-		if not bool(f.get("slot_active", true)):
-			continue
-		_set_sparkle(f, false)
-		var m = f.get("mesh")
-		if m == null or not is_instance_valid(m):
-			continue
-		var world_pos: Vector3 = _container.to_global(Vector3(f["pos"]))
-		var away := Vector3(_rng.randf_range(-1.0, 1.0), 0.0, _rng.randf_range(-1.0, 1.0))
-		if away.length() < 0.2:
-			away = Vector3.FORWARD
-		away = away.normalized()
-		_spawn_fruit_pickup(world_pos + away * 0.3,
-			away * _rng.randf_range(1.2, 2.6) + Vector3(0, 1.5, 0))
-	_fruits.clear()
-
-## Ground height below a world point: physics ray first (terrain trimesh +
-## raft decks), then the island's analytic field as fallback. Keeps fallen
-## fruit ON the sand — the old fixed world_pos landed nuts slightly under
-## slopes, where the collider popped them through the surface.
-func _ground_below(p: Vector3) -> float:
-	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(p + Vector3(0, 1.0, 0), p + Vector3(0, -30.0, 0), 1)
-	var hit := space.intersect_ray(q)
-	if not hit.is_empty():
-		return (hit["position"] as Vector3).y
-	var ig := get_tree().get_first_node_in_group("island") as Node3D
-	if ig != null:
-		return IslandGenerator.terrain_height_local(Vector2(p.x, p.z) \
-			- Vector2(ig.global_position.x, ig.global_position.z))
-	return 0.0
+func _notify_bag_full() -> void:
+	var player := _get_player()
+	if player != null and player.has_method("_hud_toast"):
+		player.call("_hud_toast", "BAG FULL  •  CLEAR SPACE BEFORE HARVEST")
 
 
 # ============================================================
@@ -1223,6 +823,14 @@ func _ground_below(p: Vector3) -> float:
 # ============================================================
 func _do_dig() -> void:
 	_cancel_hold()
+	_pending_dig_drop.clear()
+	var yield_item: String = str(_def.get("yield_item", ""))
+	if not yield_item.is_empty():
+		var amount := randi_range(int(_def.get("yield_min", 1)), int(_def.get("yield_max", 1)))
+		if not Inventory.can_store_rewards({yield_item: amount}):
+			_notify_bag_full()
+			return
+		_pending_dig_drop[yield_item] = amount
 	var tw := create_tween()
 	tw.tween_property(_container, "scale", Vector3.ONE * 0.04, 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
@@ -1230,10 +838,8 @@ func _do_dig() -> void:
 
 
 func _finish_dig() -> void:
-	var yield_item: String = _def.get("yield_item", "")
-	var amt: int = randi_range(int(_def.get("yield_min", 1)), int(_def.get("yield_max", 1)))
-	if yield_item != "":
-		Inventory.add(yield_item, amt)
+	_deliver_rewards(_pending_dig_drop)
+	_pending_dig_drop.clear()
 	_spawn_chips(Color(0.32, 0.22, 0.14), 4, 0.35)
 	var planter := get_parent().get_parent() as Planter
 	if planter != null and planter.has_method("clear_plant"):
@@ -1248,6 +854,9 @@ func _finish_dig() -> void:
 # ============================================================
 func _do_chop_hit() -> void:
 	_health -= 1
+	var player := _get_player()
+	if player != null and player.has_method("play_world_sfx"):
+		player.call("play_world_sfx", CHOP_SOUND, -9.0)
 	var trunk_col: Color = _def.get("trunk_color", Color(0.5, 0.36, 0.2))
 	_spawn_chips(trunk_col.lightened(0.15), 4, 0.3)
 	# Small trunk reaction so the hit visibly registers (no camera shake).
@@ -1261,17 +870,13 @@ func _do_chop_hit() -> void:
 
 func _start_fall() -> void:
 	_cancel_hold()
+	_pending_fell_drops = _roll_fell_drops()
+	if not Inventory.can_store_rewards(_pending_fell_drops):
+		_pending_fell_drops.clear()
+		_health = 1
+		_notify_bag_full()
+		return
 	_stage = Stage.FALLING
-	# RELEASE THE AIM VOLUME IMMEDIATELY: the falling tree's full-size aim box
-	# used to stay active through the fall + 5 s fade, eating every aim ray —
-	# the player could not target/chop the NEXT tree for ~6 s after each cut
-	# ("can only cut one tree at a time"). A dying tree aims at nothing.
-	if _col_shape != null and _col_shape.shape is BoxShape3D:
-		(_col_shape.shape as BoxShape3D).size = Vector3(0.2, 0.2, 0.2)
-		_col_shape.position = Vector3(0, 0.1, 0)
-	if _trunk_shape != null and is_instance_valid(_trunk_shape):
-		_trunk_shape.queue_free()
-	_trunk_shape = null
 	# Fall away from the player.
 	var p := _get_player()
 	var away := Vector3.FORWARD
@@ -1293,33 +898,54 @@ func _apply_fall(a: float) -> void:
 	_visual.rotate(_fell_axis, a)
 
 
-func _finish_fell() -> void:
-	# FELL IMPACT: all grown fruit scatters onto the ground as physical
-	# pickups BEFORE the wood reward — cutting a palm rains coconuts.
-	_scatter_all_fruits()
-	# Wood resources (configurable per plant in PlantDB.fell_drops).
+func _roll_fell_drops() -> Dictionary:
+	var rewards: Dictionary = {}
 	var drops: Array = _def.get("fell_drops", [])
-	for d in drops:
-		if not (d is Array) or d.size() < 3:
+	for drop in drops:
+		if not (drop is Array) or drop.size() < 3:
 			continue
-		var item_name: String = str(d[0])
-		var amt: int = randi_range(int(d[1]), int(d[2]))
-		if amt > 0:
-			Inventory.add(item_name, amt)
+		var item_name := str(drop[0])
+		var amount := randi_range(int(drop[1]), int(drop[2]))
+		if amount > 0:
+			rewards[item_name] = int(rewards.get(item_name, 0)) + amount
+	return rewards
+
+
+func _deliver_rewards(rewards: Dictionary) -> void:
+	for item_name in rewards:
+		var amount := maxi(0, int(rewards[item_name]))
+		if amount <= 0:
+			continue
+		var overflow := Inventory.add(str(item_name), amount)
+		if overflow > 0:
+			_spawn_reward_pickup(str(item_name), overflow)
+
+
+func _spawn_reward_pickup(item_name: String, amount: int) -> void:
+	if amount <= 0:
+		return
+	var pickup := ITEM_PICKUP_SCENE.instantiate()
+	if pickup == null or not (pickup is Node3D):
+		if pickup != null:
+			pickup.free()
+		return
+	pickup.set("item_name", item_name)
+	pickup.set("amount", amount)
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		scene_root = get_parent()
+	if scene_root == null:
+		pickup.free()
+		return
+	scene_root.add_child(pickup)
+	var offset := Vector3(randf_range(-0.3, 0.3), 0.55, randf_range(-0.3, 0.3))
+	(pickup as Node3D).global_position = global_position + offset
+
+
+func _finish_fell() -> void:
+	_deliver_rewards(_pending_fell_drops)
+	_pending_fell_drops.clear()
 	_spawn_chips(_def.get("trunk_color", Color(0.5, 0.36, 0.2)).darkened(0.1), 6, 0.5)
-	# SLOW FADE-OUT (user request: never vanish instantly): the felled tree
-	# wilts — scales down + sinks slightly over 5 s — then the stump appears.
-	# Cross-renderer safe: no material transparency mutation (baked materials
-	# are shared across every palm, so animating their alpha is not possible).
-	var tw := create_tween()
-	tw.tween_property(_visual, "scale", Vector3.ONE * 0.06, 5.0) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.parallel().tween_property(_visual, "position:y", -0.35, 5.0)
-	tw.tween_callback(_finish_fade)
-
-
-## End of the fell fade: swap to the stump and start the auto-regrow clock.
-func _finish_fade() -> void:
 	_stage = Stage.STUMP
 	for c in _container.get_children():
 		c.queue_free()
@@ -1327,28 +953,6 @@ func _finish_fade() -> void:
 	_build_stump_visual()
 	_container.scale = Vector3.ONE
 	_visual.rotation = Vector3.ZERO
-	# ISLAND AUTO-REGROW: stumps that are NOT in a planter (island palms/
-	# trees) grow back by themselves after ~1 in-game day; the player sees
-	# the whole sprout -> young -> mature growth again. Potted stumps keep
-	# the manual remove behavior (the planter slot stays occupied).
-	var planter := get_parent().get_parent() as Planter
-	if planter == null:
-		_regrow_wait = ISLAND_DAY_SECONDS * _rng.randf_range(0.9, 1.15)
-
-
-## Auto-regrow after the felled stump's day-long wait: restart from SPROUT.
-func _regrow_plant() -> void:
-	_regrow_wait = 0.0
-	_stage = Stage.SPROUT
-	_stage_timer = 0.0
-	_health = int(_def.get("chop_hits_required", 4))
-	_visual.rotation = Vector3.ZERO
-	_visual.scale = Vector3.ONE
-	_visual.position = Vector3.ZERO
-	_rebuild_visual()
-	_grow = STAGE_FRAC[Stage.SPROUT]
-	_container.scale = Vector3.ONE * _grow
-	_play_grow_pop()
 
 
 func _do_remove_stump() -> void:
@@ -1359,22 +963,3 @@ func _do_remove_stump() -> void:
 	if _progress_ui != null:
 		_progress_ui.queue_free()
 	queue_free()
-
-func survival_snapshot() -> Dictionary:
-	var fruit_times: Array = []
-	for fruit in _fruits:
-		fruit_times.append(float(fruit.get("elapsed", 0.0)))
-	return {"stage": _stage, "timer": _stage_timer, "health": _health, "grow": _grow, "fruits": fruit_times}
-
-func restore_survival_snapshot(data: Dictionary) -> void:
-	_stage = clampi(int(data.get("stage", 0)), Stage.SEED, Stage.STUMP)
-	if _stage == Stage.FALLING:
-		_stage = Stage.STUMP
-	_stage_timer = maxf(0.0, float(data.get("timer", 0.0)))
-	_health = maxi(1, int(data.get("health", 4)))
-	_grow = clampf(float(data.get("grow", STAGE_FRAC[0])), 0.04, 1.0)
-	_rebuild_visual()
-	_container.scale = Vector3.ONE * _grow
-	var times: Array = data.get("fruits", [])
-	for i in range(mini(times.size(), _fruits.size())):
-		_fruits[i]["elapsed"] = maxf(0.0, float(times[i]))

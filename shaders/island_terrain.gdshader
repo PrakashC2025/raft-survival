@@ -73,7 +73,7 @@ void fragment() {
 	col = mix(col, rock_color * (0.85 + 0.3 * n1), rock_k * 0.85);
 
 	// Wet look near the water line: smooth darkening + glossier surface.
-	float band = smoothstep(wetness_fade, 0.0, v_world.y - water_line);
+	float band = 1.0 - smoothstep(0.0, wetness_fade, v_world.y - water_line);
 	float depth_k = clamp((water_line - v_world.y) / max(wetness_depth, 0.01), 0.0, 1.0);
 	float wet = clamp(band + depth_k, 0.0, 1.0) * (1.0 - rock_k * 0.4);
 	col *= 1.0 - wet * 0.55;

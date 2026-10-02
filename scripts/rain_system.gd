@@ -22,16 +22,10 @@ class_name RainSystem
 @export var max_duration_minutes: float = 5.0
 
 # --- Falling rain visuals ---
-## MONSOON density: 1400 world-space drops fills the 24x16x24 m volume with
-## continuous streaks (700 left visible gaps). Halved automatically on
-## mobile builds — the Mobile renderer pays per-particle vertex cost.
-@export var particle_amount: int = 1400
+@export var particle_amount: int = 700
 @export var rain_area_size: Vector3 = Vector3(24.0, 16.0, 24.0)
 @export var fall_speed: float = 14.0
 @export var fade_time: float = 4.0
-## Color of the drops + splashes. Rain is thin water: it reads best as a
-## translucent sky-water BLUE (pure white streaks look like falling snow).
-@export var rain_color: Color = Color(0.52, 0.72, 0.95)
 ## Horizontal drift while falling (x = east/west, y = north/south). Small
 ## values (0.2-0.6) read as believable wind-blown rain; 0,0 = dead vertical.
 @export var wind_direction: Vector2 = Vector2(0.4, 0.15)
@@ -45,21 +39,21 @@ class_name RainSystem
 ## roof — rain is still visible at every open side, but never indoors.
 const COVER_CHECK_INTERVAL := 0.15
 const COVER_RAY_LENGTH := 14.0
-const COVER_MARGIN := 0.65      ## wind can blow drops sideways under the rim
-const COVER_PROBE_RADII := [1.2, 2.4, 3.6, 5.0]
+const COVER_MARGIN := 0.45      ## wind can blow drops sideways under the rim
+const COVER_PROBE_RADII := [1.2, 2.4, 3.6]
 ## Outdoor cap probes: while NOT under a roof, these find nearby building
 ## roofs/decks so the box top can be lowered below them (drops must never
 ## spawn above a nearby house and rain through it, visible from outside).
 const NEARBY_PROBE_DIRS := [
 	Vector2(1.0, 0.0), Vector2(-1.0, 0.0), Vector2(0.0, 1.0), Vector2(0.0, -1.0),
 	Vector2(0.707, 0.707), Vector2(-0.707, 0.707), Vector2(0.707, -0.707), Vector2(-0.707, -0.707)]
-const NEARBY_PROBE_RADII := [2.4, 5.0, 8.0, 12.0]
-const RING_SPAWN_ABOVE_CAMERA := 8.0  ## ring spawns this high: drops fall onto/outside the roof, never under it
+const NEARBY_PROBE_RADII := [2.4, 5.0, 8.0]
+const RING_SPAWN_ABOVE_CAMERA := 6.0  ## ring spawns this high: drops fall onto/outside the roof, never under it
 var _covered := false
 var _cover_timer := 0.0
+var _cover_check_interval := COVER_CHECK_INTERVAL
 var _cover_ring_radius := 4.0
 var _last_ring_radius := -1.0  ## last radius actually pushed into the material
-var _cover_roof_y := 0.0  ## Y of the roof underside when covered
 ## Rain box top (emitter-local Y). Lowered below nearby roof undersides when
 ## the camera is outdoors next to a building, so drops never spawn above a
 ## roof and fall through it into the walls.
@@ -122,9 +116,14 @@ var _orig_wave_height: float = -1.0
 
 func _ready() -> void:
 	add_to_group("rain_system")
-	# Mobile auto-density: half the drops (same rule as palms/grass scatter).
-	if OS.has_feature("mobile"):
-		particle_amount = maxi(int(particle_amount * 0.5), 300)
+	# Rain is an occasional weather event, so keep its particle and ray-query
+	# budget conservative on mobile without removing the effect.
+	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+		particle_amount = mini(particle_amount, 420)
+		splash_pool_size = mini(splash_pool_size, 8)
+		splash_particle_count = mini(splash_particle_count, 5)
+		splashes_per_second = minf(splashes_per_second, 10.0)
+		_cover_check_interval = 0.4
 	_find_refs()
 	_build_particles()
 	_build_splash_pool()
@@ -190,15 +189,12 @@ func _build_particles() -> void:
 	_particles.process_material = mat
 	_rain_process_mat = mat
 
-	# HEAVY-STORM STREAKS: long, THIN slivers (was 0.018 x ~0.63). Longer
-	# streaks read as fast-driving rain; thinner quads keep them delicate so
-	# density comes from count, not chunky white bars.
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.012, clampf(fall_speed * 0.062, 0.5, 1.35))
+	quad.size = Vector2(0.018, clampf(fall_speed * 0.045, 0.35, 0.9))
 	_rain_mat = StandardMaterial3D.new()
 	_rain_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_rain_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_rain_mat.albedo_color = Color(rain_color.r, rain_color.g, rain_color.b, 0.0)
+	_rain_mat.albedo_color = Color(0.75, 0.82, 0.9, 0.0)
 	_rain_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	# Soft particles: drops fade out where they meet existing geometry (water
 	# surface, roof slabs, decks) instead of visibly slicing through them.
@@ -222,7 +218,7 @@ func _build_splash_pool() -> void:
 	var smat := StandardMaterial3D.new()
 	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	smat.albedo_color = Color(rain_color.r, rain_color.g, rain_color.b, 0.95)
+	smat.albedo_color = Color(0.9, 0.95, 1.0, 0.95)
 	smat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	quad.material = smat
 
@@ -278,10 +274,7 @@ func _build_overlay() -> void:
 	var layer := CanvasLayer.new()
 	layer.name = "RainOverlay"
 	layer.layer = 15
-	# root, NOT current_scene: during a scene change _ready runs BEFORE
-	# current_scene is assigned — the old line crashed with a null instance
-	# ("stuck on loading") and skipped the whole rain overlay build.
-	get_tree().root.add_child.call_deferred(layer)
+	get_tree().current_scene.add_child.call_deferred(layer)
 
 	_overlay = ColorRect.new()
 	_overlay.color = Color(0.55, 0.65, 0.75, 0.0)
@@ -387,7 +380,7 @@ func _update_cover_state(delta: float) -> void:
 	_cover_timer -= delta
 	if _cover_timer > 0.0:
 		return
-	_cover_timer = COVER_CHECK_INTERVAL
+	_cover_timer = _cover_check_interval
 	if not _is_raining:
 		# No rain: skip the raycasts entirely, and make sure the emitter is
 		# back in full-box mode for the next downpour.
@@ -432,7 +425,6 @@ func _measure_cover() -> bool:
 	q.exclude = exclude
 	var hit := space.intersect_ray(q)
 	if _is_cover_hit(hit):
-		_cover_roof_y = (hit["position"] as Vector3).y
 		# How far does the cover extend? Walk 4 axis directions outward; stop
 		# at the first radius whose upward ray misses (open sky = rim found).
 		var inner := INF
@@ -488,13 +480,13 @@ func _apply_cover_mode() -> void:
 		_rain_process_mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
 		_rain_process_mat.emission_ring_axis = Vector3.UP
 		_rain_process_mat.emission_ring_height = 0.4
-		_rain_process_mat.emission_ring_radius = _cover_ring_radius + 3.5
-		_rain_process_mat.emission_ring_inner_radius = _cover_ring_radius
-		_particles.amount = mini(particle_amount + 800, particle_amount * 2)
-		# Spawn above the roof underside so drops fall DOWN onto the roof,
-		# never through it.
-		var roof_offset := _cover_roof_y - global_position.y + 1.5
-		_particles.position = Vector3(0.0, maxf(roof_offset, RING_SPAWN_ABOVE_CAMERA), 0.0)
+		_rain_process_mat.emission_ring_radius = _cover_ring_radius
+		_rain_process_mat.emission_ring_inner_radius = _cover_ring_radius + 2.8
+		var ring_particle_amount: int = mini(particle_amount + 500, particle_amount * 2)
+		if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+			ring_particle_amount = particle_amount
+		_particles.amount = ring_particle_amount
+		_particles.position = Vector3(0.0, RING_SPAWN_ABOVE_CAMERA, 0.0)
 	else:
 		# Outdoors: full box around the camera, with the top capped just below
 		# any nearby roof underside (_box_top == full height when no building
@@ -546,9 +538,7 @@ func _update_intensity(delta: float) -> void:
 		_intensity = move_toward(_intensity, _target_intensity, delta / fade_time)
 
 	if _rain_mat != null:
-		# Thin streaks carry less light per drop, so the cap sits a touch
-		# higher than before to keep the downpour dense on screen.
-		_rain_mat.albedo_color.a = clampf(_intensity * 0.62, 0.0, 0.62)
+		_rain_mat.albedo_color.a = clampf(_intensity * 0.55, 0.0, 0.55)
 
 	if rain_sound != null:
 		_audio.volume_db = lerpf(-80.0, -6.0, _intensity)
@@ -558,9 +548,7 @@ func _update_intensity(delta: float) -> void:
 	if _env != null and _orig_ambient_energy >= 0.0:
 		_env.ambient_light_energy = lerpf(_orig_ambient_energy, _orig_ambient_energy * 0.7, _intensity)
 	if _ocean != null and _orig_wave_height >= 0.0:
-		# RAIN = slightly choppier, NOT a storm swell: +12% reads as rain-patted
-		# water; the old +35% built rolling hills during every shower.
-		_ocean.set("wave_height", lerpf(_orig_wave_height, _orig_wave_height * 1.12, _intensity))
+		_ocean.set("wave_height", lerpf(_orig_wave_height, _orig_wave_height * 1.35, _intensity))
 
 	if _overlay != null:
 		_overlay.color.a = clampf(_intensity * 0.08, 0.0, 0.08)
@@ -576,12 +564,16 @@ func _update_intensity(delta: float) -> void:
 # "Structures") get a brighter, faster burst; open water gets a softer one.
 # ============================================================
 func _process_splashes(delta: float) -> void:
-	if not splash_enabled or not _is_raining or _intensity <= 0.05 or _camera == null:
+	if not splash_enabled or _splash_pool.is_empty() or not _is_raining \
+			or _intensity <= 0.05 or _camera == null:
 		return
 	if _camera_submerged:
 		return  # no splashes while the camera is underwater
-	_splash_accum += delta * splashes_per_second * _intensity
-	while _splash_accum >= 1.0:
+	# Never catch up a backlog of raycasts after a slow frame or app resume.
+	# A single splash per rendered frame is visually enough and puts a hard cap
+	# on the worst-case work this cosmetic effect can trigger.
+	_splash_accum = minf(_splash_accum + delta * splashes_per_second * _intensity, 1.0)
+	if _splash_accum >= 1.0:
 		_splash_accum -= 1.0
 		_spawn_one_splash()
 
@@ -627,6 +619,8 @@ func _spawn_one_splash() -> void:
 
 
 func _fire_splash(pos: Vector3, on_structure: bool) -> void:
+	if _splash_pool.is_empty():
+		return
 	var p: GPUParticles3D = _splash_pool[_splash_index]
 	_splash_index = (_splash_index + 1) % _splash_pool.size()
 	p.global_position = pos + Vector3(0, 0.02, 0)

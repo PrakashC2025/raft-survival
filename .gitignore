@@ -2,20 +2,5 @@
 .godot/
 /android/
 
-# Exported builds and signing artifacts — never commit these
-*.apk
-*.idsig
-build/
-
-# Large unused source mesh (218 MB) — deleted; the game uses grass/rs_grass.glb
+# Large unused source mesh (217 MB) — kept on disk, not in git
 grass/*.obj
-
-# Local survival validation artifacts
-tools/test_userdata/
-tools/*runtime.log
-tools/campaign_*.log
-tools/survival_parse.log
-tools/survival_validation.log
-
-tools/asset_downloads/
-tools/mobile_*.log
