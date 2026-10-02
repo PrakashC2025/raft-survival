@@ -107,10 +107,13 @@ func _build_field(generation: int) -> void:
 	# a field this size cannot monopolize the main thread on mobile.
 	var xforms: Array[Transform3D] = []
 	var customs: Array[Color] = []
-	var attempts := maxi(instance_count, 0) * 3
+	var target_count := maxi(instance_count, 0)
+	if not Engine.is_editor_hint() and (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")):
+		target_count = mini(target_count, 2500)
+	var attempts := target_count * 3
 	var misses := 0
 	var rays_since_yield := 0
-	while xforms.size() < instance_count and attempts > 0:
+	while xforms.size() < target_count and attempts > 0:
 		attempts -= 1
 		rays_since_yield += 1
 		var a := _rng.randf() * TAU

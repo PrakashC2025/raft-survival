@@ -1,6 +1,8 @@
 extends Node3D
 class_name RopeSystem
 
+const ROPE_VISUAL := preload("res://scripts/rope_launcher_visual.gd")
+
 ## Ocean-survival hook + rope system.
 ## Q = charge & throw hook toward the crosshair. Right-click (rope_cancel) = recall.
 ## Fully automatic after the throw:
@@ -20,10 +22,12 @@ var _state: int = State.IDLE
 # ============================================================
 # EXPORTS
 # ============================================================
-@export var max_hook_distance: float = 22.0
-@export var throw_speed: float = 22.0
-@export var reel_speed: float = 14.0
-@export var return_speed: float = 30.0
+@export var max_hook_distance: float = 60.0
+@export var quick_cast_distance: float = 20.0
+@export var charge_speed: float = 50.0
+@export var throw_speed: float = 42.0
+@export var reel_speed: float = 18.0
+@export var return_speed: float = 45.0
 @export var debris_hook_radius: float = 1.8
 @export var collection_radius: float = 1.5
 ## How long the hook rests when nothing is hooked before auto-returning.
@@ -41,12 +45,14 @@ var _state: int = State.IDLE
 var player: Node3D = null
 var camera: Camera3D = null
 
-var _hook: MeshInstance3D = null
+var _hook: Node3D = null
 var _hook_origin: Node3D = null
 var _rope_mesh: MeshInstance3D = null
-var _rope_material: StandardMaterial3D = null
+var _rope_material: ShaderMaterial = null
+var _rope_geometry: ImmediateMesh = null
 var _aim_ray: RayCast3D = null
 var _charge_bar: ColorRect = null
+var _charge_label: Label = null
 
 # ============================================================
 # STATE — all world-space, immutable after throw
@@ -54,6 +60,8 @@ var _charge_bar: ColorRect = null
 var _throw_direction: Vector3 = Vector3.FORWARD
 var _throw_start: Vector3 = Vector3.ZERO
 var _throw_dist: float = 0.0
+var _throw_end := Vector3.ZERO
+var _launch_kick := 0.0
 var _hook_world_pos: Vector3 = Vector3.ZERO
 var _hook_travelled: float = 0.0
 var _state_timer: float = 0.0
@@ -65,7 +73,7 @@ var _hooked_debris: Array[RigidBody3D] = []
 var _collected: bool = false
 var _is_charging: bool = false
 var _charge_distance: float = 0.0
-var _charge_speed: float = 30.0
+
 
 # ============================================================
 # INIT
@@ -104,37 +112,37 @@ func _create_hook_origin() -> void:
 
 
 func _create_hook() -> void:
-	_hook = MeshInstance3D.new()
-	_hook.name = "Hook"
-	var mesh := SphereMesh.new()
-	mesh.radius = 0.1
-	mesh.height = 0.2
-	_hook.mesh = mesh
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.9, 0.8, 0.2)
-	mat.emission_enabled = true
-	mat.emission = Color(0.9, 0.8, 0.2) * 0.3
-	_hook.material_override = mat
+	_hook = ROPE_VISUAL.create_hook()
 	_hook.visible = false
+	_hook.top_level = true
 	add_child(_hook)
-
 
 func _create_rope_mesh() -> void:
 	_rope_mesh = MeshInstance3D.new()
 	_rope_mesh.name = "RopeMesh"
-	_rope_material = StandardMaterial3D.new()
-	_rope_material.albedo_color = Color(0.7, 0.6, 0.3)
-	_rope_material.no_depth_test = false
+	_rope_geometry = ImmediateMesh.new()
+	_rope_mesh.mesh = _rope_geometry
+	_rope_material = ShaderMaterial.new()
+	_rope_material.shader = preload("res://shaders/rope_fiber.gdshader")
 	_rope_mesh.material_override = _rope_material
+	_rope_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_rope_mesh.visible = false
+	_rope_mesh.top_level = true
 	add_child(_rope_mesh)
-
 
 func _create_charge_bar() -> void:
 	_charge_bar = ColorRect.new()
 	_charge_bar.color = Color(0.9, 0.8, 0.2, 0.75)
 	_charge_bar.visible = false
-	_charge_bar.size = Vector2(0, 5)
+	_charge_bar.size = Vector2(0, 6)
+	_charge_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_charge_label = Label.new()
+	_charge_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_charge_label.add_theme_font_size_override("font_size", 17)
+	_charge_label.position = Vector2(-55, -27)
+	_charge_label.size = Vector2(310, 24)
+	_charge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_charge_bar.add_child(_charge_label)
 	add_child(_charge_bar)
 
 
@@ -150,7 +158,7 @@ func _create_aim_ray() -> void:
 # ============================================================
 ## Aim point: real raycast hit (raft/debris), otherwise the point where the
 ## crosshair ray crosses the OCEAN SURFACE. Without this the hook used to fly
-## 22 m straight at eye height and never reach the water where debris float.
+## straight at eye height and never reach the water where debris float.
 func _get_aim_point() -> Vector3:
 	if camera == null:
 		return _hook_origin.global_position + Vector3(0, 0, -10)
@@ -158,6 +166,7 @@ func _get_aim_point() -> Vector3:
 		_aim_ray.add_exception(player)
 	_aim_ray.global_position = camera.global_position
 	_aim_ray.global_rotation = camera.global_rotation
+	_aim_ray.target_position = Vector3(0, 0, -max_hook_distance)
 	_aim_ray.force_raycast_update()
 	if _aim_ray.is_colliding():
 		return _aim_ray.get_collision_point()
@@ -202,12 +211,13 @@ func _is_editing_active() -> bool:
 # PHYSICS — main update
 # ============================================================
 func _physics_process(delta: float) -> void:
+	_launch_kick = move_toward(_launch_kick, 0.0, delta * 6.0)
 	if player == null or camera == null:
 		return
 
 	# Block during build/edit
 	if _is_build_active() or _is_editing_active():
-		if _state != State.IDLE:
+		if _state != State.IDLE or _is_charging:
 			_force_cancel()
 		return
 
@@ -242,13 +252,14 @@ func _physics_process(delta: float) -> void:
 func _update_hook_origin() -> void:
 	if player == null or camera == null:
 		return
-	var b := camera.global_transform.basis
-	var cam_pos := camera.global_position
-	# Hand anchor — matches the visible viewmodel fist (Camera3D/HandPivot).
-	# Placed so the fist stays INSIDE the camera frustum on desktop AND
-	# portrait mobile: 0.55 m forward, 0.30 m below, 0.18 m right.
-	_hook_origin.global_position = cam_pos - b.y * 0.30 + b.x * 0.18 - b.z * 0.55
+	if player.has_method("get_rope_launch_origin"):
+		_hook_origin.global_position = player.call("get_rope_launch_origin")
+	else:
+		_hook_origin.global_position = camera.global_transform * Vector3(0.18, -0.22, -0.95)
 
+
+func get_launcher_kick() -> float:
+	return _launch_kick
 
 # ============================================================
 # STATE: IDLE
@@ -259,9 +270,9 @@ func _handle_idle(delta: float) -> void:
 		return
 	if Input.is_action_just_pressed("rope_throw"):
 		_is_charging = true
-		_charge_distance = 5.0
+		_charge_distance = minf(quick_cast_distance, max_hook_distance)
 	elif _is_charging and Input.is_action_pressed("rope_throw"):
-		_charge_distance = minf(_charge_distance + _charge_speed * delta, max_hook_distance)
+		_charge_distance = minf(_charge_distance + charge_speed * delta, max_hook_distance)
 	elif _is_charging and Input.is_action_just_released("rope_throw"):
 		_throw_hook()
 
@@ -285,17 +296,22 @@ func _handle_throwing(delta: float) -> void:
 		remaining -= step
 		_hook_travelled += step
 		if _hook_travelled >= _throw_dist:
-			_hook_world_pos = _throw_start + _throw_direction * _throw_dist
+			_hook_world_pos = _throw_end
 			_hook_travelled = _throw_dist
 			_check_debris()
 			_finish_flight()
 			return
-		_hook_world_pos = _throw_start + _throw_direction * _hook_travelled
+		_hook_world_pos = _flight_position(_hook_travelled)
 		_check_debris()
 		if not _hooked_debris.is_empty():
 			_enter_hooked()
 			return
 
+
+func _flight_position(distance_along: float) -> Vector3:
+	var progress := clampf(distance_along / maxf(_throw_dist, 0.001), 0.0, 1.0)
+	var arc := minf(3.0, 0.5 + _throw_dist * 0.035)
+	return _throw_start.lerp(_throw_end, progress) + Vector3.UP * sin(progress * PI) * arc
 
 func _finish_flight() -> void:
 	_snap_hook_to_water()
@@ -433,7 +449,7 @@ func _handle_returning(delta: float) -> void:
 		return
 
 	var dir := to_hand.normalized()
-	_hook_world_pos += dir * return_speed * delta
+	_hook_world_pos += dir * minf(return_speed * delta, dist)
 
 
 # ============================================================
@@ -442,6 +458,7 @@ func _handle_returning(delta: float) -> void:
 func _throw_hook() -> void:
 	_is_charging = false
 	_charge_bar.visible = false
+	_update_hook_origin()
 
 	var aim_point := _get_aim_point()
 	var hand := _hand_pos()
@@ -454,12 +471,19 @@ func _throw_hook() -> void:
 	else:
 		_throw_direction = -camera.global_transform.basis.z
 
-	_throw_dist = minf(_charge_distance, max_hook_distance)
+	_throw_dist = clampf(_charge_distance, minf(quick_cast_distance, max_hook_distance), max_hook_distance)
 	# If the aim point is nearer than the charge (e.g. raft edge in the way),
 	# don't overshoot past it.
 	if aim_dist > 1.0 and aim_dist < _throw_dist:
 		_throw_dist = aim_dist
 	_throw_start = hand
+	_throw_end = hand + _throw_direction * _throw_dist
+	# Resolve a real water landing instead of teleporting the hook down at range.
+	_throw_end.y = _get_ocean_y(_throw_end) + 0.15
+	_throw_dist = minf(hand.distance_to(_throw_end), max_hook_distance)
+	_throw_direction = (_throw_end - hand).normalized()
+	_throw_end = hand + _throw_direction * _throw_dist
+	_launch_kick = 1.0
 	_hook_world_pos = hand
 	_hook_travelled = 0.0
 	_hooked_debris.clear()
@@ -598,53 +622,50 @@ func _update_hook_visual() -> void:
 		return
 	_hook.visible = true
 	_hook.global_position = _hook_world_pos
+	var toward := _throw_end - _hook_world_pos if _state == State.THROWING else _hand_pos() - _hook_world_pos
+	if toward.length_squared() > 0.001:
+		_hook.look_at(_hook_world_pos + toward, Vector3.RIGHT if absf(toward.normalized().y) > 0.95 else Vector3.UP)
 
 
 func _update_rope_visual() -> void:
 	if _state == State.IDLE:
 		_rope_mesh.visible = false
 		return
-
 	var from := _hand_pos()
 	var to := _hook_world_pos
-	var rope_len := from.distance_to(to)
-
-	if rope_len < 0.1:
+	var length := from.distance_to(to)
+	if length < 0.1:
 		_rope_mesh.visible = false
 		return
-
 	_rope_mesh.visible = true
-
-	# Build a tube mesh along the rope path using CylinderMesh
-	var mid := (from + to) * 0.5
-	var dir := to - from
-	var height := rope_len
-
-	_rope_mesh.global_position = mid
-	_rope_mesh.global_rotation = Vector3.ZERO
-
-	# CylinderMesh extends along local Y axis — orient Y along the rope
-	var rope_dir := dir.normalized()
-	var arbitrary := Vector3.UP
-	if abs(rope_dir.dot(Vector3.UP)) > 0.9:
-		arbitrary = Vector3.FORWARD
-	var right := arbitrary.cross(rope_dir).normalized()
-	var perp := rope_dir.cross(right).normalized()
-	# Y axis = rope direction, X = right, Z = perpendicular
-	_rope_mesh.global_transform.basis = Basis(right, rope_dir, perp)
-
-	# Update the cylinder mesh
-	var existing_mesh := _rope_mesh.mesh
-	var cyl: CylinderMesh = null
-	if existing_mesh is CylinderMesh:
-		cyl = existing_mesh as CylinderMesh
-	else:
-		cyl = CylinderMesh.new()
-		cyl.top_radius = 0.025
-		cyl.bottom_radius = 0.025
-		_rope_mesh.mesh = cyl
-	cyl.height = height
-
+	# Twelve short tube segments make the line sag naturally. A single reused
+	# mesh/material keeps this independent of cast distance on phones.
+	var segments := 12
+	var sides := 6
+	var direction := (to - from).normalized()
+	var right := direction.cross(Vector3.RIGHT if absf(direction.y) > 0.95 else Vector3.UP).normalized()
+	var up := right.cross(direction).normalized()
+	var sag := minf(0.7, length * 0.02) if _state in [State.THROWING, State.EXTENDED] else minf(0.12, length * 0.004)
+	_rope_geometry.clear_surfaces()
+	_rope_geometry.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for segment in range(segments):
+		var t0 := float(segment) / segments
+		var t1 := float(segment + 1) / segments
+		var p0 := from.lerp(to, t0) - Vector3.UP * sin(t0 * PI) * sag
+		var p1 := from.lerp(to, t1) - Vector3.UP * sin(t1 * PI) * sag
+		for side in range(sides):
+			var a := TAU * float(side) / sides
+			var b := TAU * float(side + 1) / sides
+			var na := right * cos(a) + up * sin(a)
+			var nb := right * cos(b) + up * sin(b)
+			var vertices := [p0 + na * 0.011, p1 + nb * 0.011, p1 + na * 0.011, p0 + na * 0.011, p0 + nb * 0.011, p1 + nb * 0.011]
+			for index in range(6):
+				var at_end: bool = index in [1, 2, 5]
+				var at_next_side: bool = index in [1, 4, 5]
+				_rope_geometry.surface_set_normal(nb if at_next_side else na)
+				_rope_geometry.surface_set_uv(Vector2(float(side + (1 if at_next_side else 0)) / sides, (t1 if at_end else t0) * length))
+				_rope_geometry.surface_add_vertex(vertices[index])
+	_rope_geometry.surface_end()
 
 func _update_charge_bar_ui() -> void:
 	if _charge_bar == null:
@@ -653,7 +674,8 @@ func _update_charge_bar_ui() -> void:
 		_charge_bar.visible = true
 		var vp := get_viewport().get_visible_rect().size
 		var bar_w := (_charge_distance / max_hook_distance) * 200.0
-		_charge_bar.size = Vector2(bar_w, 5)
-		_charge_bar.position = Vector2(vp.x * 0.5 - bar_w * 0.5, vp.y * 0.5 + 35.0)
+		_charge_bar.size = Vector2(bar_w, 6)
+		_charge_bar.position = Vector2(vp.x * 0.5 - 100.0, vp.y * 0.5 + 40.0)
+		_charge_label.text = "CAST %.0f m  ·  RELEASE TO FIRE" % _charge_distance
 	else:
 		_charge_bar.visible = false

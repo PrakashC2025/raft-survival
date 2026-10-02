@@ -30,9 +30,9 @@ extends Control
 ## ============================================================
 
 const GAME_SCENE := "res://scenes/main.tscn"
-## Seconds a tap may wait on the background load before we force a normal,
-## blocking load instead. Never reached on a healthy build — pure safety net.
-const ENTER_TIMEOUT := 20.0
+## Seconds a tap may wait before reporting a retryable loading timeout.
+## Keep loading asynchronous so a slow phone can still draw progress and respond.
+const ENTER_TIMEOUT := 90.0
 
 # button ids in display order
 var _buttons: Array = []          # of {id, label, sub}
@@ -58,7 +58,7 @@ var _error := ""                  # non-empty -> drawn as a red banner
 
 func _ready() -> void:
 	if _is_mobile():
-		Engine.max_fps = 60
+		Engine.max_fps = GameSettings.target_fps
 	anchor_left = 0.0
 	anchor_top = 0.0
 	anchor_right = 1.0
@@ -72,6 +72,7 @@ func _ready() -> void:
 		_buttons.append({"id": "quick", "label": "QUICK SAVE",
 			"sub": _save_sub("quick")})
 	_buttons.append({"id": "new", "label": "NEW GAME", "sub": ""})
+	_buttons.append({"id": "settings", "label": "SETTINGS", "sub": ""})
 	# Build the hit rects right away: the first tap must never arrive before
 	# the first _draw() has run.
 	_vp = size
@@ -121,11 +122,7 @@ func _process(delta: float) -> void:
 			_swap_scene(_packed_game)
 			return
 		if _wait_seconds > ENTER_TIMEOUT:
-			# Background load is not answering: fall back to a blocking load so
-			# the button can never strand the player on the menu.
-			_waiting_to_enter = false
-			_wait_seconds = 0.0
-			_swap_scene(null)
+			_fail("LOADING IS TAKING TOO LONG · try again")
 			return
 	if not visible:
 		return
@@ -140,6 +137,8 @@ func _process(delta: float) -> void:
 # INPUT — custom buttons (works with mouse and touch)
 # ============================================================
 func _gui_input(event: InputEvent) -> void:
+	if GameSettings.is_open:
+		return
 	var mb := event as InputEventMouseButton
 	if mb == null or mb.button_index != MOUSE_BUTTON_LEFT:
 		return
@@ -157,6 +156,8 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if GameSettings.is_open:
+		return
 	var handled := false
 	if event is InputEventScreenTouch:
 		var t := event as InputEventScreenTouch
@@ -222,13 +223,19 @@ func _ensure_layout() -> void:
 func _activate(btn_idx: int) -> void:
 	if btn_idx < 0 or btn_idx >= _buttons.size() or _busy:
 		return
+	if str(_buttons[btn_idx]["id"]) == "settings":
+		GameSettings.open()
+		return
 	_busy = true
 	_pending_idx = btn_idx
 	_error = ""
 	# Remember the choice; the save slot is only touched once we know the game
 	# scene can really be opened (never wipe a save for a transition that fails).
 	_selected_id = str(_buttons[btn_idx]["id"])
-	_enter_game()
+	if _packed_game == null and not _load_requested:
+		_request_game_load()
+	if _busy:
+		_enter_game()
 	queue_redraw()
 
 
@@ -238,7 +245,8 @@ func _apply_selection() -> void:
 	elif _selected_id == "quick":
 		Inventory.load_game("quick")
 	elif _selected_id == "new":
-		Inventory.new_game_reset()
+		# Keep the on-disk saves until the new world successfully starts saving.
+		Inventory.new_game_reset(false)
 	_selected_id = ""
 
 
@@ -253,19 +261,29 @@ func _enter_game() -> void:
 		_wait_seconds = 0.0
 		queue_redraw()
 		return
-	# Nothing usable in the background -> fall back to a normal blocking load.
-	_swap_scene(null)
+	# A failed request has already unlocked the menu and shown an error.
+	if _busy:
+		_fail("GAME FILES COULD NOT LOAD · install the updated APK")
 
 
 func _swap_scene(packed: PackedScene) -> void:
-	var can_pack := packed != null and packed.can_instantiate()
-	if not can_pack and not ResourceLoader.exists(GAME_SCENE):
-		_fail("COULD NOT START GAME  ·  no scene")
+	# Resolve every dependency BEFORE changing inventory or touching a save.
+	if packed == null:
+		packed = ResourceLoader.load(GAME_SCENE) as PackedScene
+	if packed == null or not packed.can_instantiate():
+		_fail("GAME FILES COULD NOT LOAD · install the updated APK")
 		return
+	var previous_slots: Array = Inventory.slots.duplicate(true)
+	var previous_meta: Dictionary = Inventory.loaded_meta.duplicate(true)
+	var previous_pickups: Dictionary = Inventory.collected_island_pickups.duplicate(true)
 	_apply_selection()
-	var err: int = get_tree().change_scene_to_packed(packed) if can_pack \
-		else get_tree().change_scene_to_file(GAME_SCENE)
+	var err: int = get_tree().change_scene_to_packed(packed)
 	if err != OK:
+		Inventory.slots = previous_slots
+		Inventory.loaded_meta = previous_meta
+		Inventory.collected_island_pickups = previous_pickups
+		Inventory._recompute()
+		Inventory.changed.emit()
 		_fail("COULD NOT START GAME  ·  err %d" % err)
 
 
@@ -280,7 +298,7 @@ func _fail(msg: String) -> void:
 	_selected_id = ""
 	# Allow the next tap to start the load over instead of waiting forever on a
 	# background request that is never going to answer.
-	_load_requested = false
+	_load_requested = ResourceLoader.load_threaded_get_status(GAME_SCENE) == ResourceLoader.THREAD_LOAD_IN_PROGRESS
 	queue_redraw()
 
 
@@ -316,7 +334,7 @@ func _poll_game_load() -> void:
 			return
 		_fail(GAME_SCENE + "  IS NOT A SCENE")
 		return
-	_fail("GAME SCENE FAILED TO LOAD  ·  code %d" % int(st))
+	_fail("GAME FILES FAILED TO LOAD · install the updated APK (code %d)" % int(st))
 
 
 # ============================================================
@@ -330,13 +348,13 @@ func _layout_buttons() -> void:
 	var bw: float = minf(s.x * 0.78, 440.0)
 	var bhs: Array = []
 	for b in _buttons:
-		bhs.append(104.0 if str(b["sub"]) != "" else 92.0)
-	var gap: float = 20.0
+		bhs.append(clampf(s.y * 0.12, 56.0, 84.0) if str(b["sub"]) != "" else clampf(s.y * 0.10, 52.0, 72.0))
+	var gap: float = clampf(s.y * 0.02, 10.0, 16.0)
 	var total_h: float = 0.0
 	for h in bhs:
 		total_h += float(h)
 	total_h += gap * float(maxi(0, bhs.size() - 1))
-	var y: float = (s.y * 0.5) - total_h * 0.5 + s.y * 0.03
+	var y: float = maxf(s.y * 0.31, (s.y * 0.5) - total_h * 0.5 + s.y * 0.10)
 	for i in range(_buttons.size()):
 		var w2: float = bw
 		if str(_buttons[i]["sub"]) != "":
@@ -439,12 +457,12 @@ func _draw_ocean(s: Vector2, horizon: float) -> void:
 
 func _draw_title(s: Vector2) -> void:
 	var font := ThemeDB.fallback_font
-	var fs: int = int(clampf(s.y * 0.105, 40.0, 74.0))
+	var fs: int = int(clampf(s.y * 0.075, 28.0, 54.0))
 	var title := "RAFT SURVIVAL"
 	var tw: float = font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	_title_w = tw
 	var cx: float = s.x * 0.5
-	var ty: float = s.y * 0.16 + fs
+	var ty: float = s.y * 0.08 + fs
 	# wooden plaque behind the title
 	var pad: float = fs * 0.8
 	var plaque := Rect2(cx - tw * 0.5 - pad, ty - fs * 1.15, tw + pad * 2.0, fs * 1.9)

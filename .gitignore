@@ -1,6 +1,30 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+export/
+user/
 
-# Large unused source mesh (217 MB) — kept on disk, not in git
+# APK and export presets — not source code
+*.apk
+*.idsig
+export_presets.cfg
+
+# Godot cache and import metadata
+*.import
+*.meta
+
+# User data and saves
+/user/
+
+# Build artifacts
+/bin/
+/build/
+
+# Platform-specific
+/Android/
+/iOS/
+
+# Project-specific large files
 grass/*.obj
+grass/*.glb
+models/*.glb

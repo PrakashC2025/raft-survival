@@ -33,8 +33,8 @@ const STATS := [["health", "Health"], ["hunger", "Hunger"], ["thirst", "Thirst"]
 const MAP_RANGE_METERS := 430.0
 
 const HOTBAR_COUNT := 6
-const BAG_COLS := 5
-const BAG_ROWS := 6   # 5x5 bag + 1 hotbar row = 30
+const BAG_COLS := 6
+const BAG_ROWS := 5   # 24 bag slots + one row of six hotbar slots
 
 var _bag_open := false
 var _map_open := false
@@ -95,6 +95,8 @@ var _paused := false
 var _pause_panel_rect := Rect2()
 var _pause_resume_rect := Rect2()
 var _pause_quit_rect := Rect2()
+var _pause_settings_rect := Rect2()
+var _inventory_touch_id := -1
 var _death_open := false
 var _death_panel_rect := Rect2()
 var _death_respawn_rect := Rect2()
@@ -127,7 +129,7 @@ func _inventory_changed() -> void:
 
 ## True while a HUD modal should keep one-shot world actions from firing.
 func gameplay_input_blocked() -> bool:
-	return _map_open or _craft_open or _bag_open or _paused or _death_open
+	return GameSettings.is_open or _map_open or _craft_open or _bag_open or _paused or _death_open
 
 
 func _on_bag_full(amount: int) -> void:
@@ -146,6 +148,7 @@ func show_toast(text: String) -> void:
 
 
 func show_death() -> void:
+	GameSettings.release_gameplay_input()
 	_death_open = true
 	_map_open = false
 	_craft_open = false
@@ -184,6 +187,7 @@ func toggle_map() -> void:
 	if _paused:
 		return
 	_map_open = true
+	GameSettings.release_gameplay_input()
 	_craft_open = false
 	_bag_open = false
 	_selected_island = null
@@ -196,12 +200,15 @@ func toggle_map() -> void:
 
 
 func toggle_crafting() -> void:
+	if _death_open:
+		return
 	if _craft_open:
 		_close_crafting()
 		return
 	if _paused:
 		return
 	_craft_open = true
+	GameSettings.release_gameplay_input()
 	_map_open = false
 	_bag_open = false
 	_cancel_drag()
@@ -240,13 +247,41 @@ func _touch_ui_active() -> bool:
 
 
 func _should_show() -> bool:
-	return _touch_ui_active() or _map_open or _craft_open or _bag_open or _death_open
+	return _touch_ui_active() or _map_open or _craft_open or _bag_open or _paused or _death_open
 
 
 func _on_size_changed() -> void:
 	size = get_viewport().get_visible_rect().size
 	position = Vector2.ZERO
 	queue_redraw()
+	_cancel_drag()
+	_compute_layout()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_PAUSED:
+		if not _death_open and not GameSettings.is_open:
+			_map_open = false
+			_craft_open = false
+			_set_paused(true)
+
+
+func handle_back() -> void:
+	if _death_open:
+		return
+	if not GameSettings.is_open:
+		var controls := get_parent().get_node_or_null("MobileControls")
+		if controls != null and bool(controls.get("_help_open")):
+			controls.call("_set_help", false)
+		elif _map_open:
+			_close_map()
+		elif _craft_open:
+			_close_crafting()
+		elif _bag_open:
+			_bag_open = false
+			_cancel_drag()
+		else:
+			_set_paused(not _paused)
 
 
 func _process(_delta: float) -> void:
@@ -272,17 +307,18 @@ func _process(_delta: float) -> void:
 # PUBLIC — coordination with MobileControls
 # ============================================================
 func is_blocking() -> bool:
-	return visible and (_bag_open or _map_open or _craft_open or _paused or _death_open)
+	return GameSettings.is_open or (visible and (_bag_open or _map_open or _craft_open or _paused or _death_open))
 
 
 ## Should MobileControls treat this screen point as HUD territory (never
 ## start camera look from it)?
 func claims_touch(pos: Vector2) -> bool:
+	_compute_layout()
 	if not visible:
 		return false
 	if _bag_open or _map_open or _craft_open or _paused or _death_open:
 		return true
-	if _bag_rect.has_point(pos) or _map_button_rect.has_point(pos) or _craft_button_rect.has_point(pos):
+	if _pause_btn_rect.has_point(pos) or _bag_rect.has_point(pos) or _map_button_rect.has_point(pos) or _craft_button_rect.has_point(pos):
 		return true
 	for r in _hotbar_rects:
 		if r.has_point(pos):
@@ -330,7 +366,7 @@ func _compute_layout() -> void:
 	# pause button centered under the clock caption (same far-right column)
 	_pause_btn_rect = Rect2()
 	if _clock_r > 0.0:
-		var pb_r: float = _clock_r * 0.66
+		var pb_r: float = maxf(24.0, _clock_r * 0.66)
 		var pb_y: float = _clock_center.y + _clock_r + cap_fs * 1.75 + pb_r
 		_pause_center = Vector2(_clock_center.x, pb_y)
 		_pause_btn_rect = Rect2(_pause_center.x - pb_r, _pause_center.y - pb_r, pb_r * 2.0, pb_r * 2.0)
@@ -503,16 +539,18 @@ func _compute_layout() -> void:
 		var ptrow: float = clampf(_vp.y * 0.055, 30.0, 46.0)
 		var pbh2: float = clampf(_vp.y * 0.078, 46.0, 68.0)
 		var psep2: float = clampf(_vp.y * 0.02, 10.0, 16.0)
-		var pph2: float = ppad * 2.0 + ptrow + psep2 + pbh2 * 2.0 + psep2
+		var pph2: float = ppad * 2.0 + ptrow + psep2 + pbh2 * 3.0 + psep2 * 2.0
 		_pause_panel_rect = Rect2((_vp.x - ppw) * 0.5, (_vp.y - pph2) * 0.5, ppw, pph2)
 		var pqx: float = _pause_panel_rect.position.x + ppad
 		var pqw: float = ppw - ppad * 2.0
 		_pause_resume_rect = Rect2(pqx, _pause_panel_rect.position.y + ppad + ptrow + psep2, pqw, pbh2)
-		_pause_quit_rect = Rect2(pqx, _pause_resume_rect.end.y + psep2, pqw, pbh2)
+		_pause_settings_rect = Rect2(pqx, _pause_resume_rect.end.y + psep2, pqw, pbh2)
+		_pause_quit_rect = Rect2(pqx, _pause_settings_rect.end.y + psep2, pqw, pbh2)
 	else:
 		_pause_panel_rect = Rect2()
 		_pause_resume_rect = Rect2()
 		_pause_quit_rect = Rect2()
+		_pause_settings_rect = Rect2()
 
 	if _death_open:
 		var death_pad: float = clampf(_vp.y * 0.035, 16.0, 28.0)
@@ -620,6 +658,7 @@ func _do_quick_save() -> void:
 
 
 func _cancel_drag() -> void:
+	_inventory_touch_id = -1
 	_press_slot = -1
 	_dragging = false
 	_drag_from = -1
@@ -631,6 +670,12 @@ func _cancel_drag() -> void:
 # INPUT — touches on hotbar / bag / panel
 # ============================================================
 func _input(event: InputEvent) -> void:
+	if GameSettings.is_open:
+		return
+	var controls := get_parent().get_node_or_null("MobileControls")
+	if controls != null and bool(controls.get("_help_open")):
+		return
+	_compute_layout()
 	if _death_open:
 		if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
 			if event.is_action_pressed("ui_accept") or (event as InputEventKey).keycode == KEY_ENTER:
@@ -809,6 +854,8 @@ func _craft_item(item_name: String) -> void:
 func _handle_pause_mouse(pointer: Vector2) -> void:
 	if _pause_resume_rect.has_point(pointer):
 		_set_paused(false)
+	elif _pause_settings_rect.has_point(pointer):
+		GameSettings.open()
 	elif _pause_quit_rect.has_point(pointer):
 		_quit_to_menu()
 	get_viewport().set_input_as_handled()
@@ -821,6 +868,7 @@ func _handle_bar_input(event: InputEvent) -> void:
 			if _bag_rect.has_point(touch.position) and not _in_build_mode():
 				_press_bag = true
 				_bag_open = true
+				GameSettings.release_gameplay_input()
 				queue_redraw()
 				get_viewport().set_input_as_handled()
 				return
@@ -852,11 +900,21 @@ func _handle_bag_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
 		if touch.pressed:
+			if _inventory_touch_id != -1:
+				get_viewport().set_input_as_handled()
+				return
+			if _close_rect.has_point(touch.position) or not _panel_rect.has_point(touch.position):
+				_bag_open = false
+				_cancel_drag()
+				queue_redraw()
+				get_viewport().set_input_as_handled()
+				return
 			if _save_rect.has_point(touch.position):
 				_do_quick_save()
 				get_viewport().set_input_as_handled()
 				return
 			_press_pos = touch.position
+			_inventory_touch_id = touch.index
 			var idx := _idx_at(touch.position)
 			if idx >= 0 and not Inventory.slot_empty(idx):
 				_press_slot = idx
@@ -867,6 +925,13 @@ func _handle_bag_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 		# released
+		if touch.index != _inventory_touch_id:
+			return
+		if touch.canceled:
+			_cancel_drag()
+			queue_redraw()
+			return
+		_inventory_touch_id = -1
 		var release_pos := touch.position
 		if _press_slot >= 0:
 			if _dragging:
@@ -896,6 +961,8 @@ func _handle_bag_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
+		if drag.index != _inventory_touch_id:
+			return
 		if _press_slot >= 0:
 			if not _dragging and _press_pos.distance_to(drag.position) > 14.0:
 				_dragging = true
@@ -908,11 +975,7 @@ func _handle_bag_input(event: InputEvent) -> void:
 
 func _handle_pause_input(t: InputEventScreenTouch) -> void:
 	if t.pressed:
-		if _pause_resume_rect.has_point(t.position):
-			_set_paused(false)
-		elif _pause_quit_rect.has_point(t.position):
-			_quit_to_menu()
-		get_viewport().set_input_as_handled()
+		_handle_pause_mouse(t.position)
 
 
 func _set_paused(p: bool) -> void:
@@ -920,12 +983,15 @@ func _set_paused(p: bool) -> void:
 		return
 	_paused = p
 	if p:
+		GameSettings.release_gameplay_input()
 		_cancel_drag()
 		_bag_open = false
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	else:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	get_tree().paused = p
+	visible = _should_show()
+	_compute_layout()
 	queue_redraw()
 
 
@@ -1206,6 +1272,7 @@ func _draw_pause_overlay() -> void:
 	_draw_text(ttext, Vector2(rect.position.x + (rect.size.x - tw) * 0.5,
 			rect.position.y + rect.size.y * 0.1 + tfs * 0.36), tfs, Color(1, 1, 1, 0.97))
 	_draw_pause_button(_pause_resume_rect, "RESUME", true)
+	_draw_pause_button(_pause_settings_rect, "SETTINGS", true)
 	_draw_pause_button(_pause_quit_rect, "QUIT TO MENU", false)
 
 

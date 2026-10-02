@@ -1,76 +1,60 @@
-# Building the Android APK
+# Android build and mobile play
 
-> **⚠️ `build/OceanSurvival.apk` in this repo is a STALE build (2026-09-03).**
-> It predates the current project layout: it contains **no main menu at all**
-> (no `main_menu.gdc`, no HUD, no islands, no sharks, scripts still at the old
-> flat `res://player.gd` paths). Installing it does **not** run the game you
-> see in this source tree. Re-export before testing anything.
+The 1.1.1 update (version code 4) fixes the New Game / Continue loading failure.
+The previous export excluded `models/sand_raftsurvival_Image_*`, although the
+imported island scene still depends on six of those textures. Godot consequently
+reported threaded load status 2 and scene error 19. Keep required island textures
+in the export; reducing their size should be done through import settings.
 
-## 1. One-time setup (per machine)
+## Build
 
-1. **Godot 4.7.x** editor (the project is `config/features = 4.7`).
-2. **Export templates**: Editor → *Manage Export Templates* → download **4.7.x**
-   (must match the editor version exactly).
-3. **Java JDK 17** and the **Android SDK** (`build-tools`, `platform-tools`,
-   `platforms;android-35`). Point Godot at them in
-   Editor → *Editor Settings → Export → Android*:
-   - `Java SDK Path`
-   - `Android SDK Path`
-   - `Debug Keystore` — generate one if you don't have it:
-     ```bash
-     keytool -keyalg RSA -genkeypair -alias androiddebugkey \
-       -keypass android -keystore ~/.android/debug.keystore -storepass android \
-       -dname "CN=Android Debug,O=Android,C=US" -validity 9999
-     ```
-4. Enable the Gradle-less export (already set in `export_presets.cfg`):
-   `gradle_build/use_gradle_build = false`, `architectures/arm64-v8a = true`.
+Use the installed Godot 4.7.1 editor and matching Android export templates, JDK,
+Android SDK, and existing debug keystore. This local APK uses debug signing so it
+can update an installation signed with the same key.
 
-## 2. Export
-
-**From the editor:** open the project, let it finish importing (the first open
-generates `.import` files for the Kenney/beach GLBs — wait for the progress bar
-to disappear), then *Project → Export… → Android → Export Project…* and save
-over `build/OceanSurvival.apk`.
-
-**From a terminal (headless):**
-```bash
-godot --headless --path . --import                                  # generate .godot/ + .import files
-godot --headless --path . --export-release "Android" build/OceanSurvival.apk
+```powershell
+$godot = 'C:\Program Files\Godot\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64_console.exe'
+& $godot --headless --path . --export-debug Android build/OceanSurvival-updated.apk
+.\tools\verify_android.ps1 -ApkPath .\build\OceanSurvival-updated.apk -GodotPath $godot
 ```
 
-## 3. Install on the phone
+The verification script extracts the **built APK**, then checks packaged scene
+loading, New Game, Continue, touch routing, action buttons, inventory dragging,
+climbing, editing, pause, help, map, crafting, saves, and settings. Foundation checks cover P and mobile PLACE, exact positions, five-wood costs, missing socket metadata, and saved buildings. It uses an
+isolated `OceanSurvivalMobileTests` save folder. A passing source-tree run alone
+cannot catch assets excluded from an APK.
 
-```bash
-adb install -r build/OceanSurvival.apk
-```
-`version/code` is now **2** (`version/name` 1.0.1) so it upgrades cleanly over
-the old build. If Android still refuses, uninstall the old app first
-(`adb uninstall com.praka.oceansurvival`) — this also clears the old saves in
-`user://`, so the menu will show **NEW GAME** only.
+The export intentionally excludes build output, tests, and asset-download tools.
+Do not add broad exclusion patterns for textures referenced by game scenes.
 
-## 4. Verifying you are running the new build
+## Install the update
 
-On the start screen tap **NEW GAME** (or **CONTINUE**):
+Copy `build/OceanSurvival-updated.apk` to the Android phone and open it to install the
+update. Keep the existing app installed to retain its saves. Alternatively:
 
-* the tapped plank immediately flips to **`LOADING…`** with a percentage and a
-  progress bar (the game scene is pre-loaded on a background thread, so on most
-  phones this is a fraction of a second);
-* then the game opens.
-
-If something is wrong you now get an on-screen **red banner** with the reason
-(e.g. `MISSING res://scenes/main.tscn`, `COULD NOT START GAME · err 18`)
-instead of a menu that silently ignores taps. Grab the matching log line with:
-
-```bash
-adb logcat -s godot:* AndroidRuntime:E DEBUG:F | grep -i "MainMenu\|ERROR"
+```powershell
+& 'C:\Users\praka\AppData\Local\Android\Sdk\platform-tools\adb.exe' install -r .\build\OceanSurvival-updated.apk
 ```
 
-## 5. Troubleshooting
+This package targets ARM64 phones and uses Godot's Mobile renderer. APKs are for
+Android; this build does not provide an iPhone installer.
 
-| Symptom | Cause / fix |
-|---|---|
-| Menu shows a red `MISSING res://scenes/main.tscn` | The export dropped the game scene. Re-run `--import`, then export with `export_filter="all_resources"` (already set). |
-| Menu shows `COULD NOT START GAME · err N` | `main.tscn` failed to open. Check `adb logcat` for a missing resource — usually a GLB that was never imported (see step 2). |
-| Banner `GAME SCENE FAILED TO LOAD · code 2` | Threaded load failed (out of memory on a small phone). Tap again — the menu falls back to a normal blocking load. |
-| App installs but shows the old game with no menu | You installed the stale APK from the repo, not your fresh export. |
-| Taps work on the menu but not in game | Unrelated to the menu; see `scripts/mobile_controls.gd` (F10 toggles the overlay on desktop previews). |
+## Phone controls and settings
+
+- Play in landscape. Left joystick moves; drag elsewhere to look around.
+- Jump, run, hook, dive, and use support independent fingers. Release the hook
+  button to throw; drag out of a held button to cancel that input.
+- Map, crafting, bag, pause, and help are on-screen. The hand and climb buttons
+  appear when the aimed item can be used or the raft is within reach.
+- Build selects a preview; Next chooses a piece; Rotate turns it; Place builds.
+  Aim at a placed piece and tap Edit to move it, or Remove to refund it.
+- Settings are available on the main menu and the pause menu. Graphics, 30/60 FPS,
+  look speed, inverted look, camera view, and sound volume are saved automatically.
+- Start with Auto graphics. For a slower or hotter phone, choose Battery Saver
+  and 30 FPS. Auto reduces 3D resolution under sustained slow frames while keeping
+  the interface clear. Phone grass generation is capped and split across frames.
+- Android Back closes the current panel or toggles pause. Switching apps pauses
+  play and saves progress. The bag's Quick Save button writes a separate slot.
+
+A desktop packaged-asset test confirms loading and input logic. Confirm graphics,
+frame rate, heat, and multi-touch feel on the actual phone before distribution.

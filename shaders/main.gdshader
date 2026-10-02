@@ -177,7 +177,7 @@ void fragment() {
 	float mgz = 0.12 * 2.8 * mdir1.y * cos(dot(mdir1, p) * 2.8 + t * 1.2)
 		+ 0.09 * 4.6 * mdir2.y * cos(dot(mdir2, p) * 4.6 + t * 1.6)
 		+ 0.05 * 7.4 * mdir3.y * cos(dot(mdir3, p) * 7.4 + t * 2.0);
-	n = normalize(vec3(n.x - mgx * fine * 0.20, n.y, n.z - mgz * fine * 0.20));
+	n = normalize(vec3(n.x - mgx * fine * 0.085, n.y, n.z - mgz * fine * 0.085));
 	ndv = max(dot(n, tocam), 0.0);
 	float micro_w = mh * fine;  // -0.65..0.65 ripple level near the camera
 
@@ -234,7 +234,7 @@ void fragment() {
 	// Fragment-scale ripple shading: micro crests catch a little light, micro
 	// troughs fall darker — this is what makes the near field read as moving
 	// chop instead of a flat tint between the coarse mesh waves.
-	base *= 1.0 + micro_w * 0.55;
+	base *= 1.0 + micro_w * 0.20;
 
 	// ---- Sky-mirror wave bands (light-independent) ----
 	// Wave facets that tilt up enough to reflect the sky dome lift toward the

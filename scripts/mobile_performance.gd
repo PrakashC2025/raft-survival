@@ -1,22 +1,16 @@
 extends Node
-## Mobile runtime quality governor.
-## Keeps the native render scale and full sky quality whenever the device has
-## headroom; if sustained frame times fall behind, it gradually lowers only
-## the 3D render scale and then skips the expensive volumetric cumulus pass.
-## HUD/canvas rendering remains native resolution throughout.
+## Mobile quality profiles and adaptive resolution.
+## Auto starts at a modest 3D resolution, reduces it under sustained slow frames,
+## and recovers quality when there is headroom. The 30/60 FPS setting determines
+## the frame budget. Canvas rendering remains clear at every quality level.
 
-const MOBILE_TARGET_FPS := 60
-const MIN_RENDER_SCALE := 0.70
+const MIN_RENDER_SCALE := 0.55
 const MAX_RENDER_SCALE := 1.0
 const SCALE_STEP_DOWN := 0.08
 const SCALE_STEP_UP := 0.04
 const SAMPLE_WINDOW_SECONDS := 1.25
-const SLOW_FRAME_SECONDS := 1.0 / 48.0
-const VERY_SLOW_FRAME_SECONDS := 1.0 / 38.0
-const FAST_FRAME_SECONDS := 1.0 / 58.0
 const SLOW_WINDOWS_BEFORE_SCALE := 2
 const FAST_WINDOWS_BEFORE_RECOVERY := 5
-const MOBILE_SHADOW_DISTANCE := 90.0
 
 var _mobile := false
 var _viewport: Viewport
@@ -29,17 +23,17 @@ var _frame_seconds := 0.0
 var _frame_count := 0
 var _slow_windows := 0
 var _fast_windows := 0
+var _last_quality := -1
+var _last_fps := -1
 
 
 func _ready() -> void:
+	add_to_group("mobile_performance")
 	_mobile = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")
-	if not _mobile:
-		set_process(false)
-		return
 
 	# A 60 FPS ceiling avoids running phones at 90/120 Hz when the game cannot
 	# usefully present extra frames, reducing heat and performance throttling.
-	Engine.max_fps = MOBILE_TARGET_FPS
+	Engine.max_fps = GameSettings.target_fps
 	_viewport = get_viewport()
 	_can_scale_3d = _has_viewport_property("scaling_3d_scale")
 	if _can_scale_3d:
@@ -47,8 +41,38 @@ func _ready() -> void:
 			float(_viewport.get("scaling_3d_scale")), MIN_RENDER_SCALE, MAX_RENDER_SCALE)
 		_viewport.set("scaling_3d_scale", _render_scale)
 
+	# current_scene is assigned after the children enter the tree.
+	call_deferred("_apply_profile")
+	GameSettings.changed.connect(_apply_profile)
+	set_process(_mobile and GameSettings.quality == 0)
+
+
+func _apply_profile() -> void:
 	_cache_sky_material()
+	Engine.max_fps = GameSettings.target_fps
+	if _last_quality == GameSettings.quality and _last_fps == GameSettings.target_fps:
+		return
+	_last_quality = GameSettings.quality
+	_last_fps = GameSettings.target_fps
+	_sample_seconds = 0.0
+	_frame_seconds = 0.0
+	_frame_count = 0
+	_slow_windows = 0
+	_fast_windows = 0
+	set_process(_mobile and GameSettings.quality == 0)
+	if not _mobile and GameSettings.quality == 0:
+		_set_render_scale(1.0)
+		_set_cumulus_visible(true)
+		return
+	var initial_scale: float = [0.82, 0.65, 0.82, 1.0][GameSettings.quality]
+	_set_render_scale(initial_scale)
+	_set_cumulus_visible(GameSettings.quality == 3)
 	_limit_mobile_shadow_distance()
+	var scene := get_tree().current_scene
+	if scene != null:
+		var environment_node := scene.get_node_or_null("Sky3D") as WorldEnvironment
+		if environment_node != null and environment_node.environment != null and _mobile:
+			environment_node.environment.glow_enabled = false
 
 
 func _process(delta: float) -> void:
@@ -66,7 +90,8 @@ func _process(delta: float) -> void:
 
 
 func _update_quality(avg_frame_seconds: float) -> void:
-	if avg_frame_seconds >= VERY_SLOW_FRAME_SECONDS \
+	var frame_budget := 1.0 / float(GameSettings.target_fps)
+	if avg_frame_seconds >= frame_budget * 1.58 \
 			and _sky_material != null and not _cumulus_reduced:
 		# A severe slowdown is usually fill-rate bound on a phone. Skip only the
 		# 10-step volumetric cloud march; the atmospheric sky and cirrus remain.
@@ -75,7 +100,7 @@ func _update_quality(avg_frame_seconds: float) -> void:
 		_fast_windows = 0
 		return
 
-	if avg_frame_seconds > SLOW_FRAME_SECONDS:
+	if avg_frame_seconds > frame_budget * 1.25:
 		_slow_windows += 1
 		_fast_windows = 0
 		if _slow_windows >= SLOW_WINDOWS_BEFORE_SCALE:
@@ -87,15 +112,15 @@ func _update_quality(avg_frame_seconds: float) -> void:
 		return
 
 	_slow_windows = 0
-	if avg_frame_seconds < FAST_FRAME_SECONDS:
+	if avg_frame_seconds < frame_budget * 1.035:
 		_fast_windows += 1
 		if _fast_windows >= FAST_WINDOWS_BEFORE_RECOVERY:
 			# Restore visual quality slowly to avoid oscillating on borderline
 			# hardware. High-end phones keep the full clouds and native scale.
-			if _cumulus_reduced:
-				_set_cumulus_visible(true)
-			elif _can_scale_3d and _render_scale < MAX_RENDER_SCALE:
+			if _can_scale_3d and _render_scale < MAX_RENDER_SCALE:
 				_set_render_scale(_render_scale + SCALE_STEP_UP)
+			elif _cumulus_reduced:
+				_set_cumulus_visible(true)
 			_fast_windows = 0
 	else:
 		_fast_windows = 0
@@ -141,6 +166,4 @@ func _limit_mobile_shadow_distance() -> void:
 	for node in scene.find_children("*", "DirectionalLight3D", true, false):
 		var light := node as DirectionalLight3D
 		if light.shadow_enabled:
-			light.directional_shadow_max_distance = minf(
-				light.directional_shadow_max_distance,
-				MOBILE_SHADOW_DISTANCE)
+			light.directional_shadow_max_distance = [60.0, 35.0, 60.0, 90.0][GameSettings.quality]

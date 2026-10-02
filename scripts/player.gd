@@ -3,6 +3,7 @@ extends CharacterBody3D
 # ============================================================
 # CONSTANTS
 # ============================================================
+const ROPE_VISUAL := preload("res://scripts/rope_launcher_visual.gd")
 const WALK_SPEED := 3.0
 const SPRINT_SPEED := 5.0
 # Measured Quaternius men's gait cycle strides, scaled for this near-1x model.
@@ -119,6 +120,10 @@ var _save_pending := false
 var _save_timer := 0.0
 const SAVE_DELAY := 1.0
 var _hand_item: Node3D = null
+var _held_visual_item := ""
+var _default_fist_mesh: Mesh = null
+var _rope_launcher: Node3D = null
+var _third_person_launcher: Node3D = null
 var _hand_time := 0.0       # accumulated seconds, drives held-item sway
 var _fist_node: Node3D = null
 var _step_climb := 0.0  # current smooth auto-climb progress (stairs/curbs)
@@ -207,6 +212,8 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	camera.current = true
 	_apply_camera_mode(true)
+	cam_mode = CAM_TPS if GameSettings.third_person else CAM_FPS
+	_apply_camera_mode(true)
 	if build_pieces.is_empty():
 		for scene_path in BUILD_SCENES:
 			var scene = load(scene_path) as PackedScene
@@ -234,6 +241,7 @@ func _ready() -> void:
 		_apply_life_vest_visual()
 	# New Game starts with Rope and starter seeds; Continue preserves inventory.
 	_ensure_starter_seeds()
+	Inventory.grant_testing_resources()
 	_create_hud()
 	active_slot_index = int(Inventory.loaded_meta.get("active_slot", 0))
 	active_slot_index = clampi(active_slot_index, 0, Inventory.HOTBAR_COUNT - 1)
@@ -496,6 +504,8 @@ func _apply_camera_mode(_initial: bool = false) -> void:
 	if _body_visual != null:
 		_body_visual.visible = cam_mode == CAM_TPS
 	_set_viewmodel_visible(cam_mode == CAM_FPS)
+	if _third_person_launcher != null and is_instance_valid(_third_person_launcher):
+		_third_person_launcher.visible = cam_mode == CAM_TPS and active_item == "Rope"
 	if spring_arm != null:
 		spring_arm.spring_length = TPS_DIST if cam_mode == CAM_TPS else 0.0
 	# In TPS the eye camera looks back at the player, so restrict how far the
@@ -550,6 +560,9 @@ func _physics_process(delta: float) -> void:
 		water_y = oc.get_height(global_position)
 		has_ocean = true
 	var input_dir := Input.get_vector("move_left", "move_right", "move_back", "move_forward")
+	var hud := get_node_or_null("CanvasLayer/SurvivalHUD")
+	if GameSettings.is_open or (hud != null and hud.gameplay_input_blocked()):
+		input_dir = Vector2.ZERO
 	var direction := _get_movement_direction(input_dir)
 	var sprinting := Input.is_action_pressed("sprint")
 	if is_swimming:
@@ -585,7 +598,7 @@ func _get_movement_direction(input_dir: Vector2) -> Vector3:
 	var right := global_transform.basis.x
 	right.y = 0.0
 	right = right.normalized()
-	return (right * input_dir.x + forward * input_dir.y).normalized()
+	return (right * input_dir.x + forward * input_dir.y).limit_length(1.0)
 
 func _update_land(delta: float, direction: Vector3, sprinting: bool) -> void:
 	var speed := SPRINT_SPEED if sprinting else WALK_SPEED
@@ -1183,6 +1196,7 @@ func select_hotbar_slot(index: int) -> void:
 		return
 	active_slot_index = clampi(index, 0, Inventory.HOTBAR_COUNT - 1)
 	active_item = Inventory.slot_item(active_slot_index)
+	_update_hand_item()
 
 
 func _refresh_active_item() -> void:
@@ -1389,6 +1403,8 @@ func _tick_save(delta: float) -> void:
 # HELD ITEM VISUAL — the selected hotbar item appears in the fist
 # ============================================================
 func _update_hand_item() -> void:
+	if _hand_item != null and is_instance_valid(_hand_item) and _held_visual_item == active_item:
+		return
 	if _fist_node == null or not is_instance_valid(_fist_node):
 		_fist_node = get_node_or_null("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist") as Node3D
 		if _fist_node == null:
@@ -1397,8 +1413,21 @@ func _update_hand_item() -> void:
 		_hand_item = Node3D.new()
 		_hand_item.name = "HandItem"
 		_fist_node.add_child(_hand_item)
+	_held_visual_item = active_item
+	if _default_fist_mesh == null:
+		_default_fist_mesh = (_fist_node as MeshInstance3D).mesh
+	(_fist_node as MeshInstance3D).mesh = null if active_item == "Rope" else _default_fist_mesh
+	var arm := camera.get_node_or_null("HandPivot/Arm") as Node3D
+	if arm != null:
+		arm.visible = active_item != "Rope"
+	_rope_launcher = null
+	if _third_person_launcher != null and is_instance_valid(_third_person_launcher):
+		_third_person_launcher.visible = false
+		_third_person_launcher.queue_free()
+		_third_person_launcher = null
 	# Remove any old visuals
 	for c in _hand_item.get_children():
+		(c as Node3D).visible = false
 		c.queue_free()
 	_hand_item.position = Vector3.ZERO
 	_hand_item.rotation = Vector3.ZERO
@@ -1409,21 +1438,14 @@ func _update_hand_item() -> void:
 	var along_forward := Basis(Vector3.RIGHT, PI / 2.0)
 	match active_item:
 		"Rope":
-			var coil := _hand_mat(Color(0.78, 0.6, 0.35))
-			var cyl := CylinderMesh.new()
-			cyl.top_radius = 0.13
-			cyl.bottom_radius = 0.13
-			cyl.height = 0.05
-			var i3 := 0
-			for ly in [-0.055, 0.005, 0.065]:
-				var xf := Transform3D(Basis(Vector3.UP, float(i3) * TAU / 3.0), Vector3(0, ly, -0.24))
-				_hand_part(cyl, coil, xf)
-				i3 += 1
-			var knot := _hand_mat(Color(0.9, 0.8, 0.52))
-			var ks := SphereMesh.new()
-			ks.radius = 0.045
-			ks.height = 0.09
-			_hand_part(ks, knot, Transform3D(Basis.IDENTITY, Vector3(0, 0.115, -0.24)))
+			_rope_launcher = ROPE_VISUAL.create_launcher()
+			_hand_item.add_child(_rope_launcher)
+			_third_person_launcher = ROPE_VISUAL.create_launcher(false)
+			_third_person_launcher.name = "ThirdPersonLauncher"
+			_third_person_launcher.position = Vector3(0.32, 0.17, -0.26)
+			_third_person_launcher.scale = Vector3.ONE * 0.8
+			add_child(_third_person_launcher)
+			_third_person_launcher.visible = cam_mode == CAM_TPS
 		"Wood":
 			var wood := _hand_mat(Color(0.62, 0.43, 0.22))
 			var log_cyl := CylinderMesh.new()
@@ -1586,6 +1608,15 @@ func _add_hand_asset(path: String, target_size: float) -> void:
 	_hand_item.add_child(model)
 
 
+func get_rope_launch_origin() -> Vector3:
+	var launcher: Node3D = _third_person_launcher if cam_mode == CAM_TPS else _rope_launcher
+	if launcher != null and is_instance_valid(launcher):
+		return (launcher.get_node("LaunchMuzzle") as Node3D).global_position
+	# Non-rope hotbar items retain hook access without spawning from the head.
+	if cam_mode == CAM_TPS:
+		return global_transform * Vector3(0.32, 0.28, -0.62)
+	return camera.global_transform * Vector3(0.18, -0.22, -0.95)
+
 func _hand_mat(color: Color, rough: float = 0.6, metal: float = 0.0) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = color
@@ -1617,11 +1648,16 @@ func _update_hand_sway(_delta: float) -> void:
 		return
 	var speed_h := Vector2(velocity.x, velocity.z).length()
 	var amp: float = clampf(speed_h / maxf(WALK_SPEED, 0.01), 0.0, 1.3)
+	var kick: float = rope_system.get_launcher_kick() if active_item == "Rope" else 0.0
 	var bob := sin(_hand_time * 9.5) * 0.016 * amp + sin(_hand_time * 1.6) * 0.006
 	var sway := sin(_hand_time * 1.3) * 0.02 + sin(_hand_time * 4.7) * 0.012 * amp
 	var roll := sin(_hand_time * 0.9) * 0.012 + cos(_hand_time * 4.7) * 0.01 * amp
-	_hand_item.position = Vector3(0.0, bob, 0.0)
-	_hand_item.rotation = Vector3(0.0, sway, roll)
+	_hand_item.position = Vector3(0.0, bob, kick * 0.055)
+	_hand_item.rotation = Vector3(-kick * 0.12, sway, roll)
+	if _rope_launcher != null and is_instance_valid(_rope_launcher):
+		_rope_launcher.get_node("LoadedHook").visible = not rope_system.is_active()
+	if _third_person_launcher != null and is_instance_valid(_third_person_launcher):
+		_third_person_launcher.get_node("LoadedHook").visible = not rope_system.is_active()
 
 
 ## Mirror of the E-key interaction test, so the mobile HAND button lights up
@@ -3424,7 +3460,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		# Footprint sampling for the build overlay (visual only — foundation
 		# validity itself is decided by the grid/occupancy checks above).
 		_validate_foundation_footprint(found_solved)
-		# Return with the connecting socket for _try_build
+		# Grid support determines validity; a socket is optional connection metadata.
 		var connect_socket: BuildSocket = _find_connecting_socket(support, best_cell)
 		return {"valid": true, "socket": connect_socket, "transform": found_solved, "cell": best_cell, "support": support}
 
@@ -4707,15 +4743,23 @@ func _overlay_hud_text() -> String:
 # ============================================================
 func _try_build() -> void:
 	if not build_valid:
+		_hud_toast("CAN'T PLACE HERE: " + str(_diag.get("invalid_reason", "AIM AT A SUPPORTED SPACE")))
 		return
 	var piece_name: String = BUILD_RECIPE_NAMES[selected_piece_index]
-	# Walls use direct transform, no socket required
-	# Walls, Doors and Windows use the direct ghost transform (no socket
-	# required) — they are wall-sized pieces placed by the shared Wall solver.
-	if piece_name != "Wall" and piece_name != "Door" and piece_name != "Window" \
+	# Foundations already passed grid occupancy, support, height and overlap
+	# checks. Requiring an optional socket here contradicts a green preview.
+	if piece_name != "Foundation" and piece_name != "Wall" \
+		and piece_name != "Door" and piece_name != "Window" \
 		and _ghost_target_socket == null:
+		_hud_toast("AIM AT A FREE CONNECTION POINT")
 		return
 	if not Inventory.can_afford(piece_name):
+		var needed: PackedStringArray = []
+		for material in Inventory.RECIPES.get(piece_name, {}):
+			var missing: int = int(Inventory.RECIPES[piece_name][material]) - Inventory.total(material)
+			if missing > 0:
+				needed.append("%d %s" % [missing, material])
+		_hud_toast("NEED " + ", ".join(needed))
 		return
 	var raft: Node3D = _get_raft_node()
 	if raft == null:
@@ -4814,6 +4858,8 @@ func _try_build() -> void:
 			else:
 				pname = "NULL"
 			print("  %s -> %s" % [str(key), pname])
+	_hud_toast(piece_name.to_upper() + " PLACED")
+	_update_build_preview()
 
 func _link_reciprocal_socket(new_piece: Node3D, parent_socket: BuildSocket) -> void:
 	var best: BuildSocket = null
@@ -5291,7 +5337,7 @@ func _update_hud() -> void:
 		text += "\nStatus: " + status
 		if not _edit_valid and _editing != null:
 			text += "\nReason: Aim at empty supported cell"
-		text += "\nP=Place  R/Y=Rotate  X=Remove  B=Cancel"
+		text += "\nP=Place  R/Y=Turn  X=Pitch  Del=Remove  B=Cancel"
 	elif build_mode:
 		var recipe_name: String = BUILD_RECIPE_NAMES[selected_piece_index]
 		var status := "[INVALID]" if not build_valid else "[VALID]"

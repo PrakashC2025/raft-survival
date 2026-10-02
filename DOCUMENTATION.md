@@ -1,5 +1,7 @@
 # RaftSurvival — Complete Project Documentation
 
+> Historical documentation and source snapshots: some constants and behavior below predate current fixes. Read [GAME_GUIDE.md](GAME_GUIDE.md) and the live code for the current game, Android troubleshooting, testing supplies, rope launcher, and instructions for future AI updates.
+
 > **Engine:** Godot 4.7 · **Language:** GDScript · **Physics:** Jolt 3D  
 > **Renderer:** Mobile (D3D12 on Windows) · **Resolution:** Stretched canvas (`canvas_items`, expand)
 > **Physics ticks:** 60 Hz

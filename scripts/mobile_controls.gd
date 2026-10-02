@@ -38,6 +38,8 @@ var _shown := false
 # --- touch tracking ---
 var _move_id := -1
 var _look_id := -1
+var _button_touches: Dictionary = {}
+var _owned_actions: Dictionary = {}
 var _base := Vector2.ZERO   # joystick base (screen)
 var _knob := Vector2.ZERO   # joystick knob (screen)
 var _stick := Vector2.ZERO  # joystick vector, y+ = forward
@@ -81,6 +83,8 @@ var _hud: Control = null
 
 
 func _ready() -> void:
+	add_to_group("mobile_controls")
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	# IMPORTANT: this full-screen Control must never swallow mouse events or it
 	# blocks desktop mouse-look (e.g. after Esc shows the cursor). Buttons keep
 	# their own mouse_filter = STOP; the overlay itself is IGNORE and receives
@@ -105,13 +109,18 @@ func _ready() -> void:
 
 
 func _apply_viewport_size() -> void:
+	reset_input()
 	size = get_viewport().get_visible_rect().size
 	position = Vector2.ZERO
 	_layout()
+	_layout_help()
 
 
 func _process(_delta: float) -> void:
 	_update_visibility()
+	if _input_blocked():
+		reset_input()
+		return
 	# While the help panel is open, release every held action so nothing walks
 	# behind the overlay, and skip movement/joystick syncing.
 	if _help_open:
@@ -154,9 +163,7 @@ func _update_visibility() -> void:
 	_shown = want
 	visible = want
 	if not want:
-		_release_all_actions()
-		_move_id = -1
-		_look_id = -1
+		reset_input()
 		if _help_open:
 			_set_help(false)
 
@@ -181,23 +188,51 @@ func _input(event: InputEvent) -> void:
 		return
 	if not visible:
 		return
+	# Gameplay buttons are routed by finger ID, independently of the single
+	# emulated mouse pointer used by ordinary menu widgets.
+	if event is InputEventMouse and event.device == -1:
+		if not _input_blocked():
+			get_viewport().set_input_as_handled()
+		return
 	# While the help panel is open the screen belongs to it: no joystick, no
 	# camera look (the panel's own buttons still work via the GUI).
-	if _help_open:
+	if _input_blocked():
+		reset_input()
 		return
 	if event is InputEventScreenTouch:
 		if event.pressed:
-			if _over_button(event.position):
-				return  # the Button handles it
 			if _hud_node() != null and _hud_node().claims_touch(event.position):
 				return  # bag / hotbar / open panel
+			var button := _button_at(event.position)
+			if button != null:
+				if _button_touches.values().has(button):
+					get_viewport().set_input_as_handled()
+					return
+				_button_touches[event.index] = button
+				button.set_pressed_no_signal(true)
+				button.button_down.emit()
+				queue_redraw()
+				get_viewport().set_input_as_handled()
+				return
 			if _move_id == -1 and _in_dock_zone(event.position):
 				_start_move(event.index)
+				_update_move(event.position)
 			elif _look_id == -1:
 				_start_look(event.index, event.position)
 		else:
+			if _button_touches.has(event.index):
+				_release_touch_button(event.index, not event.canceled)
+				get_viewport().set_input_as_handled()
+				return
 			_end_touch(event.index)
+		get_viewport().set_input_as_handled()
 	elif event is InputEventScreenDrag:
+		if _button_touches.has(event.index):
+			var held: Button = _button_touches[event.index]
+			if not held.visible or not held.get_global_rect().grow(18.0).has_point(event.position):
+				_release_touch_button(event.index, false)
+			get_viewport().set_input_as_handled()
+			return
 		if _move_id != -1 and event.index == _move_id and _hud_node() != null and _hud_node().is_blocking():
 			_move_id = -1
 			_stick = Vector2.ZERO
@@ -207,14 +242,50 @@ func _input(event: InputEvent) -> void:
 			_update_move(event.position)
 		elif event.index == _look_id:
 			_update_look(event.relative)
+		get_viewport().set_input_as_handled()
 	# Mouse events are deliberately ignored here — desktop keeps mouse + keys.
 
 
 func _over_button(pos: Vector2) -> bool:
+	return _button_at(pos) != null
+
+
+func _button_at(pos: Vector2) -> Button:
 	for b in _all_buttons:
 		if b != null and b.visible and b.get_global_rect().has_point(pos):
-			return true
-	return false
+			return b
+	return null
+
+
+func _release_touch_button(index: int, activate: bool) -> void:
+	var button: Button = _button_touches[index]
+	_button_touches.erase(index)
+	button.set_pressed_no_signal(false)
+	button.button_up.emit()
+	if activate and button.visible:
+		button.pressed.emit()
+	queue_redraw()
+
+
+func _input_blocked() -> bool:
+	return _help_open or get_tree().paused or GameSettings.is_open \
+			or (_hud_node() != null and _hud_node().is_blocking())
+
+
+func reset_input() -> void:
+	for index in _button_touches.keys():
+		_release_touch_button(int(index), false)
+	_move_id = -1
+	_look_id = -1
+	_stick = Vector2.ZERO
+	_knob = _dock
+	_release_all_actions()
+	queue_redraw()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
+		reset_input()
 
 
 ## True when the touch is inside the joystick dock's grab zone (the ONLY
@@ -264,7 +335,10 @@ func _start_look(index: int, _pos: Vector2) -> void:
 func _update_look(rel: Vector2) -> void:
 	var p := _get_player()
 	if p != null and p.has_method("add_look_input"):
-		p.add_look_input(rel, look_sensitivity)
+		var adjusted := rel
+		if GameSettings.invert_look:
+			adjusted.y = -adjusted.y
+		p.add_look_input(adjusted, look_sensitivity * GameSettings.look_speed)
 
 
 func _joy_radius() -> float:
@@ -279,8 +353,7 @@ func _update_movement_actions() -> void:
 		return
 	if _move_id == -1:
 		for a in ["move_forward", "move_back", "move_left", "move_right"]:
-			if Input.is_action_pressed(a):
-				Input.action_release(a)
+			_release_action(a)
 		return
 	var v := _stick
 	_set_move_action("move_forward", clampf(v.y, 0.0, 1.0))
@@ -291,18 +364,15 @@ func _update_movement_actions() -> void:
 
 func _set_move_action(action: StringName, strength: float) -> void:
 	if strength <= joystick_deadzone:
-		if Input.is_action_pressed(action):
-			Input.action_release(action)
+		_release_action(action)
 	elif not Input.is_action_pressed(action) or not is_equal_approx(Input.get_action_strength(action), strength):
 		Input.action_press(action, strength)
+		_owned_actions[action] = true
 
 
 func _release_all_actions() -> void:
-	for a in ["move_forward", "move_back", "move_left", "move_right", "jump", "sprint", "interact",
-			"move_down", "rope_throw", "rope_cancel", "build", "place_build", "cycle_build",
-			"rotate_build", "remove_build"]:
-		if Input.is_action_pressed(a):
-			Input.action_release(a)
+	for action in _owned_actions.keys():
+		_release_action(action)
 
 
 # ============================================================
@@ -371,12 +441,15 @@ func _queue_redraw() -> void:
 
 
 func _press_action(action: StringName) -> void:
-	if visible:
+	if visible and not _input_blocked():
 		Input.action_press(action)
+		_owned_actions[action] = true
 
 
 func _release_action(action: StringName) -> void:
-	Input.action_release(action)
+	if _owned_actions.has(action):
+		Input.action_release(action)
+		_owned_actions.erase(action)
 
 
 ## One tap = the desktop "E, E" double-pickup of the piece under the crosshair.
@@ -467,15 +540,19 @@ func _sync_mode() -> void:
 	_btn_remove.visible = mode == "edit"
 	# Help is available in every mode.
 	_btn_help.visible = true
+	for index in _button_touches.keys():
+		var held: Button = _button_touches[index]
+		if not held.visible:
+			_release_touch_button(int(index), false)
 
 	# If a hold-style button vanished while held (e.g. the target moved away
 	# from the crosshair mid-press), release its action so it never sticks.
-	if not _btn_use.visible and Input.is_action_pressed("interact"):
-		Input.action_release("interact")
-	if not _btn_rope.visible and Input.is_action_pressed("rope_throw"):
-		Input.action_release("rope_throw")
-	if not _btn_run.visible and Input.is_action_pressed("sprint"):
-		Input.action_release("sprint")
+	if not _btn_use.visible:
+		_release_action("interact")
+	if not _btn_rope.visible:
+		_release_action("rope_throw")
+	if not _btn_run.visible:
+		_release_action("sprint")
 
 	queue_redraw()
 
@@ -712,7 +789,8 @@ func _set_help(open: bool) -> void:
 	_help_open = open
 	if open:
 		_layout_help()
-		_release_all_actions()
+		GameSettings.release_gameplay_input()
+	get_tree().paused = open
 	if _help_ui != null:
 		_help_ui.visible = open
 
@@ -722,6 +800,7 @@ func _build_help_panel() -> void:
 		return
 	_help_ui = Control.new()
 	_help_ui.name = "HelpPanel"
+	_help_ui.process_mode = Node.PROCESS_MODE_ALWAYS
 	_help_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_help_ui.visible = false
 	# Sibling of this overlay on the same CanvasLayer, added LAST so the panel

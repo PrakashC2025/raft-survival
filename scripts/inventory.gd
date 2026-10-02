@@ -13,7 +13,11 @@ extends Node
 
 const SLOT_COUNT := 30
 const HOTBAR_COUNT := 6
-const MAX_STACK := 99
+# Temporary default testing supplies. Set false to restore survival starts.
+const TESTING_RESOURCES_ENABLED := true
+const TESTING_RESOURCE_AMOUNT := 2000
+const TESTING_RESOURCE_ITEMS := ["Wood", "Rope", "Plastic", "Barrel", "Stone", "Metal"]
+const MAX_STACK := 2000 if TESTING_RESOURCES_ENABLED else 99
 const BAG_START := HOTBAR_COUNT  # first bag-only slot index
 
 signal changed
@@ -35,6 +39,7 @@ var collected_island_pickups: Dictionary = {}
 # Test/debug toggle. When true, crafting never consumes resources (handy for
 # trying out the building system). Flip it with the debug key in Player.
 var infinite: bool = false
+var testing_resources_granted: bool = false
 
 # What each craftable/placeable thing costs.
 const RECIPES := {
@@ -71,6 +76,19 @@ func _ensure_slots() -> void:
 		slots.clear()
 		for i in range(SLOT_COUNT):
 			slots.append({})
+
+
+## Grant test materials once per save, including an existing Continue save.
+## Real crafting costs still apply; Continue does not refill spent materials.
+func grant_testing_resources() -> void:
+	if not TESTING_RESOURCES_ENABLED or testing_resources_granted:
+		return
+	var complete := true
+	for material in TESTING_RESOURCE_ITEMS:
+		var needed: int = maxi(0, TESTING_RESOURCE_AMOUNT - total(material))
+		if needed > 0 and add(material, needed) > 0:
+			complete = false
+	testing_resources_granted = complete
 
 
 # ---------------------------------------------------------------
@@ -441,6 +459,7 @@ func save_game(extra: Dictionary = {}, slot: String = "main") -> void:
 			slot_data.append([slot_item(i), slot_count(i)])
 	var data := {
 		"version": SAVE_VERSION,
+		"testing_resources_granted": testing_resources_granted,
 		"slots": slot_data,
 		"saved_at": Time.get_unix_time_from_system(),
 		"collected_island_pickups": collected_island_pickups.keys(),
@@ -475,6 +494,7 @@ func save_info(slot: String = "main") -> Dictionary:
 ## returns the meta it carried. Returns {} when there is no save.
 func load_game(slot: String = "main") -> Dictionary:
 	loaded_meta = {}
+	testing_resources_granted = false
 	collected_island_pickups.clear()
 	if not has_save(slot):
 		return {}
@@ -486,6 +506,7 @@ func load_game(slot: String = "main") -> Dictionary:
 	if not (parsed is Dictionary):
 		return {}
 	var data: Dictionary = parsed
+	testing_resources_granted = bool(data.get("testing_resources_granted", false))
 	var saved_pickups: Variant = data.get("collected_island_pickups", [])
 	if saved_pickups is Array:
 		for pickup_id in saved_pickups:
@@ -514,14 +535,17 @@ func load_game(slot: String = "main") -> Dictionary:
 
 ## Wipe everything (used by "New Game"). Also removes BOTH save files so the
 ## next boot offers only New Game until something is collected/saved again.
-func new_game_reset() -> void:
+func new_game_reset(clear_save_files: bool = true) -> void:
 	_ensure_slots()
+	testing_resources_granted = false
 	for i in range(slots.size()):
 		slots[i] = {}
 	loaded_meta = {}
 	collected_island_pickups.clear()
 	_recompute()
 	emit_signal("changed")
+	if not clear_save_files:
+		return
 	for slot in [SAVE_PATH, QUICK_SAVE_PATH]:
 		if FileAccess.file_exists(slot):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(slot))
