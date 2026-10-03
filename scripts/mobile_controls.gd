@@ -2,6 +2,7 @@ extends Control
 class_name MobileControls
 
 const Icons := preload("res://scripts/ui_icons.gd")
+const UI_SURFACE := preload("res://scripts/ui_surface.gd")
 
 ## ============================================================
 ## MOBILE TOUCH CONTROLS — joystick = move, touch-screen = look
@@ -76,6 +77,11 @@ var _rope_busy := false
 var _swimming := false
 var _can_edit := false
 var _can_interact := false  # center crosshair points at an interactable
+var _was_blocked := false
+var _use_caption := ""
+var _moving := false
+var _rope_equipped := false
+var _can_build := false
 var _can_climb := false     # swimming next to the raft — CLIMB button available
 
 # reference to the survival HUD overlay (bag/hotbar), lazy
@@ -119,8 +125,14 @@ func _apply_viewport_size() -> void:
 func _process(_delta: float) -> void:
 	_update_visibility()
 	if _input_blocked():
-		reset_input()
+		if not _was_blocked:
+			reset_input()
+		_was_blocked = true
 		return
+	if _was_blocked:
+		_was_blocked = false
+		_mode = "init"
+		queue_redraw()
 	# While the help panel is open, release every held action so nothing walks
 	# behind the overlay, and skip movement/joystick syncing.
 	if _help_open:
@@ -511,9 +523,22 @@ func _sync_mode() -> void:
 	if mode == "normal" and swimming and p != null and p.has_method("can_climb_out"):
 		can_climb = bool(p.call("can_climb_out"))
 
+	var use_caption := str(p.call("interaction_caption")) if p != null and p.has_method("interaction_caption") else "USE"
+	var moving := _move_id != -1
+	var rope_equipped: bool = p != null and p.get("active_item") == "Rope"
+	var can_build: bool = mode != "normal"
+	if p != null:
+		var raft := get_tree().get_first_node_in_group("raft") as Node3D
+		can_build = can_build or (raft != null and (p as Node3D).global_position.distance_to(raft.global_position) <= 9.0)
+		can_build = can_build or (can_edit and float(p.get("aim_distance")) <= 5.0)
 	if mode == _mode and rope_busy == _rope_busy and swimming == _swimming \
-			and can_edit == _can_edit and can_interact == _can_interact and can_climb == _can_climb:
+			and can_edit == _can_edit and can_interact == _can_interact and can_climb == _can_climb \
+			and moving == _moving and rope_equipped == _rope_equipped and can_build == _can_build and use_caption == _use_caption:
 		return
+	_use_caption = use_caption
+	_moving = moving
+	_rope_equipped = rope_equipped
+	_can_build = can_build
 	_mode = mode
 	_rope_busy = rope_busy
 	_swimming = swimming
@@ -523,7 +548,7 @@ func _sync_mode() -> void:
 
 	var normal: bool = mode == "normal"
 	_btn_jump.visible = normal
-	_btn_run.visible = normal
+	_btn_run.visible = normal and moving and not swimming
 	# The HAND button only appears when the center crosshair is actually over
 	# an interactable (debris / door / usable piece) — same logic as the E key.
 	_btn_use.visible = normal and can_interact
@@ -531,7 +556,7 @@ func _sync_mode() -> void:
 	# CLIMB appears ONLY while swimming right next to the raft/foundation
 	# (same test as the E key) — never on land, never in open water.
 	_btn_climb.visible = normal and can_climb
-	_btn_rope.visible = normal
+	_btn_rope.visible = normal and (rope_equipped or rope_busy)
 	_btn_recall.visible = normal and rope_busy
 	_btn_edit.visible = normal and can_edit
 	_btn_place.visible = mode != "normal"
@@ -539,6 +564,7 @@ func _sync_mode() -> void:
 	_btn_next.visible = mode == "build"
 	_btn_remove.visible = mode == "edit"
 	# Help is available in every mode.
+	_btn_build.visible = can_build
 	_btn_help.visible = true
 	for index in _button_touches.keys():
 		var held: Button = _button_touches[index]
@@ -633,15 +659,12 @@ func _button_icon_kind(b: Button) -> String:
 
 
 func _draw() -> void:
-	if not visible:
+	if not visible or _input_blocked():
 		return
 	var radius := _joy_radius()
 	if _move_id != -1:
 		_draw_dpad(_base, radius, _knob)
-	else:
-		# Idle dock — a faint resting D-pad so players can SEE where to put
-		# their thumb instead of hunting for an invisible control.
-		_draw_dpad(_dock, radius, _dock)
+
 	# Action buttons on top of the D-pad? No — buttons live bottom-right; draw
 	# them after so nothing overlaps incorrectly.
 	for b in _all_buttons:
@@ -655,9 +678,7 @@ func _draw_action_button(b: Button) -> void:
 	var center := rect.get_center()
 	var r := minf(rect.size.x, rect.size.y) * 0.5
 	var pressed := b.is_pressed() or b.has_focus()
-	var bg := Color(0.06, 0.08, 0.11, 0.55) if not pressed else Color(0.16, 0.2, 0.28, 0.75)
-	draw_circle(center, r * 0.92, bg)
-	var ring: Color = Color(1, 1, 1, 0.32)
+	var ring: Color = UI_SURFACE.BRASS
 	if _button_icon_kind(b) == "hammer" and _mode == "normal":
 		ring = Color(0.55, 0.9, 0.5, 0.5)
 	elif _button_icon_kind(b) == "x":
@@ -666,9 +687,23 @@ func _draw_action_button(b: Button) -> void:
 		ring = Color(0.4, 0.95, 0.6, 0.5)
 	elif _button_icon_kind(b) == "climb":
 		ring = Color(0.4, 0.85, 0.95, 0.6)
-	draw_arc(center, r * 0.92, 0.0, TAU, 40, ring, clampf(r * 0.06, 1.5, 3.0), true)
+	UI_SURFACE.dial(self, center, r * 0.92, ring, pressed)
 	var col := Color(1, 1, 1, 0.92) if not pressed else Color(1, 1, 1, 1.0)
-	_draw_icon_glyph(b, center, r * 0.48, col)
+	_draw_icon_glyph(b, center - Vector2(0, r * 0.09), r * 0.37, col)
+	var label := _button_caption(b)
+	var font := ThemeDB.fallback_font
+	var fs := int(clampf(r * 0.25, 9.0, 13.0))
+	var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	draw_string(font, center + Vector2(-width * 0.5, r * 0.64), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+
+
+func _button_caption(b: Button) -> String:
+	if b == _btn_use:
+		var player := _get_player()
+		if player != null and player.has_method("interaction_caption"):
+			return str(player.call("interaction_caption"))
+	var captions := {"jump": "JUMP", "run": "RUN", "hand": "USE", "down": "DIVE", "hook": "CAST", "back": "RECALL", "climb": "CLIMB", "hammer": "BUILD", "x": "CANCEL", "check": "PLACE", "rot": "ROTATE", "next": "NEXT", "pencil": "EDIT", "trash": "REMOVE", "help": "HELP"}
+	return str(captions.get(_button_icon_kind(b), "USE"))
 
 
 func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
@@ -726,8 +761,7 @@ func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
 # ============================================================
 func _draw_dpad(center: Vector2, radius: float, knob_pos: Vector2) -> void:
 	# Transparent base plate.
-	draw_circle(center, radius, Color(1, 1, 1, 0.08))
-	draw_arc(center, radius, 0.0, TAU, 48, Color(1, 1, 1, 0.28), 2.5)
+	UI_SURFACE.dial(self, center, radius, Color(0.66, 0.63, 0.48, 0.45))
 	draw_arc(center, radius * 0.42, 0.0, TAU, 32, Color(1, 1, 1, 0.18), 1.5)
 	# Four directional arrows pointing toward the central thumbstick.
 	var dirs: Array[Vector2] = [Vector2.UP, Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT]
@@ -735,8 +769,7 @@ func _draw_dpad(center: Vector2, radius: float, knob_pos: Vector2) -> void:
 		_draw_inward_arrow(center, dir, radius)
 	# Central thumbstick (moves with the touch).
 	var knob_r := clampf(radius * 0.34, 22.0, 44.0)
-	draw_circle(knob_pos, knob_r, Color(1, 1, 1, 0.34))
-	draw_arc(knob_pos, knob_r, 0.0, TAU, 32, Color(1, 1, 1, 0.45), 2.0)
+	UI_SURFACE.dial(self, knob_pos, knob_r, UI_SURFACE.BRASS, _move_id != -1)
 
 
 ## One directional chevron whose tip points IN toward the center (like the

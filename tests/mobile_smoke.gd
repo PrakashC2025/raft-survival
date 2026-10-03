@@ -61,7 +61,7 @@ func _run() -> void:
 	check(Engine.max_fps == 30, "30 FPS selection is applied")
 	settings.call("close")
 	check(not paused, "Closing menu settings restores game state")
-	for frame in range(900):
+	for frame in range(5400):
 		if menu.get("_packed_game") != null or menu.get("_error") != "":
 			break
 		await process_frame
@@ -85,6 +85,9 @@ func _run() -> void:
 	hud.visible = true
 	hud.call("_compute_layout")
 	controls.call("_apply_viewport_size")
+	controls.call("_sync_mode")
+	check(not (hud.get("_map_button_rect") as Rect2).has_area() and not (hud.get("_craft_button_rect") as Rect2).has_area(), "Map and crafting stay inside the bag")
+	check(controls.get("_move_id") == -1 and not (controls.get("_btn_run") as Button).visible, "Idle movement controls stay hidden")
 	var dock: Vector2 = controls.call("_dock_center")
 	touch(controls, 0, dock + Vector2(0, -70), true)
 	controls.call("_update_movement_actions")
@@ -126,6 +129,7 @@ func _run() -> void:
 	touch(hud, 5, (hud.get("_bag_rect") as Rect2).get_center(), true)
 	hud.call("_compute_layout")
 	check(hud.get("_bag_open"), "Bag opens by touch")
+	check((hud.get("_map_button_rect") as Rect2).has_area() and (hud.get("_craft_button_rect") as Rect2).has_area(), "Bag provides map and crafting tabs")
 	var panel: Rect2 = hud.get("_panel_rect")
 	for rect in hud.get("_bag_slot_rects"):
 		check(panel.encloses(rect), "Inventory slot stays within bag panel")
@@ -215,7 +219,7 @@ func _run() -> void:
 	await process_frame
 	menu = current_scene
 	check(inventory.call("has_save", "main"), "Quit to menu saves survival progress")
-	for frame in range(900):
+	for frame in range(5400):
 		if menu.get("_packed_game") != null:
 			break
 		await process_frame

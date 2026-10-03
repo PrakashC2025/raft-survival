@@ -1,8 +1,7 @@
 extends Control
 ## ============================================================
 ## MAIN MENU — survival-styled ocean start screen.
-## Fully drawn from primitives (no external art): a dusk sky with a low sun
-## over animated waves, a wooden title plaque, and wood-plank action buttons.
+## Original dusk sea shader behind cached matte panels and warm metal trim.
 ##   - No saves            -> NEW GAME only
 ##   - Autosave present    -> CONTINUE (resumes it)
 ##   - Quick-save present  -> QUICK SAVE (second resume option)
@@ -22,17 +21,20 @@ extends Control
 ##     of only inside _draw(), so the very first tap can never land on an
 ##     empty rect list.
 ##   * `main.tscn` is heavy (multi-megabyte island GLBs + sky shaders). It is
-##     pre-loaded on a background thread from _ready(), so the tap swaps scenes
-##     instantly instead of freezing the phone for seconds with no feedback.
+##     pre-loaded on a background thread from _ready(), keeping the menu
+##     responsive while its files load. Scene setup can take additional time.
 ##     While it loads the tapped button reads "LOADING…" with a progress bar.
 ##   * If the game scene cannot be opened the menu shows the reason on screen
 ##     and unlocks again — a dead, silent menu is what made this look broken.
 ## ============================================================
 
 const GAME_SCENE := "res://scenes/main.tscn"
-## Seconds a tap may wait before reporting a retryable loading timeout.
-## Keep loading asynchronous so a slow phone can still draw progress and respond.
-const ENTER_TIMEOUT := 90.0
+const UI_SURFACE := preload("res://scripts/ui_surface.gd")
+const SEA_BACKDROP: Shader = preload("res://shaders/menu_sea.gdshader")
+var _redraw_seconds := 0.0
+## A healthy resource request can spend a long time importing/uploading one
+## dependency. Elapsed time is information, never proof that loading failed.
+const LONG_LOAD_NOTICE_AFTER := 30.0
 
 # button ids in display order
 var _buttons: Array = []          # of {id, label, sub}
@@ -47,6 +49,42 @@ var _title_w := 0.0
 # --- touch bookkeeping -------------------------------------------------
 var _touch_ids: Array = []        # fingers currently on the screen
 # --- background load of the game scene ---------------------------------
+## Compile scene scripts serially before the background resource request.
+## Godot 4.7 can deadlock when worker GDScript preloads wait on other scripts.
+const SCRIPT_WARM_PATHS := [
+	"res://scripts/food_pickup.gd",
+	"res://scripts/plant_instance.gd",
+	"res://scripts/planter.gd",
+	"res://scripts/player.gd",
+	"res://scripts/debris.gd",
+	"res://scripts/raft.gd",
+	"res://scripts/build_socket.gd",
+	"res://scripts/raft_foam.gd",
+	"res://scripts/shark.gd",
+	"res://scripts/ocean.gd",
+	"res://scripts/debris_spawner.gd",
+	"res://scripts/rain_system.gd",
+	"res://scripts/crosshair.gd",
+	"res://scripts/rope_system.gd",
+	"res://scripts/mobile_controls.gd",
+	"res://scripts/survival_hud.gd",
+	"res://scripts/island_setup.gd",
+	"res://scripts/island_grass.gd",
+	"res://scripts/island_beacon.gd",
+	"res://scripts/island_marker.gd",
+	"res://scripts/mobile_performance.gd",
+	"res://scripts/ocean_ambience.gd",
+	"res://scripts/shark_spawner.gd",
+	"res://scripts/island_destination.gd",
+	"res://scripts/island_mountain.gd",
+	"res://scripts/island_birds.gd",
+	"res://scripts/fish_school.gd",
+	"res://addons/sky_3d/src/SkyDome.gd",
+	"res://addons/sky_3d/src/Sky3D.gd",
+	"res://addons/sky_3d/src/TimeOfDay.gd",
+]
+var _warming_scripts := false
+var _warm_resources: Array[Resource] = []
 var _load_requested := false
 var _load_progress := 0.0
 var _packed_game: PackedScene = null
@@ -64,6 +102,15 @@ func _ready() -> void:
 	anchor_right = 1.0
 	anchor_bottom = 1.0
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	var backdrop := ColorRect.new()
+	backdrop.name = "OceanBackdrop"
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	backdrop.z_index = -1
+	var sea_material := ShaderMaterial.new()
+	sea_material.shader = SEA_BACKDROP
+	backdrop.material = sea_material
+	add_child(backdrop)
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_buttons.clear()
 	if Inventory.has_save("main"):
 		_buttons.append({"id": "continue", "label": "CONTINUE",
@@ -121,16 +168,17 @@ func _process(delta: float) -> void:
 			_waiting_to_enter = false
 			_swap_scene(_packed_game)
 			return
-		if _wait_seconds > ENTER_TIMEOUT:
-			_fail("LOADING IS TAKING TOO LONG · try again")
-			return
 	if not visible:
 		return
 	_vp = size
 	# hover tracking (mouse only — phones have no hover)
 	if not _is_mobile():
 		_hover = _hit(get_local_mouse_position())
-	queue_redraw()  # animated waves need a redraw every frame
+	# Backdrop motion runs in one shader; UI only needs a modest refresh rate.
+	_redraw_seconds += delta
+	if _redraw_seconds >= 0.1:
+		_redraw_seconds = 0.0
+		queue_redraw()
 
 
 # ============================================================
@@ -221,17 +269,23 @@ func _ensure_layout() -> void:
 # RUN / RESUME — start the game without ever dead-ending the menu
 # ============================================================
 func _activate(btn_idx: int) -> void:
-	if btn_idx < 0 or btn_idx >= _buttons.size() or _busy:
+	if btn_idx < 0 or btn_idx >= _buttons.size():
 		return
-	if str(_buttons[btn_idx]["id"]) == "settings":
+	var action_id := str(_buttons[btn_idx]["id"])
+	if action_id == "cancel":
+		_cancel_loading()
+		return
+	if action_id == "settings":
 		GameSettings.open()
+		return
+	if _busy:
 		return
 	_busy = true
 	_pending_idx = btn_idx
 	_error = ""
 	# Remember the choice; the save slot is only touched once we know the game
 	# scene can really be opened (never wipe a save for a transition that fails).
-	_selected_id = str(_buttons[btn_idx]["id"])
+	_selected_id = action_id
 	if _packed_game == null and not _load_requested:
 		_request_game_load()
 	if _busy:
@@ -259,11 +313,33 @@ func _enter_game() -> void:
 		# from _process() the instant the scene lands in memory.
 		_waiting_to_enter = true
 		_wait_seconds = 0.0
+		_buttons.append({"id": "cancel", "label": "CANCEL LOADING", "sub": ""})
+		_layout_buttons()
 		queue_redraw()
 		return
 	# A failed request has already unlocked the menu and shown an error.
 	if _busy:
 		_fail("GAME FILES COULD NOT LOAD · install the updated APK")
+
+## Cancelling the choice does not cancel or duplicate the resource request.
+## It can finish warming in the background; no inventory/save changes occurred.
+func _cancel_loading() -> void:
+	_busy = false
+	_waiting_to_enter = false
+	_pending_idx = -1
+	_selected_id = ""
+	_wait_seconds = 0.0
+	_remove_cancel_button()
+	queue_redraw()
+
+
+func _remove_cancel_button() -> void:
+	for index in range(_buttons.size() - 1, -1, -1):
+		if str(_buttons[index]["id"]) == "cancel":
+			_buttons.remove_at(index)
+	_press = -1
+	_hover = -1
+	_layout_buttons()
 
 
 func _swap_scene(packed: PackedScene) -> void:
@@ -296,8 +372,9 @@ func _fail(msg: String) -> void:
 	_waiting_to_enter = false
 	_pending_idx = -1
 	_selected_id = ""
-	# Allow the next tap to start the load over instead of waiting forever on a
-	# background request that is never going to answer.
+	_remove_cancel_button()
+	# Real resource errors unlock retry. An in-progress request is kept; launching
+	# another request for the same path would not restart the existing work.
 	_load_requested = ResourceLoader.load_threaded_get_status(GAME_SCENE) == ResourceLoader.THREAD_LOAD_IN_PROGRESS
 	queue_redraw()
 
@@ -310,20 +387,33 @@ func _request_game_load() -> void:
 	if not ResourceLoader.exists(GAME_SCENE):
 		_fail("MISSING  " + GAME_SCENE)
 		return
-	# Warm the heavy game scene on a worker thread while the player reads the
-	# menu, so tapping a button swaps instantly instead of stalling the phone.
+	_warming_scripts = true
+	# Let the menu paint, then prepare one script dependency per frame. Keep
+	# strong references so preloaded assets stay ready for the scene worker.
+	for path in SCRIPT_WARM_PATHS:
+		await get_tree().process_frame
+		if not is_inside_tree():
+			return
+		var prepared := ResourceLoader.load(path)
+		if prepared == null:
+			_warming_scripts = false
+			_fail("COULD NOT PREPARE GAME FILES")
+			return
+		_warm_resources.append(prepared)
+		_load_progress = 0.15 * float(_warm_resources.size()) / float(SCRIPT_WARM_PATHS.size())
+	_warming_scripts = false
 	if ResourceLoader.load_threaded_request(GAME_SCENE) != OK:
 		_fail("COULD NOT START LOADING  " + GAME_SCENE)
 
 
 func _poll_game_load() -> void:
-	if not _load_requested or _packed_game != null:
+	if not _load_requested or _warming_scripts or _packed_game != null:
 		return
 	var prog: Array = [0.0]
 	var st := ResourceLoader.load_threaded_get_status(GAME_SCENE, prog)
 	if st == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
 		if prog.size() > 0:
-			_load_progress = clampf(float(prog[prog.size() - 1]), 0.0, 1.0)
+			_load_progress = 0.15 + 0.85 * clampf(float(prog[prog.size() - 1]), 0.0, 1.0)
 		return
 	if st == ResourceLoader.THREAD_LOAD_LOADED:
 		var res: Resource = ResourceLoader.load_threaded_get(GAME_SCENE)
@@ -373,10 +463,6 @@ func _draw() -> void:
 		return
 	_layout_buttons()
 	var s := _vp
-	var horizon: float = s.y * 0.55
-	_draw_sky(s, horizon)
-	_draw_sun(s, horizon)
-	_draw_ocean(s, horizon)
 	_draw_title(s)
 	_draw_buttons(s)
 	_draw_error(s)
@@ -458,7 +544,7 @@ func _draw_ocean(s: Vector2, horizon: float) -> void:
 func _draw_title(s: Vector2) -> void:
 	var font := ThemeDB.fallback_font
 	var fs: int = int(clampf(s.y * 0.075, 28.0, 54.0))
-	var title := "RAFT SURVIVAL"
+	var title := "OCEAN SURVIVAL"
 	var tw: float = font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	_title_w = tw
 	var cx: float = s.x * 0.5
@@ -466,8 +552,8 @@ func _draw_title(s: Vector2) -> void:
 	# wooden plaque behind the title
 	var pad: float = fs * 0.8
 	var plaque := Rect2(cx - tw * 0.5 - pad, ty - fs * 1.15, tw + pad * 2.0, fs * 1.9)
-	_draw_rounded(plaque, 14.0, Color(0.14, 0.09, 0.05, 0.92))
-	_draw_rounded(plaque, 14.0, Color(0.38, 0.26, 0.13, 0.9), false, 2.0)
+	_draw_rounded(plaque, 10.0, UI_SURFACE.INK)
+	_draw_rounded(plaque, 10.0, UI_SURFACE.BRASS, false, 1.0)
 	# wood grain: a few faint darker streaks
 	for i in range(6):
 		var gy2: float = plaque.position.y + 6.0 + float(i) * (plaque.size.y - 12.0) / 5.0
@@ -482,7 +568,7 @@ func _draw_title(s: Vector2) -> void:
 	_draw_text(title, Vector2(cx - tw * 0.5 + 3.0, ty + fs * 0.32 + 3.0), fs, Color(0.0, 0.0, 0.0, 0.55))
 	_draw_text(title, Vector2(cx - tw * 0.5, ty + fs * 0.32), fs, Color(1.0, 0.87, 0.58, 1.0))
 	# subtitle
-	var sub := "OCEAN SURVIVAL"
+	var sub := "A LIFE BEYOND THE SHORE"
 	var sfs: int = int(fs * 0.32)
 	var sw2: float = font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x
 	_draw_text(sub, Vector2(cx - sw2 * 0.5, ty + fs * 1.35), sfs, Color(0.55, 0.88, 0.95, 0.95))
@@ -503,7 +589,7 @@ func _draw_buttons(_s: Vector2) -> void:
 		_draw_rounded(Rect2(rr.position + Vector2(0, 5), rr.size), rr.size.y * 0.22,
 			Color(0.0, 0.0, 0.0, 0.4))
 		# plank body + border
-		var base := Color(0.24, 0.17, 0.1, 0.97)
+		var base := Color(0.075, 0.105, 0.105, 0.97)
 		if is_resume:
 			base = Color(0.2, 0.23, 0.16, 0.97) if b["id"] == "quick" else base
 		if hovered:
@@ -511,7 +597,7 @@ func _draw_buttons(_s: Vector2) -> void:
 		if pressed:
 			base = base.darkened(0.14)
 		_draw_rounded(rr, rr.size.y * 0.2, base)
-		var border_c := Color(0.1, 0.06, 0.03, 1.0)
+		var border_c := UI_SURFACE.BRASS
 		if hovered:
 			border_c = Color(0.95, 0.72, 0.32, 0.95)
 		elif is_resume:
@@ -534,6 +620,8 @@ func _draw_buttons(_s: Vector2) -> void:
 			# Immediate feedback: the tap registered, the world is loading.
 			show_label = "LOADING…"
 			show_sub = "%d%%" % int(roundf(_load_progress * 100.0))
+			if _wait_seconds >= LONG_LOAD_NOTICE_AFTER:
+				show_sub += " · STILL LOADING"
 		var lw2: float = font.get_string_size(show_label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var lx: float = rr.position.x + (rr.size.x - lw2) * 0.5 + rr.size.y * 0.2
 		var ly: float = rr.position.y + rr.size.y * 0.44
@@ -576,6 +664,15 @@ func _draw_error(s: Vector2) -> void:
 
 func _draw_button_icon(c: Vector2, r: float, id: String, col: Color) -> void:
 	match id:
+		"cancel":
+			draw_line(c + Vector2(-r * 0.4, -r * 0.4), c + Vector2(r * 0.4, r * 0.4), col, maxf(r * 0.12, 2.0), true)
+			draw_line(c + Vector2(r * 0.4, -r * 0.4), c + Vector2(-r * 0.4, r * 0.4), col, maxf(r * 0.12, 2.0), true)
+		"settings":
+			draw_arc(c, r * 0.42, 0.0, TAU, 24, col, maxf(r * 0.13, 1.5), true)
+			draw_arc(c, r * 0.14, 0.0, TAU, 16, col, maxf(r * 0.09, 1.0), true)
+			for tooth in range(8):
+				var direction := Vector2.from_angle(float(tooth) * TAU / 8.0)
+				draw_line(c + direction * r * 0.43, c + direction * r * 0.64, col, maxf(r * 0.16, 2.0), true)
 		"continue":
 			# play triangle
 			var tri := PackedVector2Array([
@@ -608,13 +705,4 @@ func _draw_text(text: String, top_left: Vector2, font_size: int, color: Color) -
 
 
 func _draw_rounded(rect: Rect2, radius: float, color: Color, filled: bool = true, width: float = 1.0) -> void:
-	var sbox := StyleBoxFlat.new()
-	sbox.set_corner_radius_all(int(radius))
-	if filled:
-		sbox.bg_color = color
-		sbox.set_border_width_all(0)
-	else:
-		sbox.bg_color = Color(0, 0, 0, 0)
-		sbox.set_border_width_all(int(maxf(width, 1.0)))
-		sbox.border_color = color
-	draw_style_box(sbox, rect)
+	UI_SURFACE.panel(self, rect, radius, color, filled, width)

@@ -1,135 +1,89 @@
 extends Node3D
-## Lightweight gull flock for the home island. Set sketchfab_bird_model to a
-## downloaded, licensed Sketchfab GLB to replace the low-poly fallback; the
-## orbit/flight behavior stays the same and imported animations are played when
-## present.
-
+## Original CC0 gull GLB, wing animation and bounded huntable population.
+const GULL: PackedScene = preload("res://models/coastal_gull.glb")
+const PICKUP: PackedScene = preload("res://scenes/food_pickup.tscn")
 @export_file("*.glb") var sketchfab_bird_model := ""
 @export_range(1, 8, 1) var bird_count := 4
 @export var orbit_radius := 10.0
 @export var flight_height := 8.5
-
 var _time := 0.0
 var _birds: Array[Dictionary] = []
-var _imported_scene: PackedScene = null
-
 
 func _ready() -> void:
+	var packed := GULL
 	if not sketchfab_bird_model.is_empty() and ResourceLoader.exists(sketchfab_bird_model):
-		_imported_scene = load(sketchfab_bird_model) as PackedScene
+		packed = load(sketchfab_bird_model) as PackedScene
 	for i in range(bird_count):
 		var bird := Node3D.new()
 		bird.name = "IslandBird_%02d" % i
 		bird.add_to_group("no_collision")
 		add_child(bird)
-		var left_wing: Node3D = null
-		if _imported_scene != null:
-			var model := _imported_scene.instantiate() as Node3D
-			if model != null:
-				model.scale = Vector3.ONE * 0.55
-				bird.add_child(model)
-				for candidate in model.find_children("*", "MeshInstance3D", true, false):
-					(candidate as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-				_play_imported_animation(model)
-			else:
-				left_wing = _build_cartoon_gull(bird)
-		else:
-			left_wing = _build_cartoon_gull(bird)
-		var phase := TAU * float(i) / float(maxi(bird_count, 1))
-		_birds.append({
-			"root": bird,
-			"left": left_wing,
-			"phase": phase,
-			"radius": orbit_radius + float(i % 2) * 2.0,
-			"speed": 0.10 + float(i % 3) * 0.018,
-			"height": flight_height + float(i % 2) * 1.2,
-		})
+		var model := packed.instantiate() as Node3D
+		bird.add_child(model)
+		for candidate in model.find_children("*", "MeshInstance3D", true, false):
+			(candidate as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var target := Area3D.new()
+		target.collision_layer = 2
+		target.collision_mask = 0
+		target.add_to_group("huntable_bird")
+		target.set_meta("flock", self)
+		target.set_meta("bird_index", i)
+		var shape := CollisionShape3D.new()
+		var sphere := SphereShape3D.new()
+		sphere.radius = 0.38
+		shape.shape = sphere
+		target.add_child(shape)
+		bird.add_child(target)
+		_birds.append({"root": bird, "target": target, "left": model.find_child("WingLeft", true, false),
+			"right": model.find_child("WingRight", true, false), "phase": TAU * float(i) / float(maxi(bird_count, 1)),
+			"radius": orbit_radius + i % 2 * 2.0, "speed": 0.10 + i % 3 * 0.018,
+			"height": flight_height + i % 2 * 1.2, "state": "flying", "cooldown": 0.0, "fall_speed": 0.0})
 
+func hit_bird(index: int) -> bool:
+	if index < 0 or index >= _birds.size() or _birds[index]["state"] != "flying":
+		return false
+	_birds[index]["state"] = "falling"
+	(_birds[index]["target"] as Area3D).set_deferred("collision_layer", 0)
+	return true
 
-func _build_cartoon_gull(root: Node3D) -> Node3D:
-	var pale := _bird_material(Color(0.88, 0.91, 0.88), 0.78)
-	var charcoal := _bird_material(Color(0.24, 0.29, 0.31), 0.82)
-	var beak_mat := _bird_material(Color(0.9, 0.56, 0.19), 0.72)
-	var body := SphereMesh.new()
-	body.radius = 0.19
-	body.height = 0.3
-	body.radial_segments = 10
-	body.rings = 6
-	_add_bird_mesh(root, body, pale, Transform3D(Basis.IDENTITY.scaled(Vector3(0.78, 0.62, 1.45)), Vector3.ZERO))
-	var head := SphereMesh.new()
-	head.radius = 0.105
-	head.height = 0.18
-	head.radial_segments = 8
-	head.rings = 5
-	_add_bird_mesh(root, head, pale, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.045, -0.235)))
-	var beak := PrismMesh.new()
-	beak.size = Vector3(0.08, 0.055, 0.14)
-	_add_bird_mesh(root, beak, beak_mat, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.025, -0.365)))
-	var tail := BoxMesh.new()
-	tail.size = Vector3(0.16, 0.028, 0.2)
-	_add_bird_mesh(root, tail, charcoal, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.245)))
-	var left := _make_wing(root, -1.0, charcoal)
-	_make_wing(root, 1.0, charcoal)
-	return left
-
-
-func _make_wing(root: Node3D, side: float, material: StandardMaterial3D) -> Node3D:
-	var pivot := Node3D.new()
-	pivot.name = "WingLeft" if side < 0.0 else "WingRight"
-	pivot.position = Vector3(side * 0.13, 0.025, 0.0)
-	root.add_child(pivot)
-	var wing := BoxMesh.new()
-	wing.size = Vector3(0.47, 0.035, 0.19)
-	var mi := MeshInstance3D.new()
-	mi.mesh = wing
-	mi.material_override = material
-	mi.position = Vector3(side * 0.22, 0.0, 0.025)
-	mi.rotation.z = side * -0.08
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	pivot.add_child(mi)
-	return pivot
-
-
-func _add_bird_mesh(root: Node3D, mesh: Mesh, material: StandardMaterial3D, xform: Transform3D) -> void:
-	var instance := MeshInstance3D.new()
-	instance.mesh = mesh
-	instance.material_override = material
-	instance.transform = xform
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(instance)
-
-
-func _bird_material(color: Color, roughness: float) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.roughness = roughness
-	return material
-
-
-func _play_imported_animation(model: Node3D) -> void:
-	for node in model.find_children("*", "AnimationPlayer", true, false):
-		var animation_player := node as AnimationPlayer
-		for animation_name in animation_player.get_animation_list():
-			if str(animation_name).to_lower().find("reset") >= 0:
-				continue
-			animation_player.play(animation_name)
-			return
-
-
-func _process(delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	_time += delta
-	for bird_data in _birds:
-		var bird := bird_data["root"] as Node3D
-		var phase := _time * float(bird_data["speed"]) + float(bird_data["phase"])
-		var radius := float(bird_data["radius"])
-		var y := float(bird_data["height"]) + sin(phase * 2.0) * 0.48
-		bird.position = Vector3(cos(phase) * radius, y, sin(phase) * radius)
+	for data in _birds:
+		var bird := data["root"] as Node3D
+		if data["state"] == "resting":
+			data["cooldown"] = float(data["cooldown"]) - delta
+			if float(data["cooldown"]) <= 0.0:
+				data["state"] = "flying"
+				bird.visible = true
+				(data["target"] as Area3D).collision_layer = 2
+			continue
+		if data["state"] == "falling":
+			data["fall_speed"] = float(data["fall_speed"]) + 9.8 * delta
+			var before := bird.global_position
+			var after := before + Vector3.DOWN * float(data["fall_speed"]) * delta
+			var ray := PhysicsRayQueryParameters3D.create(before, after + Vector3.DOWN * 0.12, 1)
+			var hit := get_world_3d().direct_space_state.intersect_ray(ray)
+			bird.global_position = after
+			bird.rotation.z += delta * 2.0
+			if not hit.is_empty() or after.y <= 0.1:
+				var at: Vector3 = hit["position"] if not hit.is_empty() else Vector3(after.x, 0.15, after.z)
+				var pickup := PICKUP.instantiate() as Node3D
+				pickup.set("item_name", "Raw Bird")
+				pickup.set("amount", 1)
+				get_tree().current_scene.add_child(pickup)
+				pickup.global_position = at + Vector3.UP * 0.15
+				bird.visible = false
+				data["state"] = "resting"
+				data["cooldown"] = randf_range(100.0, 180.0)
+				data["fall_speed"] = 0.0
+			continue
+		var phase := _time * float(data["speed"]) + float(data["phase"])
+		var radius := float(data["radius"])
+		bird.position = Vector3(cos(phase) * radius, float(data["height"]) + sin(phase * 2.0) * 0.48, sin(phase) * radius)
 		var tangent := Vector3(-sin(phase), cos(phase) * 0.08, cos(phase)).normalized()
-		bird.rotation.y = atan2(-tangent.x, -tangent.z)
-		var wing := bird_data["left"] as Node3D
-		if wing != null and is_instance_valid(wing):
-			var flap := sin(_time * 7.2 + float(bird_data["phase"])) * 0.42
-			wing.rotation.z = flap
-			var other := bird.get_node_or_null("WingRight") as Node3D
-			if other != null:
-				other.rotation.z = -flap
+		bird.rotation = Vector3(0.0, atan2(-tangent.x, -tangent.z), sin(phase * 2.0) * 0.10)
+		var flap := sin(_time * 6.4 + float(data["phase"])) * 0.42
+		if data["left"] != null:
+			(data["left"] as Node3D).rotation.z = flap
+		if data["right"] != null:
+			(data["right"] as Node3D).rotation.z = -flap

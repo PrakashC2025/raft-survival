@@ -25,6 +25,7 @@ var _slow_windows := 0
 var _fast_windows := 0
 var _last_quality := -1
 var _last_fps := -1
+var _foliage_reduced := false
 
 
 func _ready() -> void:
@@ -54,6 +55,8 @@ func _apply_profile() -> void:
 		return
 	_last_quality = GameSettings.quality
 	_last_fps = GameSettings.target_fps
+	_foliage_reduced = false
+	refresh_foliage()
 	_viewport.msaa_3d = Viewport.MSAA_DISABLED if GameSettings.quality == 1 else Viewport.MSAA_2X
 	_sample_seconds = 0.0
 	_frame_seconds = 0.0
@@ -110,6 +113,9 @@ func _update_quality(avg_frame_seconds: float) -> void:
 		_slow_windows += 1
 		_fast_windows = 0
 		if _slow_windows >= SLOW_WINDOWS_BEFORE_SCALE:
+			if _render_scale <= 0.66 and not _foliage_reduced:
+				_foliage_reduced = true
+				refresh_foliage()
 			if _can_scale_3d and _render_scale > MIN_RENDER_SCALE:
 				_set_render_scale(_render_scale - SCALE_STEP_DOWN)
 			elif not _cumulus_reduced:
@@ -121,11 +127,14 @@ func _update_quality(avg_frame_seconds: float) -> void:
 	if avg_frame_seconds < frame_budget * 1.035:
 		_fast_windows += 1
 		if _fast_windows >= FAST_WINDOWS_BEFORE_RECOVERY:
-			# Restore visual quality slowly to avoid oscillating on borderline
-			# hardware. High-end phones keep the full clouds and native scale.
+			if _foliage_reduced and _render_scale >= 0.78:
+				_foliage_reduced = false
+				refresh_foliage()
+			# Restore resolution slowly. Mobile Auto keeps volumetric clouds off;
+			# only the explicitly selected High profile enables that expensive pass.
 			if _can_scale_3d and _render_scale < MAX_RENDER_SCALE:
 				_set_render_scale(_render_scale + SCALE_STEP_UP)
-			elif _cumulus_reduced:
+			elif _cumulus_reduced and (not _mobile or GameSettings.quality == 3):
 				_set_cumulus_visible(true)
 			_fast_windows = 0
 	else:
@@ -137,6 +146,21 @@ func _has_viewport_property(property_name: String) -> bool:
 		if str(property_info.get("name", "")) == property_name:
 			return true
 	return false
+
+
+func refresh_foliage() -> void:
+	if not _mobile:
+		return
+	var quality := GameSettings.quality
+	var budget: int = [1600, 800, 1600, 2400][quality]
+	if _foliage_reduced:
+		budget = int(budget * 0.65)
+	for node in get_tree().get_nodes_in_group("island_grass_field"):
+		var field := node as MultiMeshInstance3D
+		if field == null or field.multimesh == null:
+			continue
+		field.multimesh.visible_instance_count = mini(field.multimesh.instance_count, budget)
+		field.visibility_range_end = 55.0 if quality == 1 else 100.0
 
 
 func _set_render_scale(value: float) -> void:

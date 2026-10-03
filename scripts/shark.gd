@@ -1,4 +1,5 @@
 extends CharacterBody3D
+const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 ## Lightweight low-poly ocean predator. Sharks stalk swimmers, bite at close
 ## range, and can be repelled with the crafted spear.
 
@@ -14,7 +15,8 @@ var _ocean: Ocean = null
 var _home := Vector3.ZERO
 var _time := 0.0
 var _bite_timer := 0.0
-var _body_material: StandardMaterial3D
+var _body_material: ShaderMaterial
+var _was_flashing := false
 var _tail_fin: Node3D
 var _hit_flash := 0.0
 
@@ -33,8 +35,10 @@ func _physics_process(delta: float) -> void:
 	_time += delta
 	_bite_timer = maxf(0.0, _bite_timer - delta)
 	_hit_flash = maxf(0.0, _hit_flash - delta)
-	if _body_material != null:
-		_body_material.albedo_color = Color(0.9, 0.48, 0.35) if _hit_flash > 0.0 else Color(0.28, 0.39, 0.48)
+	var flashing := _hit_flash > 0.0
+	if _body_material != null and flashing != _was_flashing:
+		_body_material.set_shader_parameter("base_color", Color(0.9, 0.48, 0.35) if flashing else Color(0.22, 0.31, 0.34))
+		_was_flashing = flashing
 	if _tail_fin != null:
 		_tail_fin.rotation.y = sin(_time * 7.0) * 0.24
 
@@ -113,15 +117,16 @@ func _build_visual() -> void:
 	var visual := Node3D.new()
 	visual.name = "SharkVisual"
 	add_child(visual)
-	_body_material = _material(Color(0.28, 0.39, 0.48), 0.34)
+	# A hit tint belongs to this shark alone, not every cached body material.
+	_body_material = OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.FOOD, Color(0.22, 0.31, 0.34), 0.36).duplicate() as ShaderMaterial
 	var belly_material := _material(Color(0.76, 0.81, 0.81), 0.64)
 	var eye_material := _material(Color(0.018, 0.026, 0.035), 0.18)
 
 	var body := SphereMesh.new()
 	body.radius = 0.78
 	body.height = 2.45
-	body.radial_segments = 12
-	body.rings = 5
+	body.radial_segments = 20
+	body.rings = 10
 	_add_mesh(visual, "Body", body, _body_material, Vector3(0.0, 0.0, 0.0), Vector3(0.58, 0.48, 1.55))
 	var belly := SphereMesh.new()
 	belly.radius = 0.67

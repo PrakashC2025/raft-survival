@@ -117,7 +117,7 @@ func _run() -> void:
 	var third := player.get("_third_person_launcher") as Node3D
 	check(third.visible and (rope.call("_hand_pos") as Vector3).distance_to((third.get_node("LaunchMuzzle") as Node3D).global_position) < 0.001, "Third-person casts start on the player's launcher")
 	player.call("select_hotbar_slot", 5)
-	check(player.get("_rope_launcher") == null and (player.get("_fist_node") as MeshInstance3D).mesh != null, "Hotbar selection updates held visuals immediately")
+	check(player.get("_rope_launcher") == null and (player.get("_hand_item") as Node3D).get_node_or_null("HumanHand") != null, "Hotbar selection updates held visuals immediately")
 	player.call("select_hotbar_slot", 0)
 	check(player.get("_rope_launcher") != null, "Selecting Rope restores the launcher")
 	rope.set("_is_charging", true)

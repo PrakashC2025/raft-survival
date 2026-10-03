@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][string]$GodotPath,
-    [string[]]$Tests = @('rope_smoke.gd', 'testing_resources_smoke.gd', 'mobile_smoke.gd', 'foundation_smoke.gd', 'environment_smoke.gd', 'island_marker_smoke.gd')
+    [string[]]$Tests = @('rope_smoke.gd', 'testing_resources_smoke.gd', 'mobile_smoke.gd', 'foundation_smoke.gd', 'environment_smoke.gd', 'island_marker_smoke.gd', 'menu_loading_smoke.gd', 'survival_loop_smoke.gd')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent

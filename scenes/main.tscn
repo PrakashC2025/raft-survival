@@ -37,6 +37,8 @@
 [ext_resource type="Script" path="res://scripts/island_mountain.gd" id="34_mountain"]
 [ext_resource type="Script" path="res://scripts/island_birds.gd" id="35_island_birds"]
 
+[ext_resource type="Script" path="res://scripts/fish_school.gd" id="40_fish"]
+
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
 render_priority = 0
 shader = ExtResource("1_ig7tw")
@@ -284,8 +286,11 @@ script = ExtResource("9_rope")
 
 [node name="RainSystem" type="Node3D" parent="Player" unique_id=388115071]
 script = ExtResource("6_getpj")
-min_interval_minutes = 4.0
-max_interval_minutes = 8.0
+min_interval_minutes = 3.0
+max_interval_minutes = 7.0
+min_duration_minutes = 1.0
+max_duration_minutes = 2.5
+rain_chance = 0.65
 
 [node name="CanvasLayer" type="CanvasLayer" parent="Player" unique_id=111111111]
 
@@ -478,12 +483,16 @@ wind_direction = 2.35619451204804
 [node name="TimeOfDay" type="Node" parent="Sky3D" unique_id=1075981311]
 script = ExtResource("18_a6jrf")
 dome_path = NodePath("../SkyDome")
+minutes_per_day = 18.0
 current_time = 9.5
 day = 5
 celestials_calculations = 0
 
 [node name="MobilePerformance" type="Node" parent="."]
 script = ExtResource("27_performance")
+
+[node name="CoastalFish" type="Node3D" parent="Island"]
+script = ExtResource("40_fish")
 
 [node name="OceanAmbience" type="AudioStreamPlayer" parent="."]
 script = ExtResource("30_ocean_audio")

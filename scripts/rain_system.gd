@@ -108,7 +108,7 @@ var _lightning_timer: Timer = null
 var _is_raining: bool = false
 var _intensity: float = 0.0
 var _target_intensity: float = 0.0
-var _rain_end_time: float = 0.0
+var _rain_remaining: float = 0.0
 
 var _orig_fog_density: float = -1.0
 var _orig_ambient_energy: float = -1.0
@@ -136,6 +136,19 @@ func _ready() -> void:
 	add_child(_schedule_timer)
 	_schedule_timer.timeout.connect(_on_schedule_timeout)
 	_queue_next_check()
+	if Inventory.loaded_meta.get("weather", null) is Dictionary:
+		restore_weather_state(Inventory.loaded_meta["weather"])
+
+func save_weather_state() -> Dictionary:
+	return {"raining": _is_raining, "remaining": _rain_remaining,
+		"next_check": _schedule_timer.time_left if _schedule_timer != null else 240.0}
+
+func restore_weather_state(state: Dictionary) -> void:
+	var remaining := clampf(float(state.get("remaining", 0.0)), 0.0, 600.0)
+	if bool(state.get("raining", false)) and remaining > 0.0:
+		start_rain(remaining)
+	if _schedule_timer != null:
+		_schedule_timer.start(clampf(float(state.get("next_check", 240.0)), 1.0, 900.0))
 
 
 func _find_refs() -> void:
@@ -316,10 +329,10 @@ func _on_schedule_timeout() -> void:
 func start_rain(duration_seconds: float) -> void:
 	_find_refs()
 	if _is_raining:
-		_rain_end_time = maxf(_rain_end_time, Time.get_ticks_msec() / 1000.0 + duration_seconds)
+		_rain_remaining = maxf(_rain_remaining, duration_seconds)
 		return
 	_is_raining = true
-	_rain_end_time = Time.get_ticks_msec() / 1000.0 + duration_seconds
+	_rain_remaining = maxf(0.0, duration_seconds)
 	_target_intensity = 1.0
 	# Re-evaluate cover immediately so a rain that starts while the player is
 	# already indoors begins in ring mode (no indoor spray on the first frames).
@@ -338,6 +351,7 @@ func start_rain(duration_seconds: float) -> void:
 
 func stop_rain() -> void:
 	_is_raining = false
+	_rain_remaining = 0.0
 	_target_intensity = 0.0
 	if _lightning_timer != null:
 		_lightning_timer.stop()
@@ -362,8 +376,10 @@ func _process(delta: float) -> void:
 	_update_submerged_state()
 	_update_intensity(delta)
 	_process_splashes(delta)
-	if _is_raining and Time.get_ticks_msec() / 1000.0 >= _rain_end_time:
-		stop_rain()
+	if _is_raining:
+		_rain_remaining = maxf(0.0, _rain_remaining - delta)
+		if _rain_remaining <= 0.0:
+			stop_rain()
 	# Rain only renders while its alpha is visible and the camera is ABOVE
 	# the water surface (no drops swirling around underwater). Gating on
 	# _intensity (not _is_raining) preserves the smooth 4 s fade-out.

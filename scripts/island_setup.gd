@@ -16,6 +16,8 @@ extends Node3D
 
 const TERRAIN_SHADER_PATH := "res://shaders/island_terrain.gdshader"
 const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
+const DEFAULT_PALM: PackedScene = preload("res://models/coconut_palm.glb")
+static var _collision_shapes: Dictionary = {}
 ## Footprint the imported beach scan is normalised to (metres, widest X/Z axis).
 ## The raw scan is ~284 m of dunes that reach 46 m above its own water line, so
 ## it has to be shrunk hard to read as a small island next to the raft. 36 m
@@ -36,7 +38,7 @@ const SCAN_WATER_LINE := 11.0
 const ISLAND_VERTICAL_SQUASH := 0.62
 
 @export var island_root: NodePath = ^"../Island"
-@export_file("*.glb,*.gltf") var sketchfab_palm_model := "res://models/coconut_palm.glb"
+@export_file("*.glb", "*.gltf") var sketchfab_palm_model := "res://models/coconut_palm.glb"
 @export var generate_collision := true
 @export var snap_palms := true
 @export var apply_terrain_material := true
@@ -122,6 +124,8 @@ func _apply_imported_palm_models(island: Node3D) -> void:
 func _load_glb_node(path: String) -> Node3D:
 	if path.is_empty():
 		return null
+	if path == "res://models/coconut_palm.glb":
+		return DEFAULT_PALM.instantiate() as Node3D
 	if ResourceLoader.exists(path):
 		var res := load(path)
 		if res is PackedScene:
@@ -164,7 +168,14 @@ func _create_island_collision() -> void:
 		body.name = body_name
 		var shape := CollisionShape3D.new()
 		shape.name = "CollisionShape3D"
-		shape.shape = mesh_inst.mesh.create_trimesh_shape()
+		# All palms share their imported mesh. Cook it once, including across
+		# New Game/Continue; transforms stay on each independent body.
+		var mesh_key := mesh_inst.mesh.get_rid().get_id()
+		var cached_shape: Shape3D = _collision_shapes.get(mesh_key)
+		if cached_shape == null:
+			cached_shape = mesh_inst.mesh.create_trimesh_shape()
+			_collision_shapes[mesh_key] = cached_shape
+		shape.shape = cached_shape
 		body.add_child(shape)
 		mesh_inst.get_parent().add_child(body)
 		# Match the visual transform so the collider hugs the mesh exactly

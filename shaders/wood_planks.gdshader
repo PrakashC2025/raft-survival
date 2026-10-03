@@ -67,7 +67,8 @@ void fragment() {
 	// Board seams: dark line at the start of every plank.
 	float wp = across / plank_width;
 	float f = fract(wp);
-	float line_weight = 1.0 - smoothstep(0.0, seam_width / plank_width, f);
+	float edge_aa = max(fwidth(wp), 0.0002);
+	float line_weight = 1.0 - smoothstep(0.0, seam_width / plank_width + edge_aa, min(f, 1.0-f));
 	float board_id = floor(wp);
 
 	// Subtle per-board brightness variation.
@@ -82,8 +83,19 @@ void fragment() {
 
 	float shade = board_shade * (1.0 + grain_strength * (grain - 0.5) * 2.0);
 	vec3 albedo = base_color * shade;
+	// Subtle knot rings and weather bleaching.
+	float knot_x = (hash12(vec2(board_id, 19.0)) - 0.5) * 1.3;
+	float knot_radius = length(vec2((along - knot_x) * 1.8, (f - 0.5) * 0.8));
+	float knot = (sin(knot_radius * 65.0 + grain * 2.0) * 0.5 + 0.5) * (1.0 - smoothstep(0.02, 0.18, knot_radius));
+	albedo *= 1.0 - knot * 0.18;
+	float weather = vnoise(vec2(along * 1.5, across * 3.0));
+	albedo = mix(albedo, vec3(dot(albedo, vec3(0.30,0.59,0.11))), weather * 0.16);
 	albedo = mix(seam_color, albedo, 1.0 - line_weight);
 
 	ALBEDO = albedo;
-	ROUGHNESS = 0.9;
+	ROUGHNESS = 0.78 + grain * 0.16;
+	SPECULAR = 0.25;
+	float relief = grain - line_weight * 0.8;
+	NORMAL_MAP = normalize(vec3(-dFdx(relief) * 0.4, -dFdy(relief) * 0.4, 1.0)) * 0.5 + 0.5;
+	NORMAL_MAP_DEPTH = 0.35;
 }

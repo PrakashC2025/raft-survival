@@ -1,6 +1,6 @@
 # Third-party asset credits
 
-The bundled assets below are separate from the Raft Survival source-code license; the listed bundled art/audio assets are CC0/public-domain, so attribution is appreciated but not required. Optional Sketchfab recommendations at the end are not bundled and are CC BY; follow their live license/attribution terms before importing.
+Asset licenses are separate from the source-code license and are listed individually below. The supplied Sketchfab palm uses CC BY 4.0 and grass uses the Sketchfab Standard License; the newly authored survival GLBs and other identified assets use CC0. Optional Sketchfab recommendations are not bundled.
 
 ## 3D models
 
@@ -26,8 +26,14 @@ These are external suggestions only; no Sketchfab downloads are included in this
 - Simple Low poly Coconut Tree — Jewel John, [Sketchfab model page](https://sketchfab.com/3d-models/simple-low-poly-coconut-tree-ec0493afa1664a63ba278d54703ef995), CC BY 4.0 (as listed on the page, checked 2026-10-03).
 - Stylized palm / coconut tree pack — W_illness, [Sketchfab model page](https://sketchfab.com/3d-models/stylized-palm-coconut-tree-pack-35e96b479cf942ad9407eb01a11ffa3a), CC BY 4.0 (as listed on the page, checked 2026-10-03).
 
-See `SKETCHFAB_ASSET_INTEGRATION.md` for import, attribution, and scene replacement steps. The current playable palms remain the Kenney CC0 assets listed above; the bird flock has an original low-poly fallback until a downloaded GLB is assigned.
+See `SKETCHFAB_ASSET_INTEGRATION.md` for import, attribution, and scene replacement steps. Island and planter coconut palms use the supplied prepared coconut-palm GLB credited above; island grass uses the supplied prepared grass GLB. The bird flock uses original coastal_gull.glb models with animated wing pivots and huntable hitboxes; a licensed custom GLB can still be assigned.
 
 ## Procedural environment detail
 
-`scripts/vegetation_visual.gd` generates original curved grass tufts and pinnate palm fronds, used with the existing credited palm trunks. Leaf/bark/water shaders add original project surface detail and motion without external textures or copied reference-game artwork.
+`scripts/vegetation_visual.gd` generates original curved grass tufts and pinnate palm fronds for fallback foliage. Its leaf shader preserves the supplied coconut palm's texture and geometry; the grass shader uses the supplied grass texture. Procedural leaf/bark/water detail and motion are original project code.
+
+The shared wood/metal/stone/cloth/soil surface shaders, rope coils, plastic canisters, metal scraps, seed packets, animated menu sea and matte/brass UI added on 2026-10-03 are original project code. They add no downloaded textures or models and preserve existing imported texture materials.
+
+## Original CC0 survival models (2026-10-03)
+
+models/coastal_fish.glb, coastal_gull.glb, human_hand.glb, survival_bow.glb and coastal_ridge.glb are original project assets generated offline by tools/generate_survival_models.gd. They have smooth modeled geometry and PBR materials, with no downloaded textures or geometry. Static meshes are merged by material; gull wing pivots stay separate for runtime animation. These assets are CC0 1.0; see models/ORIGINAL_SURVIVAL_ASSETS_LICENSE.md. The hollow rain barrel, planter walls, flames and projectile geometry are also original project code.

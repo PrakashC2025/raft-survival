@@ -1,8 +1,14 @@
 extends StaticBody3D
+const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
+const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
 ## Fixed world pickups share the debris group so the existing raycast and
 ## inventory flow can collect island items and overflow drops anywhere.
 
 const MODEL_PATHS := {
+	"Fish": "res://models/coastal_fish.glb",
+	"Cooked Fish": "res://models/coastal_fish.glb",
+	"Raw Bird": "res://models/coastal_gull.glb",
+	"Roast Bird": "res://models/coastal_gull.glb",
 	"Coconut": "res://models/kenney_coconut.glb",
 	"Banana": "res://models/kenney_banana.glb",
 	"Stone": "res://models/kenney_rock_small.glb",
@@ -35,6 +41,7 @@ func _ready() -> void:
 	amount = maxi(1, amount)
 	_visual = _make_visual()
 	if _visual != null:
+		OBJECT_MATERIALS.apply_model(_visual, OBJECT_MATERIALS.kind_for_item(item_name))
 		add_child(_visual)
 		_base_y = _visual.position.y
 	_update_amount_label()
@@ -77,8 +84,6 @@ func get_pickup_id() -> String:
 
 
 func _make_visual() -> Node3D:
-	if item_name == "Fish":
-		return _make_fish_visual()
 	if not MODEL_PATHS.has(item_name):
 		return _make_generic_visual()
 	var path: String = str(MODEL_PATHS[item_name])
@@ -101,6 +106,8 @@ func _make_visual() -> Node3D:
 
 
 func _make_generic_visual() -> Node3D:
+	if item_name in ["Rope", "Plastic", "Metal"] or item_name.ends_with(" Seed"):
+		return RESOURCE_VISUAL.create(item_name)
 	var root := Node3D.new()
 	root.name = "GenericPickupVisual"
 	var mesh_instance := MeshInstance3D.new()
@@ -109,7 +116,7 @@ func _make_generic_visual() -> Node3D:
 	var mesh: Mesh
 	var dimensions := Vector3.ONE
 	match item_name:
-		"Potato":
+		"Tomato", "Carrot", "Baked Potato", "Potato":
 			var potato := SphereMesh.new()
 			potato.radius = 0.19
 			potato.height = 0.32
@@ -118,6 +125,12 @@ func _make_generic_visual() -> Node3D:
 			mesh = potato
 			dimensions = Vector3(0.9, 0.7, 1.25)
 			material.albedo_color = Color(0.48, 0.3, 0.16)
+			if item_name == "Tomato":
+				material.albedo_color = Color(0.67, 0.07, 0.025)
+				dimensions = Vector3.ONE
+			elif item_name == "Carrot":
+				material.albedo_color = Color(0.8, 0.3, 0.04)
+				dimensions = Vector3(0.35, 1.2, 0.35)
 		"Rope":
 			var rope := CylinderMesh.new()
 			rope.top_radius = 0.12
@@ -137,7 +150,7 @@ func _make_generic_visual() -> Node3D:
 			mesh = metal
 			material.albedo_color = Color(0.65, 0.69, 0.72)
 			material.metallic = 0.72
-		"_":
+		_:
 			var fallback := BoxMesh.new()
 			fallback.size = Vector3(0.3, 0.22, 0.3)
 			mesh = fallback

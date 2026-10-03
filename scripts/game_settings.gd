@@ -3,6 +3,7 @@ extends Node
 signal changed
 
 const SETTINGS_PATH := "user://settings.cfg"
+const UI_SURFACE := preload("res://scripts/ui_surface.gd")
 var quality := 0 # Auto, Battery Saver, Balanced, High
 var target_fps := 60
 var look_speed := 1.0
@@ -111,6 +112,7 @@ func _build_panel() -> void:
 	_layer.layer = 100
 	add_child(_layer)
 	_overlay = Control.new()
+	_overlay.theme = UI_SURFACE.theme()
 	_layer.add_child(_overlay)
 	_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var shade := ColorRect.new()
@@ -120,8 +122,10 @@ func _build_panel() -> void:
 	_panel = PanelContainer.new()
 	_overlay.add_child(_panel)
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.055, 0.10, 0.13)
-	style.set_corner_radius_all(20)
+	style.bg_color = Color(0.045, 0.060, 0.063)
+	style.set_corner_radius_all(12)
+	style.set_border_width_all(1)
+	style.border_color = UI_SURFACE.BRASS
 	style.set_content_margin_all(24)
 	_panel.add_theme_stylebox_override("panel", style)
 	var scroll := ScrollContainer.new()

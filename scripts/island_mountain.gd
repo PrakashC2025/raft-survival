@@ -1,6 +1,5 @@
 extends Node3D
-## Small, faceted volcanic peak for the home island. The mesh is generated once
-## at startup, uses a single mobile-friendly material, and gets one trimesh body.
+## Original smooth coastal ridge GLB, one shared material and one static collider.
 
 @export_range(3.0, 9.0, 0.1) var base_radius := 4.5
 @export_range(4.0, 12.0, 0.1) var peak_height := 7.2
@@ -9,11 +8,27 @@ extends Node3D
 @export var random_seed := 77531
 
 const MOUNTAIN_SHADER: Shader = preload("res://shaders/island_mountain.gdshader")
+const RIDGE: PackedScene = preload("res://models/coastal_ridge.glb")
 
 
 func _ready() -> void:
 	add_to_group("island_visual_detail")
-	_build_mountain()
+	var model := RIDGE.instantiate() as Node3D
+	var visual := model.find_child("CraggyRockMesh", true, false) as MeshInstance3D
+	var mesh := visual.mesh
+	visual.get_parent().remove_child(visual)
+	model.free()
+	var rock_material := ShaderMaterial.new()
+	rock_material.shader = MOUNTAIN_SHADER
+	visual.material_override = rock_material
+	visual.add_to_group("no_collision")
+	add_child(visual)
+	var body := StaticBody3D.new()
+	body.name = "MountainCollision"
+	var collision := CollisionShape3D.new()
+	collision.shape = mesh.create_trimesh_shape()
+	body.add_child(collision)
+	add_child(body)
 
 
 func _build_mountain() -> void:

@@ -2,6 +2,8 @@ extends Control
 class_name SurvivalHUD
 
 const Icons := preload("res://scripts/ui_icons.gd")
+const UI_SURFACE := preload("res://scripts/ui_surface.gd")
+var _refresh_seconds := 0.0
 
 ## ============================================================
 ## MOBILE SURVIVAL HUD — graphical overlay shown on touch devices (and the
@@ -27,7 +29,7 @@ const Icons := preload("res://scripts/ui_icons.gd")
 ## ============================================================
 
 const PIECE_ORDER := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
-const CRAFT_ORDER := ["Fishing Rod", "Spear", "Sail Kit", "Motor Kit", "Life Vest"]
+const CRAFT_ORDER := ["Fishing Rod", "Spear", "Sail Kit", "Motor Kit", "Life Vest", "Bow", "Arrow"]
 const RESOURCE_PILL_ITEMS := ["Wood", "Rope", "Plastic", "Metal"]
 const STATS := [["health", "Health"], ["hunger", "Hunger"], ["thirst", "Thirst"]]
 const MAP_RANGE_METERS := 430.0
@@ -284,7 +286,7 @@ func handle_back() -> void:
 			_set_paused(not _paused)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	var want := _should_show()
 	if visible != want:
 		visible = want
@@ -294,6 +296,10 @@ func _process(_delta: float) -> void:
 		queue_redraw()
 	if not visible:
 		return
+	_refresh_seconds += delta
+	if _refresh_seconds < 0.1:
+		return
+	_refresh_seconds = 0.0
 	_compute_layout()
 	if _flash_active():
 		queue_redraw()  # re-draw the "SAVED ✓" chip while it is lit
@@ -386,13 +392,9 @@ func _compute_layout() -> void:
 		_pill_rects.append(Rect2(px, py, w, ph))
 		px += w + gap
 
-	# Always-visible touch actions sit under the resource row at upper-left.
-	var tool_button_w: float = cr * 2.05
-	var tool_button_h: float = cr * 0.96
-	var tool_button_y: float = top_safe + ph + gap
-	_map_button_rect = Rect2(m, tool_button_y, tool_button_w, tool_button_h)
-	_craft_button_rect = Rect2(m, tool_button_y + tool_button_h + gap * 0.65,
-			tool_button_w, tool_button_h)
+	# Map and crafting live inside the bag, keeping gameplay clear.
+	_map_button_rect = Rect2()
+	_craft_button_rect = Rect2()
 
 	# bottom bar: normal = inventory slots + bag button; build = piece slots
 	_slot = clampf(_vp.y * 0.105, 54.0, 86.0)
@@ -424,7 +426,7 @@ func _compute_layout() -> void:
 		var cell: float = clampf(minf(_vp.x * 0.082, _vp.y * 0.072), 44.0, 78.0)
 		var cg: float = cell * 0.16
 		var pad: float = cell * 0.5
-		var head_h: float = cell * 0.78
+		var head_h: float = cell * 1.85
 		var pw: float = float(BAG_COLS) * cell + float(BAG_COLS - 1) * cg + pad * 2.0
 		var phh: float = float(BAG_ROWS) * cell + float(BAG_ROWS - 1) * cg + pad * 2.0 + head_h
 		_panel_rect = Rect2((_vp.x - pw) * 0.5, (_vp.y - phh) * 0.5, pw, phh)
@@ -436,6 +438,10 @@ func _compute_layout() -> void:
 		var sw: float = font.get_string_size(stxt, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x
 		var scw: float = sw + cell * 0.5
 		_save_rect = Rect2(_close_rect.position.x - scw - pad * 0.6, _panel_rect.position.y + pad * 0.35, scw, ccr)
+		var tab_y: float = _panel_rect.position.y + pad + cell * 0.52
+		var tab_w: float = (pw - pad * 2.0 - cg) * 0.5
+		_map_button_rect = Rect2(_panel_rect.position.x + pad, tab_y, tab_w, cell * 0.65)
+		_craft_button_rect = Rect2(_map_button_rect.end.x + cg, tab_y, tab_w, cell * 0.65)
 		var grid_origin := Vector2(_panel_rect.position.x + pad, _panel_rect.position.y + pad + head_h)
 		for idx in range(Inventory.SLOT_COUNT):
 			var r := _row_of(idx)
@@ -509,7 +515,8 @@ func _compute_layout() -> void:
 		var cg: float = clampf(craft_w * 0.025, 10.0, 18.0)
 		var card_w: float = (craft_w - craft_pad * 2.0 - cg) * 0.5
 		var row_gap: float = clampf(craft_h * 0.025, 10.0, 16.0)
-		var card_h: float = (grid_bottom - grid_top - row_gap * 2.0) / 3.0
+		var rows := int(ceil(float(CRAFT_ORDER.size()) / 2.0))
+		var card_h: float = (grid_bottom - grid_top - row_gap * (rows - 1)) / rows
 		for idx in range(CRAFT_ORDER.size()):
 			var col: int = idx % 2
 			var row: int = int(float(idx) / 2.0)
@@ -623,8 +630,8 @@ func _build_chip_text() -> String:
 		return "EDITING  " + str(p.get("_editing").name).to_upper()
 	if p.get("build_mode") != true:
 		return ""
-	var idx: int = clampi(int(p.get("selected_piece_index")), 0, PIECE_ORDER.size() - 1)
-	var piece_name2: String = PIECE_ORDER[idx]
+	var idx: int = clampi(int(p.get("selected_piece_index")), 0, p.BUILD_RECIPE_NAMES.size() - 1)
+	var piece_name2: String = p.BUILD_RECIPE_NAMES[idx]
 	var ok: bool = p.get("build_valid") == true
 	var state := "READY" if ok else "NO SPOT"
 	var cost := ""
@@ -1037,7 +1044,7 @@ func _draw() -> void:
 		_draw_bag_panel()
 	else:
 		_draw_bottom_bar()
-	if _touch_ui_active() and not _map_open and not _craft_open:
+	if _bag_open and not _map_open and not _craft_open:
 		_draw_map_button()
 		_draw_craft_button()
 	if _toast != "" and _toast_rect.size.x > 0.0:
@@ -1376,8 +1383,11 @@ func _draw_status() -> void:
 			break
 		var center: Vector2 = _status_centers[i]
 		var c: Color = _status_bg(STATS[i][0])
-		draw_circle(center, cr, c)
-		draw_arc(center, cr, 0.0, TAU, 40, Color(1, 1, 1, 0.28), clampf(cr * 0.05, 1.5, 2.5), true)
+		UI_SURFACE.dial(self, center, cr, UI_SURFACE.BRASS)
+		var fraction := clampf(_get_stat(STATS[i][0]) / 100.0, 0.0, 1.0)
+		if fraction > 0.001:
+			draw_arc(center, cr - 3.0, -PI * 0.5, -PI * 0.5 + TAU * fraction,
+				40, Color(c.r, c.g, c.b, 0.95), 2.5, true)
 		var glyph_r: float = cr * 0.52
 		Icons.status_icon(self, STATS[i][0], center, glyph_r, Color(1, 1, 1, 0.95))
 		var val: int = int(roundf(_get_stat(STATS[i][0])))
@@ -1590,16 +1600,16 @@ func _draw_drag_ghost() -> void:
 
 
 func _draw_slot(rect: Rect2, pressed: bool, selected: bool) -> void:
-	var bg := Color(0.05, 0.07, 0.1, 0.66)
+	var bg := Color(0.045, 0.060, 0.063, 0.85)
 	if selected:
-		bg = Color(0.1, 0.18, 0.24, 0.88)
+		bg = Color(0.13, 0.18, 0.17, 0.95)
 	elif pressed:
 		bg = Color(0.16, 0.2, 0.26, 0.82)
-	var radius: float = rect.size.x * 0.2
+	var radius: float = rect.size.x * 0.10
 	_draw_rounded(rect, radius, bg)
-	var border: Color = Color(1, 1, 1, 0.25)
+	var border: Color = Color(0.62, 0.58, 0.45, 0.5)
 	if selected:
-		border = Color(0.42, 0.92, 1.0, 0.95)
+		border = Color(0.87, 0.75, 0.49, 0.95)
 	elif pressed:
 		border = Color(1, 1, 1, 0.6)
 	_draw_rounded(rect.grow(-1.5), radius * 0.9, border, false, 2.0)
@@ -1610,28 +1620,8 @@ func _draw_slot(rect: Rect2, pressed: bool, selected: bool) -> void:
 # ============================================================
 # HELPERS
 # ============================================================
-func _draw_rounded(rect: Rect2, _radius: float, color: Color, filled: bool = true, width: float = 1.0) -> void:
-	if filled:
-		draw_style_box(_rounded_style(color), rect)
-	else:
-		draw_style_box(_rounded_style_outline(color, width), rect)
-
-
-func _rounded_style(color: Color) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = color
-	s.set_corner_radius_all(18)
-	s.set_border_width_all(0)
-	return s
-
-
-func _rounded_style_outline(color: Color, width: float) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0, 0, 0, 0)
-	s.set_corner_radius_all(18)
-	s.border_color = color
-	s.set_border_width_all(int(maxf(width, 1.0)))
-	return s
+func _draw_rounded(rect: Rect2, radius: float, color: Color, filled: bool = true, width: float = 1.0) -> void:
+	UI_SURFACE.panel(self, rect, radius, color, filled, width)
 
 
 func _draw_text(text: String, top_left: Vector2, font_size: int, color: Color) -> void:

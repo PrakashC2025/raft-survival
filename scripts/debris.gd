@@ -39,6 +39,9 @@ const BUOY_DAMPING: float = 3.0
 const WOOD_LOG_SCENE: PackedScene = preload("res://models/kenney_log.glb")
 const BARREL_SCENE: PackedScene = preload("res://models/kenney_barrel.glb")
 const STONE_SCENE: PackedScene = preload("res://models/kenney_rock_small.glb")
+const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
+const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
+var _visual_geometry: Array[GeometryInstance3D] = []
 
 # Each entry controls how "floaty" that item looks (rides higher/lower).
 const ITEM_PROFILES := {
@@ -92,6 +95,12 @@ func is_fade_done() -> bool:
 
 func _apply_profile() -> void:
 	if not ITEM_PROFILES.has(item_name):
+		if item_name.ends_with(" Seed"):
+			_model_visual = RESOURCE_VISUAL.create(item_name)
+			add_child(_model_visual)
+			(get_node("MeshInstance3D") as MeshInstance3D).visible = false
+			_cache_visual_geometry()
+			_set_visual_alpha(0.0)
 		return
 	var profile: Dictionary = ITEM_PROFILES[item_name]
 	mass_kg = float(profile["mass"])
@@ -117,8 +126,16 @@ func _apply_profile() -> void:
 		_model_visual = _create_model_visual(model_scene, target_size)
 		if _model_visual != null:
 			mesh_instance.visible = false
+			_cache_visual_geometry()
 			_set_visual_alpha(0.0)
 			return
+	if item_name in ["Rope", "Plastic", "Metal"] and mesh_instance != null:
+		_model_visual = RESOURCE_VISUAL.create(item_name)
+		add_child(_model_visual)
+		mesh_instance.visible = false
+		_cache_visual_geometry()
+		_set_visual_alpha(0.0)
+		return
 
 	# Keep a simple tinted fallback for item types without a dedicated model.
 	if mesh_instance != null and mesh_instance.get_surface_override_material(0) == null:
@@ -156,6 +173,7 @@ func _create_model_visual(scene: PackedScene, desired_max_size: float) -> Node3D
 	var model_scale: float = desired_max_size / largest
 	model.scale = Vector3.ONE * model_scale
 	model.position = -bounds.get_center() * model_scale
+	OBJECT_MATERIALS.apply_model(model, OBJECT_MATERIALS.kind_for_item(item_name))
 	return model
 
 
@@ -192,17 +210,16 @@ func _set_visual_alpha(alpha: float) -> void:
 	var clamped_alpha := clampf(alpha, 0.0, 1.0)
 	if _model_visual != null and is_instance_valid(_model_visual):
 		_model_visual.visible = clamped_alpha > 0.001
-		var instances: Array[GeometryInstance3D] = []
-		if _model_visual is GeometryInstance3D:
-			instances.append(_model_visual as GeometryInstance3D)
-		for candidate in _model_visual.find_children("*", "GeometryInstance3D", true, false):
-			var geometry := candidate as GeometryInstance3D
-			if geometry != null:
-				instances.append(geometry)
-		for geometry in instances:
+		for geometry in _visual_geometry:
 			geometry.transparency = 1.0 - clamped_alpha
 	elif _fade_material != null:
 		_fade_material.albedo_color.a = clamped_alpha
+
+
+func _cache_visual_geometry() -> void:
+	_visual_geometry.clear()
+	for node in _model_visual.find_children("*", "GeometryInstance3D", true, false):
+		_visual_geometry.append(node as GeometryInstance3D)
 
 func _physics_process(delta: float) -> void:
 	# Skip all buoyancy/current math while the rope system is holding this

@@ -48,7 +48,7 @@ func _ready() -> void:
 		_direction = Vector3(0, 0, 1)
 	_side = Vector3(-_direction.z, 0.0, _direction.x).normalized()
 	_next_interval = randf_range(spawn_interval_min, spawn_interval_max)
-	_prewarm()
+	call_deferred("_prewarm")
 
 
 func _get_player() -> Node3D:
@@ -70,9 +70,13 @@ func _process(delta: float) -> void:
 # Fill the upstream corridor at startup — debris visible from frame 1.
 func _prewarm() -> void:
 	for i in mini(prewarm_count, max_debris):
+		if not is_inside_tree():
+			return
 		# Spread evenly from upstream to just past the player
 		var dist := randf_range(-upstream_distance, downstream_distance * 0.5)
 		_spawn_at(dist)
+		if i % 2 == 1:
+			await get_tree().process_frame
 
 
 # New debris always enters from upstream.

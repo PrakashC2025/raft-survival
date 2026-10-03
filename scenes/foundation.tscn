@@ -59,7 +59,7 @@ accepts = Array[String](["Foundation", "Wall", "Stairs"])
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 1
-accepts = Array[String](["Wall", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot"])
+accepts = Array[String](["Wall", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector"])
 
 [node name="SampleMarker" type="Marker3D" parent="." unique_id=12121212]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)

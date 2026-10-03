@@ -60,6 +60,25 @@ func _spawn_pickups() -> void:
 		pickup.global_position = Vector3(hit["position"]) + Vector3.UP * 0.38
 		pickup.rotation.y = rng.randf_range(0.0, TAU)
 
+	# New crop caches have separate IDs so existing pickup progress stays valid.
+	if map_label == "Home Isle":
+		for crop_index in range(2):
+			var crop: String = ["Carrot", "Tomato"][crop_index]
+			var cache_id := "%s:%d:crop:%s" % [name, pickup_seed, crop]
+			if Inventory.has_collected_island_pickup(cache_id):
+				continue
+			var point: Vector2 = PICKUP_POINTS[9 + crop_index] + Vector2(0.45, 0.45)
+			var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(to_global(Vector3(point.x, 9, point.y)), to_global(Vector3(point.x, -16, point.y)), 1))
+			if hit.is_empty():
+				continue
+			var cache := PICKUP_SCENE.instantiate() as Node3D
+			cache.name = "CropSeedCache_" + crop
+			cache.set("item_name", crop + " Seed")
+			cache.set("amount", 4)
+			cache.set("pickup_id", cache_id)
+			add_child(cache)
+			cache.global_position = Vector3(hit["position"]) + Vector3.UP * 0.38
+
 
 ## Blocks until island_setup.gd has finished cooking this island's collider, so
 ## the spawn raycasts have ground to hit.
@@ -68,7 +87,7 @@ func _wait_for_island_collider() -> void:
 		if not is_inside_tree():
 			return
 		var setup := get_node_or_null("IslandSetup")
-		if setup != null and bool(setup.get("setup_complete")):
+		if setup != null and setup.get("setup_complete") == true:
 			return
 		# Any StaticBody3D under this island means the trimesh / palm bodies
 		# are already in place (island_setup.gd cooks the terrain first).

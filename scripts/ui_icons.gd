@@ -199,7 +199,7 @@ static func item_color(item: String) -> Color:
 			return Color(0.43, 0.27, 0.14)
 		"Banana":
 			return Color(0.96, 0.78, 0.22)
-		"Fish":
+		"Fish", "Cooked Fish":
 			return Color(0.45, 0.72, 0.82)
 		"Spear":
 			return Color(0.72, 0.74, 0.76)
@@ -215,6 +215,14 @@ static func item_color(item: String) -> Color:
 
 
 static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) -> void:
+	if item.ends_with(" Seed"):
+		var packet := Rect2(center - Vector2(r * 0.48, r * 0.64), Vector2(r * 0.96, r * 1.28))
+		c.draw_rect(packet, Color(0.77, 0.70, 0.53))
+		c.draw_rect(packet, Color(0.35, 0.30, 0.21), false, 1.0)
+		c.draw_rect(Rect2(packet.position, Vector2(packet.size.x, r * 0.18)), Color(0.37, 0.43, 0.27))
+		item_icon(c, item.trim_suffix(" Seed"), center + Vector2(0, r * 0.02), r * 0.65)
+		_line(c, center + Vector2(-r * 0.25, r * 0.46), center + Vector2(r * 0.25, r * 0.46), 1.0, Color(0.43, 0.37, 0.25))
+		return
 	var col := item_color(item)
 	match item:
 		"Wood":
@@ -278,7 +286,7 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 		"Banana":
 			c.draw_arc(center + Vector2(0, -r * 0.05), r * 0.48, -0.85, 2.4, 22, col, r * 0.24, true)
 			_line(c, center + Vector2(-r * 0.39, -r * 0.32), center + Vector2(-r * 0.5, -r * 0.48), 1.8, Color(0.35, 0.25, 0.12))
-		"Fish":
+		"Fish", "Cooked Fish":
 			var fish_body := PackedVector2Array([
 				center + Vector2(-r * 0.55, 0), center + Vector2(-r * 0.2, -r * 0.36),
 				center + Vector2(r * 0.34, -r * 0.28), center + Vector2(r * 0.54, 0),
@@ -288,6 +296,20 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 			var tail := PackedVector2Array([center + Vector2(r * 0.42, 0), center + Vector2(r * 0.72, -r * 0.28), center + Vector2(r * 0.72, r * 0.28)])
 			c.draw_colored_polygon(tail, col.lightened(0.12))
 			_circle(c, center + Vector2(-r * 0.28, -r * 0.08), r * 0.055, Color(0.05, 0.08, 0.1))
+		"Bow":
+			c.draw_arc(center + Vector2(-r * 0.3, 0), r * 0.75, -1.25, 1.25, 20, Color(0.57, 0.34, 0.15), maxf(r * 0.12, 2.0), true)
+			_line(c, center + Vector2(-r * 0.05, -r * 0.70), center + Vector2(-r * 0.05, r * 0.70), 1.3, Color(0.81, 0.75, 0.61))
+		"Arrow":
+			_line(c, center + Vector2(-r * 0.55, r * 0.55), center + Vector2(r * 0.55, -r * 0.55), maxf(r * 0.09, 1.3), Color(0.62, 0.4, 0.2))
+			_line(c, center + Vector2(r * 0.25, -r * 0.55), center + Vector2(r * 0.55, -r * 0.55), 2, Color(0.75, 0.78, 0.77))
+		"Water":
+			_circle(c, center + Vector2(0, r * 0.10), r * 0.42, Color(0.27, 0.64, 0.76))
+			c.draw_colored_polygon(PackedVector2Array([center + Vector2(0, -r * 0.68), center + Vector2(-r * 0.39, r * 0.04), center + Vector2(r * 0.39, r * 0.04)]), Color(0.27, 0.64, 0.76))
+		"Carrot", "Tomato", "Potato", "Baked Potato":
+			_circle(c, center, r * 0.47, Color(0.77, 0.30, 0.06) if item == "Carrot" else (Color(0.72, 0.12, 0.06) if item == "Tomato" else Color(0.56, 0.39, 0.22)))
+		"Raw Bird", "Roast Bird":
+			c.draw_arc(center + Vector2(-r * 0.35, r * 0.18), r * 0.4, PI, TAU, 12, col, 2.2, true)
+			c.draw_arc(center + Vector2(r * 0.35, r * 0.18), r * 0.4, PI, TAU, 12, col, 2.2, true)
 		"Spear":
 			_line(c, center + Vector2(-r * 0.55, r * 0.55), center + Vector2(r * 0.45, -r * 0.45), maxf(r * 0.12, 1.5), col)
 			var spear_tip := PackedVector2Array([center + Vector2(r * 0.72, -r * 0.72), center + Vector2(r * 0.1, -r * 0.48), center + Vector2(r * 0.48, -r * 0.1)])

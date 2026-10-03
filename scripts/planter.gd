@@ -19,9 +19,36 @@ enum PlanterCategory { POT, BOX, TREE_POT }
 
 const TREE_POT_SCENE: PackedScene = preload("res://models/kenney_pot_large.glb")
 const SAND_SURFACE_SHADER: Shader = preload("res://shaders/sand_surface.gdshader")
+const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 
 var planted_id: String = ""
 var sand_applied := false
+var moisture := 0.75
+var _moisture_tick := 0.0
+
+func water_soil() -> bool:
+	if moisture >= 0.95:
+		return false
+	moisture = minf(1.0, moisture + 0.75)
+	return true
+
+func growth_factor() -> float:
+	return 0.25 if moisture < 0.15 else 1.0
+
+func _process(delta: float) -> void:
+	if get_parent() != null and get_parent().name == "BuildPreviewRoot":
+		return
+	_moisture_tick += delta
+	if _moisture_tick < 1.0:
+		return
+	var elapsed := _moisture_tick
+	_moisture_tick = 0.0
+	moisture = maxf(0.0, moisture - elapsed * 0.002)
+	var rain := get_tree().get_first_node_in_group("rain_system")
+	if rain != null and bool(rain.get("_is_raining")):
+		var query := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * (box_size.y + 0.1), global_position + Vector3.UP * 8.0, 1, [get_rid()])
+		if get_world_3d().direct_space_state.intersect_ray(query).is_empty():
+			moisture = minf(1.0, moisture + elapsed * 0.05)
 var _plant: PlantInstance = null
 var _slot: Node3D = null
 var _sand_layer: MeshInstance3D = null
@@ -53,9 +80,7 @@ func _build_visual() -> void:
 		box_soil.size = Vector3(box_size.x * 0.82, box_size.y * 0.2, box_size.z * 0.82)
 		soil.mesh = box_soil
 		soil.position = Vector3(0.0, box_size.y * 0.4, 0.0)
-	var soil_material := StandardMaterial3D.new()
-	soil_material.albedo_color = soil_color
-	soil_material.roughness = 0.96
+	var soil_material := OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.SOIL, soil_color, 0.96)
 	soil.material_override = soil_material
 	add_child(soil)
 
@@ -67,15 +92,18 @@ func _build_visual() -> void:
 
 
 func _build_box_visual() -> void:
-	var mesh_instance := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = box_size
-	mesh_instance.mesh = box
-	var material := StandardMaterial3D.new()
-	material.albedo_color = wood_color
-	material.roughness = 0.88
-	mesh_instance.material_override = material
-	add_child(mesh_instance)
+	var wood_material := OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.WOOD, wood_color.darkened(0.18), 0.88)
+	var thickness := minf(0.045, box_size.x * 0.1)
+	var sizes := [Vector3(box_size.x, thickness, box_size.z), Vector3(thickness, box_size.y, box_size.z), Vector3(thickness, box_size.y, box_size.z), Vector3(box_size.x, box_size.y, thickness), Vector3(box_size.x, box_size.y, thickness)]
+	var centers := [Vector3(0, -box_size.y * 0.5 + thickness * 0.5, 0), Vector3(-box_size.x * 0.5 + thickness * 0.5, 0, 0), Vector3(box_size.x * 0.5 - thickness * 0.5, 0, 0), Vector3(0, 0, -box_size.z * 0.5 + thickness * 0.5), Vector3(0, 0, box_size.z * 0.5 - thickness * 0.5)]
+	for index in range(5):
+		var mesh_instance := MeshInstance3D.new()
+		var wall := BoxMesh.new()
+		wall.size = sizes[index]
+		mesh_instance.mesh = wall
+		mesh_instance.material_override = wood_material
+		mesh_instance.position = centers[index]
+		add_child(mesh_instance)
 
 
 func _build_tree_pot_visual() -> void:
@@ -84,6 +112,7 @@ func _build_tree_pot_visual() -> void:
 		_build_box_visual()
 		return
 	pot.name = "TreePotModel"
+	OBJECT_MATERIALS.apply_model(pot, OBJECT_MATERIALS.Kind.STONE)
 	add_child(pot)
 	var bounds := _node_local_aabb(pot)
 	if bounds.size.x <= 0.001 or bounds.size.y <= 0.001 or bounds.size.z <= 0.001:

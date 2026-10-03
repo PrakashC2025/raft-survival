@@ -49,7 +49,9 @@ func _run() -> void:
 		decal_pool = footprints.get("_decals")
 		check(decal_pool.size() == 28 and (decal_pool[0] as MeshInstance3D).visible,
 			"Footstep stamp activates an impression without adding physics")
-	var test_pot := (load("res://scenes/planter_pot.tscn") as PackedScene).instantiate() as Planter
+	# Load after autoloads exist; resolving Planter while compiling this entry
+	# script also compiles PlantInstance before Inventory is registered.
+	var test_pot := (load("res://scenes/planter_pot.tscn") as PackedScene).instantiate()
 	test_pot.position = Vector3(400.0, -20.0, 400.0)
 	current_scene.add_child(test_pot)
 	check(test_pot.add_sand() and test_pot.has_sand() \
@@ -90,11 +92,43 @@ func _run() -> void:
 	camera.global_transform = original_camera
 	var leaf_mesh := island.get_node("PalmTree").find_child("leafs", true, false) as MeshInstance3D
 	check(leaf_mesh != null and leaf_mesh.get_surface_override_material(0) is ShaderMaterial, "Island palm fronds receive animated natural materials")
+	if leaf_mesh != null:
+		var leaf_material := leaf_mesh.get_surface_override_material(0) as ShaderMaterial
+		check(leaf_material != null and leaf_material.get_shader_parameter("use_albedo_texture") == true \
+			and leaf_material.get_shader_parameter("albedo_texture") is Texture2D,
+			"Imported palm keeps its real frond texture with wind animation")
+	var imported_palms := 0
+	var colliders_ok := true
+	for island_name in ["Island", "ReefIsle", "DriftwoodCay", "FarCove"]:
+		var destination := current_scene.get_node(island_name)
+		for palm in destination.get_children():
+			if not str(palm.name).begins_with("Palm"):
+				continue
+			var model := palm.get_node_or_null("CoconutPalmModel")
+			if model == null:
+				continue
+			imported_palms += 1
+			colliders_ok = colliders_ok and model.find_child("Tree_0_Trunk_Body", true, false) is StaticBody3D \
+				and model.find_child("leafs_Body", true, false) == null
+	check(imported_palms == 31, "All home and destination palms use the supplied coconut GLB")
+	check(colliders_ok, "Imported trunks collide while textured fronds stay visual-only")
+	var first_trunk := island.get_node("PalmTree").find_child("Tree_0_Trunk_Body", true, false) as StaticBody3D
+	var second_trunk := island.get_node("PalmTree2").find_child("Tree_0_Trunk_Body", true, false) as StaticBody3D
+	check((first_trunk.get_child(0) as CollisionShape3D).shape == (second_trunk.get_child(0) as CollisionShape3D).shape,
+		"Repeated palms reuse one cooked collision shape with independent body transforms")
 	var field := island.get_node_or_null("IslandGrass/GrassField") as MultiMeshInstance3D
-	check(field != null and field.multimesh.mesh.get_faces().size() == 72, "Grass grows as three tapered curved blades per instance")
+	check(field != null and field.multimesh.mesh.get_faces().size() == 72, "Realistic grass GLB stays within its 24-triangle tuft budget")
 	if field == null:
 		quit(1)
 		return
+	var grass_material := field.material_override as ShaderMaterial
+	check(island.get_node("IslandGrass").get("_using_imported_model") == true \
+		and grass_material.get_shader_parameter("use_albedo_texture") == true \
+		and grass_material.get_shader_parameter("albedo_texture") is Texture2D,
+		"Grass field uses the supplied textured GLB rather than the procedural fallback")
+	var grass_bounds := field.multimesh.mesh.get_aabb()
+	check(absf(grass_bounds.position.y) < 0.001 and absf(grass_bounds.size.y - 0.38) < 0.001,
+		"Imported grass roots stay grounded at a natural 0.38 m tuft height")
 	check(field.multimesh.use_custom_data and field.visibility_range_end == 100.0, "Grass variation stays batched and has a distance limit")
 	var performance := get_first_node_in_group("mobile_performance")
 	performance.set("_mobile", true)
@@ -102,9 +136,37 @@ func _run() -> void:
 	var material := ((ocean as MeshInstance3D).mesh as PlaneMesh).material as ShaderMaterial
 	check(float(material.get_shader_parameter("surface_detail")) < 0.6, "Battery Saver skips the second water-detail layer")
 	check(root.msaa_3d == Viewport.MSAA_DISABLED, "Battery Saver avoids extra anti-aliasing samples")
+	check(field.multimesh.visible_instance_count <= 800 and field.visibility_range_end == 55.0,
+		"Battery Saver bounds grass density and draw distance")
 	root.get_node("GameSettings").call("update_setting", "quality", 2)
 	check(float(material.get_shader_parameter("surface_detail")) > 0.6, "Balanced restores richer water detail")
 	check(root.msaa_3d == Viewport.MSAA_2X, "Balanced smooths fine foliage edges")
+	check(field.multimesh.visible_instance_count <= 1600 and field.visibility_range_end == 100.0,
+		"Balanced restores grass without regenerating the field")
+	var old_field_id := field.get_instance_id()
+	performance.set("_foliage_reduced", true)
+	performance.call("refresh_foliage")
+	check(field.multimesh.visible_instance_count <= 1040 and field.get_instance_id() == old_field_id,
+		"Sustained slowdown reduces foliage without allocations or ground queries")
+	performance.set("_foliage_reduced", false)
+	performance.call("refresh_foliage")
+	var tree_pot := (load("res://scenes/tree_pot.tscn") as PackedScene).instantiate()
+	tree_pot.position = Vector3(410, -20, 400)
+	current_scene.add_child(tree_pot)
+	tree_pot.restore_plant_state({"id": "Coconut", "stage": 3, "health": 4, "timer": 0.0})
+	var planted := tree_pot.find_child("CoconutPalm", true, false)
+	check(planted != null and planted.find_child("Tree_0_Trunk", true, false) is MeshInstance3D,
+		"Legacy mature coconut state now displays the supplied realistic palm")
+	var plant_state: Dictionary = tree_pot.save_plant_state()
+	check(plant_state.get("health") == 4 and plant_state.get("fruits", []).size() == 4,
+		"Realistic planter tree preserves saved chopping health and fruit slots")
+	tree_pot.queue_free()
+	root.get_node("GameSettings").call("update_setting", "quality", 0)
+	performance.call("_set_render_scale", 1.0)
+	for sample in range(5):
+		performance.call("_update_quality", 0.01)
+	check(performance.get("_cumulus_reduced") == true,
+		"Mobile Auto recovery never silently enables expensive volumetric clouds")
 	ambience.call("stop_environment")
 	change_scene_to_file("res://scenes/main_menu.tscn")
 	await scene_changed

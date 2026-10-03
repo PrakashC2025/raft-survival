@@ -1,0 +1,15 @@
+[gd_scene format=3]
+[ext_resource type="Script" path="res://scripts/rain_collector.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/build_socket.gd" id="2"]
+[sub_resource type="BoxShape3D" id="shape"]
+size = Vector3(0.7, 0.7, 0.7)
+[node name="RainCollector" type="StaticBody3D"]
+script = ExtResource("1")
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("shape")
+[node name="BuildSockets" type="Node3D" parent="."]
+[node name="Socket_Base" type="Marker3D" parent="BuildSockets"]
+position = Vector3(0, -0.35, 0)
+script = ExtResource("2")
+socket_type = 2
+[node name="SampleMarker" type="Marker3D" parent="."]

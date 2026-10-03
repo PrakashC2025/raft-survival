@@ -1,6 +1,6 @@
 # Sketchfab assets for the existing island scene
 
-This is an integration note for the current Godot project, not a new project. The codebase does **not** bundle or claim downloaded Sketchfab files. Instead, the home-island bird component is ready to accept a licensed GLB, and the existing palm instances can be swapped after a creator-authorized download. Keep the current Kenney CC0 models as fallback until those files are imported.
+This is an integration note for the current Godot project. The supplied coconut-palm and realistic-grass GLBs are prepared in `models/` and used by default on the home and destination islands; their origins and licenses are recorded in `ASSET_CREDITS.md`. Kenney/procedural foliage provides fallback visuals. The home-island bird component can accept an optional imported GLB.
 
 ## Compatible candidate models
 
@@ -41,17 +41,17 @@ CC BY requires attribution and a link to the license; include creator, source UR
 
 ```gdscript
 # scripts/island_setup.gd -- swaps island Palm* nodes to the prepared coconut palm GLB
-@export_file("*.glb,*.gltf") var sketchfab_palm_model := "res://models/coconut_palm.glb"
+@export_file("*.glb", "*.gltf") var sketchfab_palm_model := "res://models/coconut_palm.glb"
 
 # scripts/island_birds.gd -- set in the IslandBirds Inspector
 @export_file("*.glb") var sketchfab_bird_model := ""
 @export_range(1, 8, 1) var bird_count := 4
 
 # scripts/island_grass.gd -- uses the prepared 24-triangle realistic grass tuft GLB
-@export_file("*.glb,*.gltf,*.scn,*.tscn") var sketchfab_grass_model := "res://models/realistic_grass.glb"
+@export_file("*.glb", "*.gltf", "*.scn", "*.tscn") var sketchfab_grass_model := "res://models/realistic_grass.glb"
 @export var target_tuft_height := 0.38
 ```
 
-`tools/prepare_island_models.py` prepares `3d models/coconut_palm (1).glb` and `3d models/realistic_grass.glb` into `models/coconut_palm.glb` and `models/realistic_grass.glb` (and updates the files in `3d models/` in place). Both `IslandSetup` and `IslandGrass` load via `ResourceLoader` when imported by Godot Editor and fall back to runtime `GLTFDocument` buffer parsing before the editor has generated `.godot/imported/*.scn`.
+`tools/prepare_island_models.py` prepares `3d models/coconut_palm (1).glb` and `3d models/realistic_grass.glb` into `models/coconut_palm.glb` and `models/realistic_grass.glb` (and updates the files in `3d models/` in place). Default models are preloaded dependencies, so Godot must import them normally before running; the menu's threaded game-scene loader includes them. Custom Inspector model paths still support runtime `GLTFDocument` fallback if no imported scene exists. Planter coconut trees also use the supplied palm, preserving growth, fruit sockets, chopping and saved state. Collision shapes and normalized grass meshes are cached across repeated instances.
 
 `IslandMountain` in the existing home-island scene is generated locally by `scripts/island_mountain.gd`; no external mountain project or model is required. Sand gathering, held-item presentation, planter top-dressing, save restoration, and pooled footprints are already implemented in the current game source.

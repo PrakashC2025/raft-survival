@@ -47,7 +47,8 @@ func _on_timeout() -> void:
 	if system_sync:
 		_update_time_from_os()
 	else:
-		var delta: float = 0.001 * (Time.get_ticks_msec() - _last_update)
+		var delta: float = _elapsed_active
+		_elapsed_active = 0.0
 		_progress_time(delta)
 	_update_celestial_coords()
 	_last_update = Time.get_ticks_msec()
@@ -55,12 +56,14 @@ func _on_timeout() -> void:
 
 ## Halts the automatic progression of in-game time until resumed.
 func pause() -> void:
+	_elapsed_active = 0.0
 	if is_instance_valid(_update_timer):
 		_update_timer.stop()
 
 
 ## Restarts the automatic progression of in-game time.
 func resume() -> void:
+	_elapsed_active = 0.0
 	if is_instance_valid(_update_timer):
 		# Assume resuming from a pause, so timer only gets one tick
 		_last_update = Time.get_ticks_msec() - update_interval
@@ -75,6 +78,11 @@ func resume() -> void:
 
 var _update_timer: Timer
 var _last_update: int = 0
+var _elapsed_active := 0.0
+
+func _process(delta: float) -> void:
+	if is_instance_valid(_update_timer) and not _update_timer.is_stopped():
+		_elapsed_active += delta
 var _sky_dome: SkyDome
 
 @export_group("General")

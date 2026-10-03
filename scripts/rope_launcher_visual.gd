@@ -1,4 +1,6 @@
 extends RefCounted
+const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
+const HUMAN_HAND: PackedScene = preload("res://models/human_hand.glb")
 ## Original lightweight rope-launcher geometry, batched once by material.
 ## Units are metres; the barrel points down local -Z.
 
@@ -11,7 +13,6 @@ static func create_launcher(with_hand: bool = true) -> Node3D:
 	var body := _material(Color(0.27, 0.31, 0.23), 0.62, 0.35)
 	var brass := _material(Color(0.63, 0.42, 0.15), 0.42, 0.65)
 	var cord := _material(Color(0.58, 0.43, 0.25), 0.95, 0.0)
-	var skin := _material(Color(0.46, 0.28, 0.17), 0.85, 0.0)
 	# Receiver, barrel shroud, exposed steel muzzle and bore.
 	_box(batches, body, Vector3(0.125, 0.12, 0.28), Vector3(0, 0.065, -0.16))
 	_cylinder(batches, steel, 0.039, 0.043, 0.46, Vector3(0, 0.08, -0.39), Vector3.RIGHT, PI / 2.0)
@@ -47,14 +48,12 @@ static func create_launcher(with_hand: bool = true) -> Node3D:
 	_tube(batches, cord, PackedVector3Array([spool + Vector3(-0.025, 0.074, 0), Vector3(-0.05, 0.13, -0.36), Vector3(0, 0.08, -0.58)]), 0.006, 5)
 	for z in [-0.075, -0.22]:
 		_cylinder(batches, steel, 0.011, 0.011, 0.007, Vector3(0.066, 0.07, z), Vector3.FORWARD, PI / 2.0)
-	# Rounded forearm, palm and four fingers wrapping the grip.
 	if with_hand:
-		_capsule(batches, skin, 0.045, 0.35, Vector3(0.10, -0.16, 0.14), Basis(Vector3.RIGHT, 1.13))
-		_capsule(batches, skin, 0.047, 0.13, Vector3(0.044, -0.066, -0.015), Basis(Vector3.RIGHT, 0.3))
-		for index in range(4):
-			var y := -0.017 - float(index) * 0.03
-			_capsule(batches, skin, 0.013, 0.070, Vector3(0, y, -0.088), Basis(Vector3.FORWARD, PI / 2.0))
-		_capsule(batches, skin, 0.017, 0.075, Vector3(0.057, 0.001, -0.077), Basis(Vector3.RIGHT, -0.62))
+		var hand := HUMAN_HAND.instantiate() as Node3D
+		OBJECT_MATERIALS.apply_model(hand, OBJECT_MATERIALS.Kind.SKIN)
+		hand.name = "HumanHand"
+		hand.position = Vector3(0.04, -0.065, -0.015)
+		root.add_child(hand)
 	_finish(root, batches)
 	var muzzle := Marker3D.new()
 	muzzle.name = "LaunchMuzzle"
@@ -85,12 +84,9 @@ static func create_hook() -> Node3D:
 	_finish(root, batches)
 	return root
 
-static func _material(color: Color, roughness: float, metallic: float) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.roughness = roughness
-	material.metallic = metallic
-	return material
+static func _material(color: Color, roughness: float, metallic: float) -> Material:
+	var kind := OBJECT_MATERIALS.Kind.METAL if metallic > 0.3 else OBJECT_MATERIALS.Kind.CLOTH
+	return OBJECT_MATERIALS.make(kind, color, roughness, metallic)
 
 static func _box(batches: Dictionary, material: Material, size: Vector3, position: Vector3, basis: Basis = Basis.IDENTITY) -> void:
 	var mesh := _beveled_box(size)

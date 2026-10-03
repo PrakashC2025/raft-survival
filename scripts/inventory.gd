@@ -49,7 +49,8 @@ const RECIPES := {
 	"Stairs":          {"Wood": 6, "Rope": 1},
 	"Door":            {"Wood": 4, "Rope": 1},
 	"Window":          {"Wood": 3, "Plastic": 1},
-	"Bonfire":         {"Wood": 8, "Rope": 2},
+	"Bonfire":         {"Wood": 8, "Stone": 4},
+	"RainCollector":   {"Wood": 6, "Barrel": 1, "Rope": 2},
 	"Raft Extension":  {"Wood": 10, "Plastic": 2},
 	"PlanterPot":      {"Wood": 4},
 	"PlanterBox":      {"Wood": 6},
@@ -64,6 +65,8 @@ const ITEM_RECIPES := {
 	"Sail Kit": {"Wood": 8, "Rope": 4, "Plastic": 2},
 	"Motor Kit": {"Wood": 10, "Rope": 2, "Plastic": 5, "Metal": 4},
 	"Life Vest": {"Plastic": 5, "Rope": 2},
+	"Bow": {"Wood": 5, "Rope": 3},
+	"Arrow": {"Wood": 1, "Stone": 1},
 }
 
 
@@ -421,6 +424,21 @@ func craft_item(item_name: String) -> bool:
 		for ingredient in ITEM_RECIPES[item_name]:
 			remove(str(ingredient), int(ITEM_RECIPES[item_name][ingredient]))
 	return add(item_name, 1) == 0
+
+## Commit costs and rewards together; a full inventory never loses ingredients.
+func try_exchange(costs: Dictionary, rewards: Dictionary) -> bool:
+	_ensure_slots()
+	var proposed := slots.duplicate(true)
+	for item in costs:
+		if _simulate_remove(proposed, str(item), maxi(0, int(costs[item]))) > 0:
+			return false
+	for item in rewards:
+		if _simulate_add(proposed, str(item), maxi(0, int(rewards[item]))) > 0:
+			return false
+	slots = proposed
+	_recompute()
+	changed.emit()
+	return true
 
 
 func _recompute() -> void:

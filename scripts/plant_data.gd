@@ -24,6 +24,11 @@ func _ready() -> void:
 
 func _build_defs() -> void:
 	defs.clear()
+	for crop in ["Carrot", "Tomato"]:
+		_add({"id": crop, "display_name": crop, "category": Category.ROOT,
+			"harvest_type": HarvestType.DIG, "seed_item": crop + " Seed", "yield_item": crop,
+			"yield_min": 2, "yield_max": 4, "grow_stage_time": [20.0, 35.0, 25.0],
+			"dig_time": 1.2, "leaf_color": Color(0.18, 0.37, 0.12), "planter_categories": ["pot", "box"]})
 
 	# ---------------- POTATO (root crop, dig to harvest) ----------------
 	_add({

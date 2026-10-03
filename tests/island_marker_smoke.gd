@@ -3,6 +3,11 @@ extends SceneTree
 var checks := 0
 var failures := 0
 
+class ModalHUD extends Control:
+	var blocked := false
+	func gameplay_input_blocked() -> bool:
+		return blocked
+
 func _initialize() -> void:
 	call_deferred("_run")
 
@@ -61,6 +66,16 @@ func _run() -> void:
 	beacon.global_position = Vector3(0, 0, -100)
 	marker.call("_process", 0.016)
 	check((marker.get("_screen_pos") as Vector2).distance_to(Vector2(root.size) * 0.5) < 0.1, "Centered target stays at screen center")
+	var modal := ModalHUD.new()
+	root.add_child(modal)
+	modal.add_to_group("survival_hud")
+	modal.blocked = true
+	marker.call("_process", 0.016)
+	check(float(marker.get("_alpha")) == 0.0, "Modal panels hide island markers")
+	modal.blocked = false
+	marker.call("_process", 0.016)
+	check(float(marker.get("_alpha")) > 0.0, "Closing a modal restores the island marker")
+	modal.queue_free()
 	beacon.global_position = Vector3(0, 0, -10)
 	marker.call("_process", 0.016)
 	check(float(marker.get("_alpha")) == 0.0, "Arrived target hides its marker")

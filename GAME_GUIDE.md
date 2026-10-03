@@ -13,7 +13,7 @@ The visual reference the owner confirmed is [Ocean Survival by Candy Mobile](htt
 Current changes and fixes:
 
 - Required island textures are included by the Android export preset, fixing the observed loading failure (threaded status 2, scene error 19).
-- New Game and Continue wait for validated game-scene loading, show friendly errors, unlock retry, and avoid destroying a saved game before successful scene entry.
+- New Game and Continue wait for validated game-scene loading, show friendly errors, unlock retry, and avoid destroying a saved game before successful scene entry. Active loads no longer fail just because 90 seconds elapsed: the menu keeps polling, shows a still-loading notice after 30 seconds, and offers Cancel Loading. Cancelling preserves saves/inventory and lets the same request finish warming without entering gameplay.
 - Mobile controls track fingers independently, support analog movement, release held actions when interrupted, and integrate inventory, construction, map, crafting, help, pause, settings, and Android Back.
 - Foundation placement works with a valid green preview even when optional socket metadata is absent. Invalid placement and missing materials produce feedback.
 - Temporary testing inventory grants 2,000 each of Wood, Rope, Plastic, Barrel, Stone, and Metal once per save. Spending and recipe costs still work.
@@ -21,15 +21,19 @@ Current changes and fixes:
 - Quick casts start at 20 m; holding charges up to 60 m. Hook flight is arced, follows a locked trajectory, and the braided rope starts at the muzzle.
 - Hotbar selection immediately updates the item shown in the hand. Ocean shading has gentler fine ripple contrast.
 - Water now has irregular noise-based ripple normals, stronger angle-dependent sky reflection, sun/moon highlights and twilight haze. A lightweight distant-water apron fills the old dark horizon gap.
-- Palms use finer procedural arching fronds with individual leaflets, wind motion, leaf backlighting and bark detail. Grass uses curved three-blade tufts, color/dryness variation and traveling wind gusts.
+- Island palms use the supplied textured `models/coconut_palm.glb` on the home and destination islands, preserving its frond geometry/textures with wind animation and trunk-only collision. Grass uses the supplied textured `models/realistic_grass.glb`, normalized to a grounded 0.38 m tuft with color/dryness variation and traveling wind gusts. Procedural foliage remains a fallback.
+- Fixed the comma-separated `@export_file` patterns that prevented IslandSetup/IslandGrass from parsing in Godot 4.7.1. Each pattern is now a separate argument. Footprint-manager attachment is deferred until the parent finishes adding scene children, and destination setup checks safely handle a missing completion property.
 - Recorded ocean waves are mixed with original generated wind/foliage beds, audible default rain and underwater low-pass filtering. The environment bus is owned and removed by each gameplay scene.
 - Island markers clamp both behind-camera and front-but-offscreen targets, including camera-plane edge cases. Diamonds draw around a local origin to avoid collapsed polygons from enormous projected coordinates. The reported unused-parameter, mixed ternary, integer division and shadowed/confusable name warnings are cleaned up.
-- The home island now has a generated faceted volcanic peak with a layered rock shader, and four light-weight orbiting gulls (procedural fallback; can load a creator-authorized Sketchfab GLB).
+- The home island now has a smooth original coastal ridge GLB with a layered rock shader and four animated, huntable original gull GLBs. A licensed custom gull model can still be assigned.
 - Island terrain shader detail now adds finer sand grain, wind-ripple variation and broken rock strata without replacing the scanned home-island textures.
 - Players can scoop Sand from a nearby island surface, equip it from the bag/hotbar, and apply a visible sand top-dressing to a planter. Planter sand state is saved with built pieces while old saves default to no top-dressing.
 - Walking on island ground stamps alternating, fading footprint decals from a small reusable pool; raft footsteps remain wood sounds and do not spawn prints.
+- Planter coconut trees now use the same supplied textured coconut-palm GLB as island trees, retaining growth stages, fruit sockets, chopping and saved state. Shared surface materials add wood grain, metal patina, stone, cloth and soil detail to untextured construction, equipment, pickups and character parts while preserving imported textures and vertex colors. Rope coils, plastic canisters, bent metal scraps and seed packets have recognizable reusable geometry.
+- The menu has an animated dusk sea; HUD, touch controls, crafting, bag and settings use cached matte panels and brass accents. Seed icons show packets and their crops. Island markers hide during modal panels and return when they close. Touch hit areas and action ownership are preserved.
+- Default foliage GLBs are preloaded as dependencies of the threaded game-scene load. Palm collision shapes, normalized grass meshes, prop meshes and materials are shared. Debris prewarming yields after each two objects; fading pickups reuse their collected mesh list. Mobile grass visibility adapts without rebuilding the field, and Auto quality keeps expensive cumulus clouds disabled even after recovery.
 
-The last recorded source-suite run before the 2026-10-03 visual pass had **181 passing checks**: 89 mobile, 17 foundation, 11 testing supplies, 20 rope, 23 environment and 21 island marker. This visual pass adds environment smoke assertions for the mountain, bird flock, footprint pool and planter sand layer; those new checks have not yet been run in this sandbox. No Android phone was connected for current on-device performance verification.
+The 2026-10-03 eight-suite source verification passed **266 checks**: 92 mobile, 17 foundation, 11 testing supplies, 20 rope, 40 environment, 23 island marker, 21 menu loading and 42 survival-loop checks. Coverage includes supplied foliage, collision/quality budgets, saved coconut-tree restoration, modal markers, waits beyond the former 90-second cutoff and safe cancellation for New Game/Continue/Quick Save. Desktop Mobile/D3D12 previews rendered the updated visuals without script/engine errors. A real rendered New Game load completed in about 70 seconds before the timeout fix; the subsequent cancellation/retry probe completed in about 25 seconds. Those are observations on a busy desktop, not a speedup guarantee. Shutdown ObjectDB leak warnings remain (including rapid scene switches). No APK was exported or Android phone tested; these checks do not establish phone FPS or freeze-free gameplay.
 
 ## Project and entry points
 
@@ -78,6 +82,8 @@ The first person hand hierarchy is `CamPivot/SpringArm3D/Camera3D/HandPivot`, wi
 | `scripts/door.gd` | Door behavior |
 | `scripts/debris.gd` / `debris_spawner.gd` | Floating resources and population management |
 | `scripts/food_pickup.gd` | Collectible food/resources, collection behavior |
+| `scripts/object_materials.gd` / `resource_visual.gd` | Shared surface materials and reusable salvage/seed prop meshes |
+| `scripts/ui_surface.gd` | Cached panel styles, tactile controls and settings theme |
 | `scripts/ocean.gd` | CPU ocean height sampling used by gameplay |
 | `scripts/ocean_ambience.gd` | Ocean sound behavior |
 | `scripts/vegetation_visual.gd` | Shared procedural grass tufts/palm fronds and natural foliage materials |
@@ -100,13 +106,14 @@ The first person hand hierarchy is `CamPivot/SpringArm3D/Camera3D/HandPivot`, wi
 | `shaders/island_terrain.gdshader` | Island terrain material |
 | `shaders/island_mountain.gdshader` | Procedural rock color, grain and sediment seams |
 | `shaders/sand_surface.gdshader` / `sand_footprint.gdshader` | Handheld/planter sand grain and fading sole depressions |
+| `shaders/object_surface.gdshader` / `menu_sea.gdshader` | Original procedural surface detail and animated menu sea |
 | `shaders/raft_foam.gdshader` | Raft foam appearance |
 
 Other useful files: `BUILD_ANDROID.md` gives build/install verification instructions; `ASSET_CREDITS.md` documents asset origins and licenses; `tools/verify_source.ps1` checks current source; `tools/verify_android.ps1` checks an exported APK. `DOCUMENTATION.md` contains historical notes and source snapshots and may have older constants/behavior. Use this guide and current source first.
 
 ## New Game, Continue, and loading errors
 
-The menu requests `res://scenes/main.tscn` with threaded resource loading, polls its status/progress, and only retrieves the loaded PackedScene after a successful status. The scene transition is a separate step. The timeout is 90 seconds, allowing slower mobile devices time to load. A timeout or failed load returns a readable error and permits another attempt.
+The menu requests `res://scenes/main.tscn` with threaded resource loading, polls status/progress, and retrieves the PackedScene only after a successful status. The scene transition is separate. There is no elapsed-time failure for an in-progress request: a single texture/shader dependency can take longer than 90 seconds on a slow or busy machine. After 30 seconds the progress subtitle says STILL LOADING. Cancel Loading clears the pending New Game/Continue/Quick Save choice and returns to the menu without touching inventory or disk saves; the one resource request keeps warming, and late completion does not enter gameplay. Settings remains accessible during loading. Actual missing/failed resources still show an error and unlock retry.
 
 New Game resets live state only as part of validated entry. It uses `Inventory.new_game_reset(false)` so existing save files survive until gameplay successfully writes the new save. Continue reads the selected saved data and restores inventory/meta before the player restores world state. Failure restores the live inventory snapshot and related metadata rather than leaving a half-reset menu session. Do not add a blocking fallback load on the main thread; that can freeze a phone and repeat the same missing-resource failure.
 
@@ -138,8 +145,8 @@ An already-open editor previously rewrote the corrected export preset with cache
 | Fine build turn | Shift with R, 15° | Dedicated UI as implemented |
 | Hotbar | 1–6 | Tap a hotbar slot |
 | Quick save | F5 | Save action in UI |
-| Map | M | MAP button |
-| Craft | C | CRAFT button |
+| Map | M | Bag → MAP |
+| Craft | C | Bag → CRAFT |
 | Simulate mobile UI | F10 | Developer desktop helper |
 | Build debug overlay | F3 | Developer desktop helper |
 
@@ -186,7 +193,7 @@ To restore normal survival defaults later, set `TESTING_RESOURCES_ENABLED` to fa
 | PlanterBox | 6 Wood |
 | TreePot | 8 Wood, 1 Rope |
 
-These nine pieces are registered in the player's active build selector. Bonfire (8 Wood, 2 Rope) and Raft Extension (10 Wood, 2 Plastic) have legacy scene/recipe entries, but are not currently registered as active selectable player pieces. Their presence in a directory is not proof of complete gameplay support.
+Eleven pieces are registered: the nine above, Bonfire (8 Wood + 4 Stone), and RainCollector (6 Wood + 1 Barrel + 2 Rope). Raft Extension remains a legacy recipe/scene rather than a separate active selectable piece.
 
 ### Equipment costs
 
@@ -202,11 +209,11 @@ Recipe identifiers, hotbar item names, icons, interaction logic, and saved type 
 
 ## Movement, interaction, and held items
 
-Player is a CharacterBody3D with raft-relative movement and swimming. Current walk speed is 3, sprint speed 5, and jump velocity 10. The camera spring arm supports first and third person modes. Swimming compares the player against sampled ocean height, not just a fixed flat plane. The raft contributes horizontal carry while the player is on deck.
+Player is a CharacterBody3D with raft-relative movement and swimming. Current walk speed is 3, sprint speed 5, and jump velocity 4.5 with gravity 18 (about 0.56 m jump apex). The camera spring arm supports first and third person modes. Swimming compares the player against sampled ocean height, not just a fixed flat plane. The raft contributes horizontal carry while the player is on deck.
 
 Interaction targeting distinguishes nearby pickups, planters, doors, editable construction, fishing, and combat. Typical pickup reach is 5 m, with closer context checks around 2 m; rope aim reaches up to 60 m. Treat ray masks/groups and distance checks as part of the interaction contract. The `debris` group contains both floating rigid bodies and fixed pickups; do not assume every member is a RigidBody3D.
 
-`select_hotbar_slot()` updates `_update_hand_item()` immediately. `_held_visual_item` prevents rebuilding identical visuals when only a stack count changes. On changing items, old child visuals are hidden before deferred freeing so there is no one-frame double model. The original fist mesh is cached and restored for non-rope equipment. The rope visual hides the original arm/fist mesh while retaining the HandItem subtree. Camera switching must synchronize third person held-item visibility.
+`select_hotbar_slot()` updates `_update_hand_item()` immediately. `_held_visual_item` prevents rebuilding identical visuals when only a stack count changes. On changing items, old child visuals are hidden before deferred freeing so there is no one-frame double model. The old arm and fist boxes are hidden. All equipment now uses the original human-hand GLB under HandItem, including the launcher. Camera switching must synchronize third person held-item visibility.
 
 ## Rope launcher and collection state machine
 
@@ -259,7 +266,7 @@ Stats starts health, hunger and thirst at 100. While actual gameplay is active, 
 
 Food interaction consumes the selected inventory item and applies its configured reward. Current coconut rewards include 12 hunger and 28 thirst, banana 30 hunger, and fish 24 hunger. Inspect the whole interaction branch for secondary health bonuses when changing nutrition. A death-screen save is normalized to survivable values, and legacy zero-health Continue handling avoids instantly resuming into a dead game. Preserve these protections when changing respawn rules.
 
-The Fishing Rod starts timed fishing while on raft/shore rather than swimming. Current fishing takes 2.6 s with a 7.5 s cooldown. A completed catch adds one Fish; overflow spawns a world pickup instead of losing the reward. Spear interaction raycasts nearby sharks (current reach 5.2 m and damage 38). Consume/cooldown/target checks belong to the interaction path, not merely the visual animation.
+The Fishing Rod starts timed fishing while on raft/shore rather than swimming. Fishing requires open water and takes 4–6.5 active seconds with a 7.5-second cooldown. A completed catch adds one Fish; overflow spawns a world pickup instead of losing the reward. Spear interaction raycasts nearby sharks (current reach 5.2 m and damage 38). Consume/cooldown/target checks belong to the interaction path, not merely the visual animation.
 
 There are three shark spawners in the gameplay scene. Sharks have 70 health, 42 m detection range, 4.1 chase speed, 1.7 patrol speed, 2.6 m bite range, and 12 bite damage. They stalk swimmers and can be repelled/killed using the spear. Life Vest is persistent equipped state and reduces incoming bite damage through the player's handler (current damage multiplier 0.38). It is not a one-use shield. Keep shark and player damage delegation consistent so vest protection is applied once.
 
@@ -267,7 +274,7 @@ Sail Kit and Motor Kit install raft upgrade tiers 1 and 2. Installing the same/l
 
 ## Plants and planters
 
-PlantDB definitions live in `scripts/plant_data.gd`. Potato is a root crop for the small pot/box, while coconut and banana trees use TreePot. Each plant definition describes supported containers, stage timing, models/visual properties, yields, and chopping/regrowth behavior. The player owns contextual sow/harvest/chop interaction; Planter owns its planted instance; PlantInstance owns growth and fruit state.
+PlantDB definitions live in `scripts/plant_data.gd`. Potato, carrot and tomato grow in the small pot/box, while coconut and banana trees use TreePot. Each plant definition describes supported containers, stage timing, models/visual properties, yields, and chopping/regrowth behavior. The player owns contextual sow/harvest/chop interaction; Planter owns its planted instance; PlantInstance owns growth and fruit state.
 
 Plant stages are SEED, SPROUT, GROWING, MATURE, FALLING, and STUMP. Root crops mature and are dug/harvested. Trees grow, produce individually tracked fruits that can regrow, take repeated chopping hits, fall, drop wood/fruit, and leave a removable stump. Do not turn every harvest into destruction of the whole tree or recreate all fruits whenever one is picked.
 
@@ -289,13 +296,15 @@ Collision preparation is asynchronous/batched. Palm/grass ground queries must wa
 
 DebrisSpawner maintains floating resource population and prewarms a useful starting set (current mobile cap 48, prewarm 24). Debris contributes Wood, Rope, Plastic and other resources according to its item configuration. Fixed island pickups may share the `debris` group but should not be frozen/reparented as hookable rigid bodies.
 
-The home scene adds `IslandMountain` and `IslandBirds` as gameplay-detail children that are excluded from scanned-island rescaling. The peak is a deterministic, generated faceted mesh with one matching trimesh collider and a mobile-oriented procedural rock shader; the gull flock defaults to simple non-colliding geometry and can load a licensed imported GLB from its Inspector property. Downloaded Sketchfab models are not bundled; see `SKETCHFAB_ASSET_INTEGRATION.md` for model pages, license notes and import steps.
+The home scene adds `IslandMountain` and `IslandBirds` as gameplay-detail children that are excluded from scanned-island rescaling. The peak is a deterministic, generated faceted mesh with one matching trimesh collider and a mobile-oriented procedural rock shader; the gull flock defaults to simple non-colliding geometry and can load a licensed imported GLB from its Inspector property. The supplied palm and grass GLBs are bundled; an imported gull is still optional. See `SKETCHFAB_ASSET_INTEGRATION.md` and `ASSET_CREDITS.md` for model origins and import steps.
 
-Grass uses MultiMesh rather than separate nodes for every blade. Mobile generation is capped at 2,500 instances (three blades each with the default natural tufts), with batches of 64 ground rays per frame to avoid a single loading stall. Convert ray-hit world positions into the MultiMesh's local space. Mesh vertex color encodes bending behavior; preserve the COLOR_0 data expected by the grass wind shader.
+Grass uses MultiMesh rather than separate nodes for every blade. Mobile allocation is capped at 2,400 instances per field, with batches of 64 ground rays per frame. Visible budgets are 1,600 in Auto/Balanced, 800 in Battery Saver and 2,400 in High; heavier custom meshes may further lower allocation. Quality changes adjust `visible_instance_count` without rebuilding ground queries. Battery Saver uses a 55 m visibility range; other profiles use 100 m. Convert ray-hit world positions into the MultiMesh's local space and preserve the COLOR_0 wind mask.
 
-The default `natural_tufts` setting substitutes a shared procedural three-blade mesh for the default `models/grass_blade.glb`. Each tuft has 24 triangles with tapered, curved blades. Custom grass mesh paths still load their own mesh. Blade COLOR.r carries the rooted-to-tip bend mask; INSTANCE_CUSTOM RGBA now carries phase, strength, color variation and dryness. The shader creates coherent traveling gusts, slight blade droop, dark roots and leaf backlighting. Tufts shrink over 55–95 m and the field has a 100 m visibility limit to reduce distant foliage cost. Keep MultiMesh custom-data enabled before setting its instance count.
+The default `sketchfab_grass_model` loads `models/realistic_grass.glb`: a 24-triangle tuft of six intersecting textured ribbons. Its alpha-cutout texture is forwarded to the wind shader. When that model path is blank, `natural_tufts` substitutes a shared procedural three-blade mesh for `models/grass_blade.glb`; missing custom models also fall back to procedural tufts when enabled. Blade COLOR.r carries the rooted-to-tip bend mask; INSTANCE_CUSTOM RGBA carries phase, strength, color variation and dryness. The shader creates coherent traveling gusts, slight blade droop, dark roots and leaf backlighting. Tufts shrink over 55–95 m and the field has a 100 m visibility limit to reduce distant foliage cost. Keep MultiMesh custom-data enabled before setting its instance count.
 
-`vegetation_visual.gd` generates one shared palm-frond mesh: eight arched fronds with individually separated paired leaflets and thin central stems. It replaces the visual leaf meshes of existing imported palms and applies shared leaf/bark materials. Trunks and their collision geometry keep their original shape. IslandSetup applies it to home and destination palms; PlantInstance applies it to grown coconut palms while preserving fruit sockets, chopping, growth and saves. Leaf animation stays attached at the crown, with stronger motion near tips. Bark has subtle rings/fibers; leaves have fine vein variation, moderate waxy highlights and backlighting. The overall project still contains low-poly assets; this is a natural-detail pass, not photorealistic replacement art.
+`IslandSetup` replaces the children of existing Palm nodes with the supplied coconut-palm GLB, preserving scene transforms and names. `vegetation_visual.gd` retains textured geometry and bark/collar materials, applying a cached texture-aware wind shader to `leafs`. Planter coconut trees use this GLB at their existing growth-stage heights; generated fronds and bark remain available for untextured fallback palms. Fruit sockets, chopping, growth, IDs and saves keep their existing behavior. The project still mixes scanned/textured, low-poly and procedural assets.
+
+Mobile Auto reduces grass visibility to 65% of its normal budget when render scale falls to 0.66 or lower, restoring it after sustained recovery to 0.78 or higher. Cumulus clouds remain disabled in mobile Auto; only explicit High can restore them. HUD state/layout refresh and menu drawing run at 10 Hz with immediate event redraws; menu loading status is still polled every frame.
 
 ## Ocean, sky, rain, and visual rules
 
@@ -305,7 +314,7 @@ The earlier ripple-softening pass was followed by analytic value-noise gradients
 
 Ocean creates a `FarWater` child with four broad strips (eight triangles) outside the main detailed plane. The apron has a hole matching the detailed plane, avoiding an overlapping full-screen water pass. It shares the driven ocean material and extends the visible sea toward the camera's far limit. It is cosmetic distant water; detailed interaction/buoyancy still uses the existing Ocean sampler and central wave mesh.
 
-Sky3D/TimeOfDay handles the clock, day/calendar changes, sun/sky appearance, and linked weather. Day duration defaults are supplied by the addon/scene; verify them before changing time progression or saved calendar fields. RainSystem schedules weather and checks overhead cover. Script interval defaults are 6–14 minutes, but **the main scene overrides them to 4–8 minutes**. This distinction matters: editing an exported script default may not alter an existing scene override.
+Sky3D/TimeOfDay handles the clock, day/calendar changes, sun/sky appearance, and linked weather. Day duration defaults are supplied by the addon/scene; verify them before changing time progression or saved calendar fields. RainSystem schedules weather and checks overhead cover. Script interval defaults are 6–14 minutes, but **the main scene overrides them to 3–7 minutes, a 65% chance, and 1–2.5-minute duration**. This distinction matters: editing an exported script default may not alter an existing scene override.
 
 First person, third person, underwater rendering, sunrise/noon/night, mobile quality, and raft motion can reveal different visual problems. Prefer changes that fit the existing palette and asset style. When adding realism, retain readable crosshair/controls and budget for mobile geometry, fill rate, shadows, texture memory, and scene load time. Do not claim desktop screenshots prove smooth Android frame rate.
 
@@ -382,12 +391,15 @@ The default suite runs these scripts:
 
 | Test | Current checks | Coverage |
 | --- | --- | --- |
-| `tests/mobile_smoke.gd` | 89 | Scene/menu flow, touch routing, held actions, UI, inventory, construction, climbing, save/pause/settings |
+| `tests/mobile_smoke.gd` | 92 | Scene/menu flow, touch routing, held actions, UI, inventory, construction, climbing, save/pause/settings |
 | `tests/foundation_smoke.gd` | 17 | Keyboard/mobile foundation placement, transforms, costs, optional socket metadata, saved structures |
 | `tests/testing_resources_smoke.gd` | 11 | 2,000 grants, stack handling, spend, New Game, once-per-save persistence |
 | `tests/rope_smoke.gd` | 20 | Launcher/muzzle, touch charging, quick/long cast, arc/range, rope geometry, catch release, return, camera/hotbar/build interactions |
-| `tests/environment_smoke.gd` | 23 | Island/open-water sound, stereo looping, rain, submersion/surfacing filtering, vegetation setup, water/AA quality choices, audio-bus cleanup and menu scene preloading after teardown |
-| `tests/island_marker_smoke.gd` | 21 | Front/offscreen/behind targets, camera-plane/extreme projection, edge styles, arrival fade and tiny viewport; can also run natively to check real polygon drawing |
+| `tests/environment_smoke.gd` | 40 | Environmental sound, imported foliage/textures, shared trunk collision, mobile grass budgets/recovery, saved planter coconut restoration, Auto cloud recovery, mountain/birds/footprints/sand, water/AA profiles, audio cleanup and menu preloading |
+| `tests/island_marker_smoke.gd` | 23 | Front/offscreen/behind targets, camera-plane/extreme projection, edge styles, arrival fade, tiny viewport and modal hide/restore; can also run natively to check real polygon drawing |
+| `tests/menu_loading_smoke.gd` | 21 | Simulated 120-second active loads, cancellation for all three save choices, repeated presses, untouched saves/inventory, late completion and retry |
+
+| `tests/survival_loop_smoke.gd` | 42 | Real stair ascent/descent/rotation, jump apex, construction and saved prop state, farming, cooking, rain, birds, bow release/cancellation and capacity-safe rewards |
 
 Logs are `build/source-<test_name>.log` and the matching `-console.log`. The helper captures both engine logs and console output, including shutdown errors after the engine closes its log. It requires a successful process exit, a checks/zero-failures summary, and no SCRIPT ERROR, ERROR, or FAIL text. Godot file logs may still be shared with an open process, so the helper reads with FileShare.ReadWrite. New assets may need the normal editor import before testing. Keep tests guarded against running on the real user-data path.
 
@@ -455,7 +467,7 @@ Add optional fields with backwards-compatible defaults and isolate tests. For re
 ## Known limits and remaining polish
 
 - Current 2,000 resource supplies are intentionally temporary testing defaults; normal survival balance needs that flag disabled when the owner requests it.
-- Current visual style is a mix of existing low-poly assets and procedural props. The new rope and gentler ocean detail improve the current game; a full realistic art pass is separate work.
+- Shared surface detail, recognizable resource props, textured palms/grass and revised UI improve realism. Existing low-poly and procedural geometry remains; this is not a complete photogrammetry asset replacement. Phone testing is required to assess freezes and frame pacing.
 - Source logic and desktop Mobile-renderer screenshots passed; Android FPS, thermals and device-specific controls still require the owner's phone testing.
 - The older APK in `build` does not contain all latest source changes. The owner currently controls exporting.
 - Legacy scene/recipe entries are not necessarily active features; check the player registry and interactions before promising them.
@@ -466,6 +478,44 @@ Add optional fields with backwards-compatible defaults and isolate tests. For re
 
 Read `ASSET_CREDITS.md` for downloaded model/audio/texture origins and licensing details. Existing project assets include documented Kenney/Quaternius and other credited sources; do not invent permissions for files not documented there. The rope launcher/hook/hand meshes and fiber shader added in this update are original procedural project code. No art was copied from the reference game's Play Store listing.
 
+`tests/realism_visual_preview.gd` is an isolated-data desktop preview that captures `build/realism-{menu,hud,inventory,crafting,settings,island,objects}.png`. Pass `-- --menu-only` for the menu alone. Run against a source-test staging project with normal Godot imports. New surface/UI detail is original shader/geometry code and adds no external textures; all required existing island and foliage textures must remain included in exports.
+
 This guide deliberately documents contracts, files, constants and dependencies rather than embedding full copies of every script. Open the linked project files for exact functions; duplicated source snapshots rapidly become inaccurate after fixes.
 
 The latest environment previews are generated by `tests/environment_visual_preview.gd` using isolated test storage and the desktop Mobile/D3D12 renderer. It checks grass custom-data readback in the real renderer (the headless dummy renderer cannot read that buffer), then captures `build/environment-raft.png`, `environment-island.png`, `environment-grass.png` and `environment-sunset.png`. Sound checks verify transitions/looping/routing; they do not establish listening quality on a phone speaker/headphones. Shader and audio API details were checked against the official [Godot spatial shader reference](https://docs.godotengine.org/en/stable/tutorials/shaders/shader_reference/spatial_shader.html), [AudioStreamWAV](https://docs.godotengine.org/en/stable/classes/class_audiostreamwav.html), and [audio filter reference](https://docs.godotengine.org/en/stable/classes/class_audioeffectfilter.html).
+
+## Farming, hunting, cooking and weather update (2026-10-03)
+
+Build Mode NEXT/Q now cycles eleven pieces. Existing indexes 0–8 stay unchanged; Bonfire and RainCollector are appended. Bonfire costs 8 Wood + 4 Stone; RainCollector costs 6 Wood + 1 Barrel + 2 Rope. Raft/foundation top sockets accept both. Roof top sockets also accept them and the three planters. Six quick building icons stay unchanged; the selected caption now covers all eleven pieces.
+
+New Game includes 4 Carrot Seed and 4 Tomato Seed in the bag. Equip a seed and use HAND/E on an empty pot/box. Potato takes 60 active seconds to mature and carrot/tomato 80 at full growth speed. Harvest yields 2–4 food and 2 replacement seeds, checking capacity for the complete reward. Planters start at 75% moisture, dry by 0.2 percentage points per active second, and grow at one quarter speed below 15%. Exposed rain restores 5 points per second; equipping Water and using the planter restores 75 points. The planter boxes now have actual walls and visible soil rather than solid cuboids.
+
+Craft Bow (5 Wood + 3 Rope) and Arrow (1 Wood + 1 Stone each). Equip Bow, hold HAND/E to draw for up to 1.1 seconds, then release. One arrow is used per shot, with gravity, a 4-second lifetime and a maximum of 12 active projectiles. Opening a panel, pausing, changing equipment or building cancels a draw without firing. Four animated gull GLBs circle the home island, fall when hit and drop Raw Bird. Each bird repopulates after 100–180 active seconds. A nearby four-fish shoal uses the original fish GLB, with no collision bodies or shadows.
+
+Fishing requires a clear downward ray to open ocean 2–28 m away, while on shore/raft. A float and sagging line show the cast. Catch delay is 4–6.5 active seconds with a 7.5-second cooldown. Swimming or changing equipment cancels fishing. Full bags drop caught fish nearby. Raw Fish restores 10 hunger; Cooked Fish 40, Roast Bird 38, Baked Potato 30, Carrot 14, Tomato 18, and raw Potato 10. Water restores 35 thirst.
+
+Bonfire starts with 180 seconds of fuel. Equip Wood and use it for another 90 seconds, up to 900. Equip Fish, Raw Bird or Potato and use a lit fire to cook for 12 active seconds. Raw food stays in inventory until a capacity-safe exchange succeeds; full bags never lose an ingredient. Exposed rain extinguishes fire; a solid overhead roof shelters it. RainCollector gathers one Water per 20 exposed rain seconds, up to five. Use it to transfer water to the bag, then drink it or water crops.
+
+The scene sets an 18-minute active day. Rain checks every 3–7 active minutes, with a 65% chance and 1–2.5-minute duration. TimeOfDay now accumulates processed delta, preventing a daylight jump after pause. Rain duration also uses active delta. Optional save metadata weather stores raining, remaining and next_check. Planter built-piece records add optional moisture, defaulting to 0.75 for old saves. Fire/collector records add optional survival dictionaries for fuel/burning/cook/item and water/seconds. Existing transforms, type strings, inventory and save versions remain compatible.
+
+Stairs now have twelve 22 cm visual treads and one continuous walkable collider that meets the landing top. Floor snap is 0.32 m; maximum curb step is 0.30 m with clearance/landing checks. Land jump velocity is 4.5 with gravity 18 (about 0.56 m apex), water jump 2.8 and held swim-up speed 2.0. Existing stair sockets/transforms are retained.
+
+First-person equipment now uses the original human-hand GLB; old arm/fist boxes are hidden. New fish, gull, hand, bow and coastal ridge GLBs are original CC0 modeled assets, generated offline by tools/generate_survival_models.gd and merged by material. Gull wing pivots remain animated. See models/ORIGINAL_SURVIVAL_ASSETS_LICENSE.md. The supplied textured palm/grass remain under their separately recorded licenses. These original models are not photographic scans.
+
+scripts/survival_equipment.gd owns bow cancellation, arrow physics and fishing visuals. scripts/campfire.gd and rain_collector.gd own prop state/use. tests/survival_loop_smoke.gd is included in tools/verify_source.ps1; it checks movement, real construction, saved state, farming, weather, food capacity and equipment. tests/survival_visual_preview.gd captures build/survival-{crafting,hand-fish,bow,island,garden-fire,rain}.png in isolated storage, plus controls/bag screenshots. The verbose desktop inventory label is now shown only when debug_building is enabled.
+
+
+### Contextual touch interface (2026-10-03)
+
+The joystick is hidden at rest and appears while the player touches the bottom-left movement zone; that zone remains fixed so other touches still look around. RUN appears during movement; DIVE/CLIMB require swimming and a nearby ledge respectively. CAST requires equipped Rope or an active hook; RECALL requires an active hook. USE appears for nearby usable objects or usable equipped food, water, fishing rod or bow, with EAT/DRINK/FISH/DRAW/PLANT/HARVEST captions. Planter/plant/door actions require actual interaction reach. BUILD appears near the raft, nearby editable support, or while building/editing; placement/rotation/next/removal appear only in their modes. Jump, bag, pause and help remain discoverable essentials. Held actions release when context vanishes; all gameplay art hides during modal panels and redraws when the panel closes.
+
+MAP and CRAFT are tabs inside the bag, above the inventory grid, instead of persistent gameplay buttons. Desktop M/C shortcuts still work. The bag has a larger header to keep those tabs separate from drag slots, close and Quick Save. Existing finger ownership and inventory drag behavior remain intact.
+
+New games begin with four Carrot Seed and four Tomato Seed in the bag. Existing saves can find four of each in separately identified home-island seed caches. These cache IDs do not change the twelve legacy pickup IDs, and collected caches use the existing persistent pickup record. Only newly authored GLBs are CC0; supplied palm/grass keep their recorded licenses.
+
+
+### Scene-load preparation workaround
+
+A subsequent fresh mobile recheck reproduced an intermittent threaded scene-loading stall after the eight-suite pass. The menu now prepares and retains its 30 gameplay script dependencies on the main thread, one per frame, before starting the background scene request. The menu renders first and can accept cancellation while preparation continues; the status poll waits for preparation to finish instead of treating an unstarted request as a missing resource. Progress reserves the first 15 percent for preparation. New Game/Continue still only modify player data after successful resource loading. This avoids overlapping script/scene preload work on loader threads; the engine issue is a probable explanation rather than a traced engine backtrace: https://github.com/godotengine/godot/issues/120827. After this workaround, the 92 mobile and 21 loading checks were rerun successfully in fresh isolated storage. Individual script preparation can still cause a short frame delay on a slow device. Real-phone loading/performance remains unverified.
+
+The final desktop Mobile/D3D12 menu-only preview also completed the actual background scene load with all 30 script dependencies prepared, with no engine/script errors (build/menu-prepared-render.log). The final survival preview produced all eight captures without engine/script errors; controls returned after modal panels closed. These checks used isolated storage and do not verify a phone or exported APK.

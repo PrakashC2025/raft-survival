@@ -6,6 +6,7 @@ extends CharacterBody3D
 const ROPE_VISUAL := preload("res://scripts/rope_launcher_visual.gd")
 const SAND_FOOTPRINTS_SCRIPT := preload("res://scripts/sand_footprints.gd")
 const SAND_SURFACE_SHADER: Shader = preload("res://shaders/sand_surface.gdshader")
+const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 const WALK_SPEED := 3.0
 const SPRINT_SPEED := 5.0
 # Measured Quaternius men's gait cycle strides, scaled for this near-1x model.
@@ -15,20 +16,17 @@ const SURVIVOR_RUN_STRIDE_M := 2.37
 const SURVIVOR_RUN_CYCLE_SECONDS := 0.79
 const SWIM_SPEED := 2.0
 const SWIM_SPRINT_SPEED := 3.5
-const JUMP_VELOCITY := 10.0
-const WATER_JUMP_VELOCITY := 12.0
-const GRAVITY := 9.8
+const JUMP_VELOCITY := 4.5 # about 0.56 m, rather than a five-metre leap
+const WATER_JUMP_VELOCITY := 2.8
+const GRAVITY := 18.0
 const MOUSE_SENSITIVITY := 0.003
 # Max riser height the player can auto-step onto while walking (stairs/curbs).
 # Must stay below wall height (2.5) so full walls still block.
-const MAX_STEP_HEIGHT := 0.55
-const STEP_PROBE_FORWARD := 0.35
-# Max rise per physics frame when auto-climbing stairs — lifts a riser across
-# several frames (smooth) instead of teleporting the body up in one pop.
-const STEP_RISE_PER_FRAME := 0.05
+const MAX_STEP_HEIGHT := 0.30
+const STEP_PROBE_FORWARD := 0.03
 
 # Swimming
-const SWIM_UP_CONTINUOUS := 5.0
+const SWIM_UP_CONTINUOUS := 2.0
 const SWIM_DOWN_SPEED := 3.0
 const SWIM_ACCELERATION := 12.0
 const SWIM_DECELERATION := 6.0
@@ -56,7 +54,7 @@ const CLIMB_OUT_RANGE := 2.2
 const CLIMB_LAND_INSET := 0.45
 
 # Build
-const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot"]
+const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector"]
 const BUILD_SCENES := [
 	"res://scenes/foundation.tscn",
 	"res://scenes/wall.tscn",
@@ -67,7 +65,13 @@ const BUILD_SCENES := [
 	"res://scenes/planter_pot.tscn",
 	"res://scenes/planter_box.tscn",
 	"res://scenes/tree_pot.tscn",
+	"res://scenes/bonfire.tscn",
+	"res://scenes/rain_collector.tscn",
 ]
+const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
+const HUMAN_HAND: PackedScene = preload("res://models/human_hand.glb")
+const SURVIVAL_EQUIPMENT := preload("res://scripts/survival_equipment.gd")
+var _equipment: Node
 const SOCKET_SNAP_RADIUS: float = 2.5
 const WALL_SURFACE_SNAP_RANGE: float = 4.0  # wall ghost snaps to a surface within this 2D distance
 const WALL_STACK_AIM_TOLERANCE: float = 0.6  # aiming this close to a wall's top stacks a 2nd floor wall
@@ -128,13 +132,13 @@ var _rope_launcher: Node3D = null
 var _third_person_launcher: Node3D = null
 var _hand_time := 0.0       # accumulated seconds, drives held-item sway
 var _fist_node: Node3D = null
-var _step_climb := 0.0  # current smooth auto-climb progress (stairs/curbs)
 var _footstep_audio: AudioStreamPlayer3D = null
 var _interaction_audio: AudioStreamPlayer3D = null
 var _footprint_manager: Node3D = null
 var _footstep_timer: float = 0.0
 var _sand_gather_cooldown := 0.0
 var _fishing_time_remaining := 0.0
+var _fishing_cast_target := Vector3.ZERO
 var _fishing_cooldown := 0.0
 var survival_day := 1
 var raft_upgrade_tier := 0
@@ -207,6 +211,9 @@ func _get_ocean() -> Ocean:
 # INIT
 # ============================================================
 func _ready() -> void:
+	_equipment = SURVIVAL_EQUIPMENT.new()
+	_equipment.name = "SurvivalEquipment"
+	add_child(_equipment)
 	_mobile_build_preview = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")
 	add_to_group("player")
 	_setup_audio()
@@ -253,7 +260,8 @@ func _ready() -> void:
 	active_item = Inventory.slot_item(active_slot_index)
 	Inventory.changed.connect(_refresh_active_item)
 	Inventory.changed.connect(_queue_save)
-	floor_snap_length = 0.18
+	floor_snap_length = 0.32
+	floor_constant_speed = true
 	# Restore the clock, calendar date, and monotonic survival day. A fresh
 	# game starts on Day 1 instead of inheriting the scene's editor test date.
 	var sky3d: Node = get_parent().get_node_or_null("Sky3D")
@@ -328,7 +336,8 @@ func _setup_footprint_manager() -> void:
 		return
 	_footprint_manager = SAND_FOOTPRINTS_SCRIPT.new() as Node3D
 	_footprint_manager.name = "SandFootprints"
-	scene_root.add_child(_footprint_manager)
+	# Player._ready runs while its parent is still attaching scene children.
+	scene_root.add_child.call_deferred(_footprint_manager)
 
 
 ## beach_survivor.glb imports with a blank white base material and carries the
@@ -361,6 +370,7 @@ func _setup_survivor_materials() -> void:
 			material.metallic = 0.0
 			material.roughness = 0.85
 			mesh_instance.set_surface_override_material(surface, material)
+	OBJECT_MATERIALS.apply_model(survivor, OBJECT_MATERIALS.Kind.SKIN)
 	_setup_survivor_animations(survivor)
 
 
@@ -711,13 +721,11 @@ func _update_swimming(delta: float, direction: Vector3, water_y: float, sprintin
 # Runs right before move_and_slide: if walking into an obstacle that is lower
 # than MAX_STEP_HEIGHT, lift the body onto it so the slide can carry it over.
 func _try_step_up() -> void:
-	if is_swimming or not is_on_floor():
-		_step_climb = 0.0
+	if is_swimming or not is_on_floor() or velocity.y > 0.1:
 		return
 	var horiz := Vector3(velocity.x, 0.0, velocity.z)
 	var speed := horiz.length()
 	if speed < 0.5:
-		_step_climb = 0.0
 		return
 	var motion := horiz.normalized() * (speed * get_physics_process_delta_time() + STEP_PROBE_FORWARD)
 	var params := PhysicsTestMotionParameters3D.new()
@@ -726,15 +734,12 @@ func _try_step_up() -> void:
 	params.motion = motion
 	# Free to move at current height — normal walking, nothing to step over.
 	if not PhysicsServer3D.body_test_motion(get_rid(), params, result):
-		_step_climb = 0.0
 		return
 	# Blocked ahead: find how much lift clears the obstacle (stairs risers up to
 	# MAX_STEP_HEIGHT). Tall walls (2.5 m) stay blocked at every probe height.
-	# Small remaining lifts resolve in one smooth step; large ones are spread
-	# over several frames (STEP_RISE_PER_FRAME) so stair risers don't pop the
-	# camera 0.5 m in a single frame — the "shaking" when climbing stairs.
+	# Probe only within the allowed curb height, then verify a supported landing.
 	var needed := -1.0
-	for h in [0.06, 0.12, 0.18, 0.26, 0.38, MAX_STEP_HEIGHT]:
+	for h in [0.06, 0.12, 0.18, 0.24, MAX_STEP_HEIGHT]:
 		var tf := global_transform.translated(Vector3(0.0, h, 0.0))
 		params.from = tf
 		params.motion = motion
@@ -742,17 +747,22 @@ func _try_step_up() -> void:
 			needed = h
 			break
 	if needed < 0.0:
-		_step_climb = 0.0
 		return
-	# Continue the climb toward `needed`, capped per frame for smoothness.
-	var step := clampf(needed - _step_climb, 0.0, STEP_RISE_PER_FRAME)
-	if step <= 0.001:
-		_step_climb = 0.0  # reached target last frame — next frame moves forward
+	# Verify overhead clearance and a real walkable landing. Partial 5 cm lifts
+	# were cancelled by gravity before the body ever cleared a stair riser.
+	params.from = global_transform
+	params.motion = Vector3.UP * needed
+	if PhysicsServer3D.body_test_motion(get_rid(), params, result):
 		return
-	global_position.y += step
-	_step_climb += step
-	if _step_climb >= needed - 0.001:
-		_step_climb = 0.0
+	params.from = global_transform.translated(Vector3.UP * needed + motion)
+	params.motion = Vector3.DOWN * (needed + 0.08)
+	if not PhysicsServer3D.body_test_motion(get_rid(), params, result) or result.get_collision_normal().y < cos(floor_max_angle):
+		return
+	var rise := needed + result.get_travel().y
+	if rise <= 0.01 or rise > MAX_STEP_HEIGHT:
+		return
+	global_position.y += rise
+	velocity.y = 0.0
 func _handle_pickup() -> void:
 	if not Input.is_action_just_pressed("interact"):
 		return
@@ -764,14 +774,28 @@ func _handle_pickup() -> void:
 		return
 	# --- Planting: use a seed item on an aimed, empty planter ---
 	if aim_valid and aim_collider != null:
+		if aim_distance <= PICKUP_RANGE:
+			var survival_target: Node = aim_collider
+			while survival_target != null:
+				if survival_target.has_method("interact_survival"):
+					survival_target.call("interact_survival", self)
+					return
+				survival_target = survival_target.get_parent()
 		var planter := _find_planter_ancestor(aim_collider)
 		if planter != null:
+			if aim_distance > PICKUP_RANGE:
+				return
+			if active_item == "Water":
+				if Inventory.has("Water", 1) and planter.water_soil():
+					Inventory.remove("Water", 1)
+					_queue_save()
+					_hud_toast("SOIL WATERED")
+				return
 			if active_item == "Sand":
 				if Inventory.has("Sand", 1) and planter.add_sand():
 					Inventory.remove("Sand", 1)
 					play_world_sfx(PICKUP_SOUND, -9.0)
 					_hud_toast("SAND ADDED TO SOIL")
-				return
 				return
 			if not planter.has_plant():
 				# Exact selected seed takes priority; otherwise auto-pick the first
@@ -807,6 +831,9 @@ func _handle_pickup() -> void:
 		else:
 			_hud_toast("BAG FULL")
 		return
+	if active_item == "Bow":
+		_handle_selected_item_use()
+		return
 	if aim_collider == null or not aim_collider.is_in_group("debris"):
 		for d in get_tree().get_nodes_in_group("debris"):
 			if d is Node3D and is_instance_valid(d):
@@ -819,6 +846,22 @@ func _handle_pickup() -> void:
 
 func _handle_selected_item_use() -> void:
 	match active_item:
+		"Bow":
+			_equipment.call("begin_draw")
+			return
+		"Water":
+			if Inventory.has("Water", 1):
+				Inventory.remove("Water", 1)
+				Stats.drink(35.0)
+				_hud_toast("FRESH WATER  +THIRST")
+			return
+		"Cooked Fish", "Roast Bird", "Baked Potato", "Carrot", "Tomato", "Potato":
+			if Inventory.has(active_item, 1):
+				var nutrition := {"Cooked Fish": 40.0, "Roast Bird": 38.0, "Baked Potato": 30.0, "Carrot": 14.0, "Tomato": 18.0, "Potato": 10.0}
+				Inventory.remove(active_item, 1)
+				Stats.eat(float(nutrition[active_item]))
+				_hud_toast(active_item.to_upper() + "  +HUNGER")
+			return
 		"Coconut":
 			if Inventory.has("Coconut", 1):
 				Inventory.remove("Coconut", 1)
@@ -835,7 +878,7 @@ func _handle_selected_item_use() -> void:
 		"Fish":
 			if Inventory.has("Fish", 1):
 				Inventory.remove("Fish", 1)
-				Stats.eat(24.0)
+				Stats.eat(10.0)
 				_hud_toast("RAW FISH  +HUNGER")
 			return
 		"Spear":
@@ -853,7 +896,11 @@ func _handle_selected_item_use() -> void:
 			if is_swimming:
 				_hud_toast("CAST FROM THE RAFT OR SHORE")
 				return
-			_fishing_time_remaining = 2.6
+			if not _valid_fishing_cast():
+				_hud_toast("AIM DOWN AT OPEN WATER TO CAST")
+				return
+			_fishing_time_remaining = randf_range(4.0, 6.5)
+			_equipment.call("show_cast", _fishing_cast_target)
 			_fishing_cooldown = 7.5
 			_hud_toast("LINE IN THE WATER...")
 			return
@@ -899,6 +946,9 @@ func _tick_fishing(delta: float) -> void:
 	_fishing_cooldown = maxf(0.0, _fishing_cooldown - delta)
 	if _fishing_time_remaining <= 0.0:
 		return
+	if active_item != "Fishing Rod" or is_swimming:
+		_fishing_time_remaining = 0.0
+		return
 	_fishing_time_remaining = maxf(0.0, _fishing_time_remaining - delta)
 	if _fishing_time_remaining <= 0.0:
 		var overflow := Inventory.add("Fish", 1)
@@ -908,6 +958,27 @@ func _tick_fishing(delta: float) -> void:
 		else:
 			_hud_toast("FISH CAUGHT")
 		play_world_sfx(PICKUP_SOUND, -11.0)
+		_queue_save()
+
+func _valid_fishing_cast() -> bool:
+	if camera == null or is_swimming:
+		return false
+	var ocean := get_parent().get_node_or_null("Ocean")
+	if ocean == null:
+		return false
+	var start := camera.global_position
+	var direction := -camera.global_basis.z
+	if direction.y >= -0.03:
+		return false
+	var distance: float = (float(ocean.call("get_height", start)) - start.y) / direction.y
+	if distance < 2.0 or distance > 28.0:
+		return false
+	var end := start + direction * distance
+	var query := PhysicsRayQueryParameters3D.create(start, end, 1, [get_rid()])
+	var clear := get_world_3d().direct_space_state.intersect_ray(query).is_empty()
+	if clear:
+		_fishing_cast_target = end
+	return clear
 
 
 func _spawn_item_pickup(item_name: String, amount: int, at: Vector3) -> void:
@@ -1266,8 +1337,10 @@ func _ensure_starter_seeds() -> void:
 		Inventory.place_at(1, "Potato Seed", 5)
 		Inventory.place_at(2, "Coconut Seed", 3)
 		Inventory.place_at(3, "Banana Seed", 3)
+		Inventory.add("Carrot Seed", 4)
+		Inventory.add("Tomato Seed", 4)
 		return
-	for seed_item in ["Potato Seed", "Coconut Seed", "Banana Seed"]:
+	for seed_item in ["Potato Seed", "Coconut Seed", "Banana Seed", "Carrot Seed", "Tomato Seed"]:
 		var already_in_hotbar := false
 		for i in range(Inventory.HOTBAR_COUNT):
 			if Inventory.slot_item(i) == seed_item:
@@ -1323,6 +1396,9 @@ func _write_save(slot: String) -> void:
 		meta[stat_name] = stat_state[stat_name]
 	meta["raft_upgrade_tier"] = raft_upgrade_tier
 	meta["life_vest_equipped"] = life_vest_equipped
+	var rain := get_tree().get_first_node_in_group("rain_system")
+	if rain != null:
+		meta["weather"] = rain.call("save_weather_state")
 	var sky3d: Node = get_parent().get_node_or_null("Sky3D")
 	if sky3d != null and sky3d.get("current_time") != null:
 		meta["game_time"] = float(sky3d.get("current_time"))
@@ -1395,9 +1471,12 @@ func _serialize_built_pieces() -> Array:
 		}
 		if piece is Planter:
 			entry["sand"] = (piece as Planter).has_sand()
+			entry["moisture"] = (piece as Planter).moisture
 			var plant_state: Dictionary = (piece as Planter).save_plant_state()
 			if not plant_state.is_empty():
 				entry["plant"] = plant_state
+		if piece.has_method("save_survival_state"):
+			entry["survival"] = piece.call("save_survival_state")
 		out.append(entry)
 	return out
 
@@ -1447,10 +1526,13 @@ func _restore_built_pieces() -> void:
 		for c in cols:
 			(c as CollisionShape3D).set_deferred("disabled", false)
 		if piece is Planter:
+			(piece as Planter).moisture = clampf(float(entry.get("moisture", 0.75)), 0.0, 1.0)
 			if bool(entry.get("sand", false)):
 				(piece as Planter).restore_sand_state(true)
 			if entry.has("plant") and entry["plant"] is Dictionary:
 				(piece as Planter).restore_plant_state(entry["plant"])
+		if piece.has_method("restore_survival_state") and entry.get("survival", null) is Dictionary:
+			piece.call("restore_survival_state", entry["survival"])
 		piece.add_to_group("build_surface")
 		restored.append(piece)
 		# Grid occupancy (foundations are grid-registered; walls/doors/etc are
@@ -1517,10 +1599,10 @@ func _update_hand_item() -> void:
 	_held_visual_item = active_item
 	if _default_fist_mesh == null:
 		_default_fist_mesh = (_fist_node as MeshInstance3D).mesh
-	(_fist_node as MeshInstance3D).mesh = null if active_item == "Rope" else _default_fist_mesh
+	(_fist_node as MeshInstance3D).mesh = null
 	var arm := camera.get_node_or_null("HandPivot/Arm") as Node3D
 	if arm != null:
-		arm.visible = active_item != "Rope"
+		arm.visible = false
 	_rope_launcher = null
 	if _third_person_launcher != null and is_instance_valid(_third_person_launcher):
 		_third_person_launcher.visible = false
@@ -1532,6 +1614,12 @@ func _update_hand_item() -> void:
 		c.queue_free()
 	_hand_item.position = Vector3.ZERO
 	_hand_item.rotation = Vector3.ZERO
+	if active_item != "Rope":
+		var human_hand := HUMAN_HAND.instantiate() as Node3D
+		OBJECT_MATERIALS.apply_model(human_hand, OBJECT_MATERIALS.Kind.SKIN)
+		human_hand.name = "HumanHand"
+		human_hand.position = Vector3(0.01, -0.045, -0.02)
+		_hand_item.add_child(human_hand)
 	if active_item == "":
 		return
 	# Each item is composed from primitives placed in a NATURAL HAND POSE around
@@ -1684,13 +1772,33 @@ func _update_hand_item() -> void:
 			_add_hand_asset("res://models/kenney_coconut.glb", 0.3)
 		"Banana":
 			_add_hand_asset("res://models/kenney_banana.glb", 0.3)
-		"Fish":
-			var fish_mesh := SphereMesh.new()
-			fish_mesh.radius = 0.15
-			fish_mesh.height = 0.28
-			fish_mesh.radial_segments = 8
-			fish_mesh.rings = 4
-			_hand_part(fish_mesh, _hand_mat(Color(0.56, 0.68, 0.72)), Transform3D(Basis.IDENTITY, Vector3(0.0, -0.03, -0.28)))
+		"Fish", "Cooked Fish":
+			_add_hand_asset("res://models/coastal_fish.glb", 0.42)
+		"Raw Bird", "Roast Bird":
+			_add_hand_asset("res://models/coastal_gull.glb", 0.38)
+		"Bow":
+			_add_hand_asset("res://models/survival_bow.glb", 0.70)
+			if Inventory.has("Arrow", 1):
+				var arrow := CylinderMesh.new()
+				arrow.height = 0.58
+				arrow.top_radius = 0.006
+				arrow.bottom_radius = 0.006
+				arrow.radial_segments = 6
+				_hand_part(arrow, _hand_mat(Color(0.48, 0.29, 0.13)), Transform3D(along_forward, Vector3(0.0, 0.03, -0.30)))
+		"Carrot", "Tomato", "Potato", "Baked Potato":
+			var produce := SphereMesh.new()
+			produce.radius = 0.075
+			produce.height = 0.15
+			var color := Color(0.67, 0.41, 0.20)
+			var shape := Vector3(1.0, 1.0, 1.0)
+			if active_item == "Carrot":
+				color = Color(0.82, 0.31, 0.05)
+				shape = Vector3(0.5, 1.8, 0.5)
+			elif active_item == "Tomato":
+				color = Color(0.65, 0.08, 0.025)
+			_hand_part(produce, _hand_mat(color), Transform3D(Basis.IDENTITY.scaled(shape), Vector3(0.0, 0.0, -0.2)))
+		"Water":
+			_hand_item.add_child(RESOURCE_VISUAL.create("Plastic"))
 		_:
 			return
 
@@ -1725,6 +1833,7 @@ func _add_hand_asset(path: String, target_size: float) -> void:
 	var fit := target_size / maxf(largest, 0.001)
 	model.scale = Vector3.ONE * fit
 	model.position = Vector3(0.0, -0.02, -0.27) - bounds.get_center() * fit
+	OBJECT_MATERIALS.apply_model(model, OBJECT_MATERIALS.kind_for_item(active_item))
 	_hand_item.add_child(model)
 
 
@@ -1737,22 +1846,12 @@ func get_rope_launch_origin() -> Vector3:
 		return global_transform * Vector3(0.32, 0.28, -0.62)
 	return camera.global_transform * Vector3(0.18, -0.22, -0.95)
 
-func _hand_mat(color: Color, rough: float = 0.6, metal: float = 0.0) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	m.roughness = rough
-	m.metallic = metal
-	# A whisper of self-light keeps the held item readable at dusk/night on
-	# small screens (cheap for a tiny mesh; scene lights still dominate by day).
-	if metal > 0.5:
-		m.emission_enabled = false
-	else:
-		m.emission_enabled = true
-		m.emission = color * 0.09
-	return m
+func _hand_mat(color: Color, rough: float = 0.6, metal: float = 0.0) -> Material:
+	var kind := OBJECT_MATERIALS.Kind.METAL if metal > 0.5 else OBJECT_MATERIALS.kind_for_item(active_item)
+	return OBJECT_MATERIALS.make(kind, color, rough, metal)
 
 
-func _hand_part(mesh: Mesh, mat: StandardMaterial3D, xform: Transform3D) -> void:
+func _hand_part(mesh: Mesh, mat: Material, xform: Transform3D) -> void:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.material_override = mat
@@ -1782,6 +1881,12 @@ func _update_hand_sway(_delta: float) -> void:
 	var roll := sin(_hand_time * 0.9) * 0.012 + cos(_hand_time * 4.7) * 0.01 * amp
 	_hand_item.position = Vector3(0.0, bob, kick * 0.055)
 	_hand_item.rotation = Vector3(-kick * 0.12, sway, roll)
+	if active_item == "Fishing Rod" and _fishing_time_remaining > 0.0:
+		_hand_item.rotation.x += sin(_hand_time * 5.0) * 0.035
+	if active_item == "Bow" and _equipment != null:
+		var draw_fraction: float = float(_equipment.call("get_draw_fraction"))
+		_hand_item.position += Vector3(-0.025, 0.02, 0.10) * draw_fraction
+		_hand_item.rotation.x -= draw_fraction * 0.12
 	if _rope_launcher != null and is_instance_valid(_rope_launcher):
 		_rope_launcher.get_node("LoadedHook").visible = not rope_system.is_active()
 	if _third_person_launcher != null and is_instance_valid(_third_person_launcher):
@@ -1795,12 +1900,36 @@ func _update_hand_sway(_delta: float) -> void:
 ##   - any debris within the nearby pickup range (the "reach out and grab it"
 ##     case — in real life you only take debris that is within your pickable
 ##     range, and the E key collects those even without precise aiming).
+func interaction_caption() -> String:
+	if aim_valid and aim_collider != null and aim_distance <= PICKUP_RANGE:
+		var target: Node = aim_collider
+		while target != null:
+			if target is Planter:
+				return "WATER" if active_item == "Water" else "PLANT"
+			if target is PlantInstance:
+				return "HARVEST"
+			if target.has_method("interact_survival"):
+				return "USE"
+			target = target.get_parent()
+	if active_item == "Bow":
+		return "DRAW"
+	if active_item == "Fishing Rod":
+		return "FISH"
+	if active_item == "Water":
+		return "DRINK"
+	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato"]:
+		return "EAT"
+	return "USE"
+
+
 func can_interact_now() -> bool:
-	if active_item in ["Coconut", "Banana", "Fish"] and Inventory.has(active_item, 1):
+	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Water"] and Inventory.has(active_item, 1):
+		return true
+	if active_item == "Bow" and Inventory.has("Arrow", 1):
 		return true
 	if active_item == "Life Vest" and Inventory.has("Life Vest", 1) and not life_vest_equipped:
 		return true
-	if active_item == "Fishing Rod" and not is_swimming and _fishing_time_remaining <= 0.0:
+	if active_item == "Fishing Rod" and _valid_fishing_cast() and _fishing_time_remaining <= 0.0:
 		return true
 	if active_item == "Spear" and aim_distance <= 5.2 and _get_aimed_shark() != null:
 		return true
@@ -1814,12 +1943,18 @@ func can_interact_now() -> bool:
 			return true
 		var n: Node = c
 		while n != null:
-			if "toggle" in n:
+			if n.has_method("interact_survival") and aim_distance <= PICKUP_RANGE:
+				return true
+			if "toggle" in n and aim_distance <= PICKUP_RANGE:
 				return true
 			# Farming: the hand/use button must appear when the crosshair points
 			# at an empty planter while a seed is equipped (plant), or at a
 			# grown plant (pick fruit / chop / dig / remove stump).
 			if n is Planter:
+				if aim_distance > PICKUP_RANGE:
+					return false
+				if active_item == "Water" and Inventory.has("Water", 1) and float(n.get("moisture")) < 0.95:
+					return true
 				if active_item == "Sand" and Inventory.has("Sand", 1) \
 						and not (n as Planter).has_sand():
 					return true
@@ -1828,7 +1963,7 @@ func can_interact_now() -> bool:
 					return true
 				break  # a planter with a plant already in it is not hand-usable
 			if n is PlantInstance:
-				return int(n.get("_stage")) >= 3  # MATURE / FALLING / STUMP
+				return aim_distance <= PICKUP_RANGE and int(n.get("_stage")) >= 3  # MATURE / FALLING / STUMP
 			n = n.get_parent()
 	if _sand_gather_cooldown <= 0.0 and _is_sand_surface_hit():
 		return true
@@ -5020,6 +5155,8 @@ const RECIPE_REFUND := {
 	"PlanterPot": {"Wood": 4},
 	"PlanterBox": {"Wood": 6},
 	"TreePot": {"Wood": 8, "Rope": 1},
+	"Bonfire": {"Wood": 8, "Stone": 4},
+	"RainCollector": {"Wood": 6, "Barrel": 1, "Rope": 2},
 }
 
 
@@ -5438,7 +5575,7 @@ func _create_hud() -> void:
 	_hud_label.size = Vector2(400, 400)
 	_hud_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	$CanvasLayer.add_child(_hud_label)
-	_hud_label.visible = not _mobile_ui_active()
+	_hud_label.visible = debug_building and not _mobile_ui_active()
 
 ## True when the mobile touch UI is active (Android/iOS/web-mobile or the
 ## desktop F10 preview). The desktop dev label is replaced by the graphical
@@ -5452,7 +5589,7 @@ func _mobile_ui_active() -> bool:
 func _update_hud() -> void:
 	if _hud_label == null:
 		return
-	var want_label: bool = not _mobile_ui_active()
+	var want_label: bool = debug_building and not _mobile_ui_active()
 	if _hud_label.visible != want_label:
 		_hud_label.visible = want_label
 	if not want_label:

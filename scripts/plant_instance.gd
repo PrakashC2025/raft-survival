@@ -21,8 +21,9 @@ enum Stage { SEED, SPROUT, GROWING, MATURE, FALLING, STUMP }
 
 const CAT_ROOT := "ROOT"
 const CAT_FRUIT := "FRUIT_TREE"
-const PALM_TALL_SCENE: PackedScene = preload("res://models/kenney_palm_detailed_tall.glb")
+const PALM_TALL_SCENE: PackedScene = preload("res://models/coconut_palm.glb")
 const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
+const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
 const BANANA_SCENE: PackedScene = preload("res://models/kenney_banana.glb")
 const CHOP_SOUND: AudioStream = preload("res://audio/chop.ogg")
@@ -211,7 +212,8 @@ func _process(delta: float) -> void:
 	#     keep the container scale interpolating through the stage so the
 	#     plant grows smoothly instead of popping between models.
 	if _stage < Stage.MATURE:
-		_stage_timer += delta
+		var planter := get_parent().get_parent() as Planter
+		_stage_timer += delta * (planter.growth_factor() if planter != null else 1.0)
 		var needed: float = _stage_time(_stage)
 		if _stage_timer >= needed:
 			_stage_timer = 0.0
@@ -307,11 +309,13 @@ func _build_root_visual(stage: int) -> void:
 	var blade_h: float = 0.42 * _hvar
 	for i in n:
 		var blade := MeshInstance3D.new()
-		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.012
-		cyl.bottom_radius = 0.028
-		cyl.height = blade_h
-		blade.mesh = cyl
+		var leaf := SphereMesh.new()
+		leaf.radius = 1.0
+		leaf.height = 2.0
+		leaf.radial_segments = 12
+		leaf.rings = 6
+		blade.mesh = leaf
+		blade.scale = Vector3(0.035, blade_h * 0.45, 0.009)
 		var mat := StandardMaterial3D.new()
 		mat.albedo_color = leaf_col.lightened(_rng.randf_range(0.0, 0.12))
 		blade.material_override = mat
@@ -320,6 +324,19 @@ func _build_root_visual(stage: int) -> void:
 		blade.position = Vector3(cos(ang) * r, blade_h * 0.5, sin(ang) * r)
 		blade.rotation = Vector3(_rng.randf_range(-0.35, 0.35), 0.0, _rng.randf_range(-0.35, 0.35))
 		_container.add_child(blade)
+	# Produce is visible among mature leaves; carrots show a root crown.
+	if stage == Stage.MATURE and plant_id in ["Tomato", "Carrot"]:
+		for fruit_index in range(3):
+			var produce := MeshInstance3D.new()
+			var fruit_mesh := SphereMesh.new()
+			fruit_mesh.radius = 0.042
+			fruit_mesh.height = 0.084
+			fruit_mesh.radial_segments = 16
+			fruit_mesh.rings = 8
+			produce.mesh = fruit_mesh
+			produce.position = Vector3(cos(fruit_index * 2.1) * 0.08, 0.24 if plant_id == "Tomato" else 0.025, sin(fruit_index * 2.1) * 0.08)
+			produce.material_override = OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.FOOD, Color(0.66, 0.055, 0.018) if plant_id == "Tomato" else Color(0.8, 0.32, 0.04), 0.6)
+			_container.add_child(produce)
 	# Mature ready cue: two tiny pale tuber bumps at the base.
 	if stage == Stage.MATURE:
 		for k in 2:
@@ -389,14 +406,14 @@ func _build_coconut_palm_visual(stage: int) -> void:
 
 	var palm := PALM_TALL_SCENE.instantiate() as Node3D
 	if palm == null:
-		push_warning("[Plant] Could not instance Kenney palm model")
+		push_warning("[Plant] Could not instance coconut palm model")
 		return
 	palm.name = "CoconutPalm"
 	_container.add_child(palm)
 	VEGETATION_VISUAL.apply_palm(palm)
 	var bounds := _node_local_aabb(palm)
 	if bounds.size.y <= 0.001:
-		push_warning("[Plant] Kenney palm model has no measurable height")
+		push_warning("[Plant] Coconut palm model has no measurable height")
 		return
 	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 1.1)))
 	var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.6)))
@@ -549,6 +566,7 @@ func _make_fruit_mesh() -> Node3D:
 	if fruit_scene != null:
 		var model := fruit_scene.instantiate() as Node3D
 		if model != null:
+			OBJECT_MATERIALS.apply_model(model, OBJECT_MATERIALS.Kind.FOOD)
 			root.add_child(model)
 			var bounds := _node_local_aabb(model)
 			var largest := maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z))
@@ -742,7 +760,7 @@ func _update_interaction(delta: float) -> void:
 		if _stage != Stage.MATURE:
 			_show_prompt("Growing...")
 			return
-		_show_prompt("Hold E — Dig up " + str(_def.get("display_name", "Plant")))
+		_show_prompt("Hold E — Harvest " + str(_def.get("display_name", "Plant")))
 		_run_hold("dig", float(_def.get("dig_time", 1.5)), delta)
 		return
 
@@ -833,6 +851,13 @@ func _do_dig() -> void:
 			_notify_bag_full()
 			return
 		_pending_dig_drop[yield_item] = amount
+	var seed_item: String = str(_def.get("seed_item", ""))
+	if not seed_item.is_empty():
+		_pending_dig_drop[seed_item] = 2
+	if not Inventory.can_store_rewards(_pending_dig_drop):
+		_pending_dig_drop.clear()
+		_notify_bag_full()
+		return
 	var tw := create_tween()
 	tw.tween_property(_container, "scale", Vector3.ONE * 0.04, 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)

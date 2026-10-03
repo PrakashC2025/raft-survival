@@ -30,3 +30,8 @@ grass/*.glb
 models/*.glb
 !models/coconut_palm.glb
 !models/realistic_grass.glb
+!models/coastal_fish.glb
+!models/coastal_gull.glb
+!models/coastal_ridge.glb
+!models/human_hand.glb
+!models/survival_bow.glb

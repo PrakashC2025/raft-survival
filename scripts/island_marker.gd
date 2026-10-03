@@ -18,12 +18,19 @@ var _screen_pos := Vector2.ZERO
 var _clamped := false
 var _alpha := 0.0
 var _dist_m := 0
+var _hud: Control
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 func _process(_delta: float) -> void:
+	if _modal_open():
+		if _alpha > 0.0:
+			_alpha = 0.0
+			queue_redraw()
+		return
 	if _player == null or not is_instance_valid(_player):
 		_player = get_tree().get_first_node_in_group(player_group) as Node3D
 	if _player != null:
@@ -93,9 +100,8 @@ func _find_target_beacon() -> Node3D:
 			nearest_outside = beacon
 	return nearest_outside if nearest_outside != null else nearest_any
 
-
 func _draw() -> void:
-	if _alpha <= 0.01 or not _screen_pos.is_finite():
+	if _modal_open() or _alpha <= 0.01 or not _screen_pos.is_finite():
 		return
 	# Draw the small diamond around a local origin. Projected world coordinates
 	# must never enter polygon vertices, where float precision can collapse them.
@@ -133,3 +139,8 @@ func _draw() -> void:
 	var tpos := Vector2(-tw * 0.5, r + 6.0 + fs)
 	draw_string(font, tpos + Vector2(1, 1), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0, 0, 0, 0.7 * _alpha))
 	draw_string(font, tpos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+
+func _modal_open() -> bool:
+	if _hud == null or not is_instance_valid(_hud):
+		_hud = get_tree().get_first_node_in_group("survival_hud") as Control
+	return GameSettings.is_open or (_hud != null and _hud.has_method("gameplay_input_blocked") and bool(_hud.call("gameplay_input_blocked")))

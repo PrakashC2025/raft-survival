@@ -1,4 +1,5 @@
 extends AnimatableBody3D
+const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 
 @export var float_height: float = 0.6
 @export var follow_speed: float = 4.0
@@ -154,7 +155,7 @@ func _build_sail_visual() -> void:
 	rig.position = Vector3(0.0, 0.16, -0.15)
 	add_child(rig)
 	var wood := _mat(Color(0.36, 0.20, 0.1), 0.82)
-	var canvas := _mat(Color(0.88, 0.78, 0.57), 0.9)
+	var canvas := OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.CLOTH, Color(0.74, 0.68, 0.52), 0.9)
 	var mast_mesh := CylinderMesh.new()
 	mast_mesh.top_radius = 0.045
 	mast_mesh.bottom_radius = 0.075
@@ -220,9 +221,6 @@ func _add_mesh(parent: Node3D, node_name: String, mesh: Mesh, material: Material
 	parent.add_child(instance)
 
 
-func _mat(color: Color, roughness: float, metallic: float = 0.0) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.roughness = roughness
-	material.metallic = metallic
-	return material
+func _mat(color: Color, roughness: float, metallic: float = 0.0) -> Material:
+	var kind := OBJECT_MATERIALS.Kind.METAL if metallic > 0.5 else OBJECT_MATERIALS.Kind.WOOD
+	return OBJECT_MATERIALS.make(kind, color, roughness, metallic)

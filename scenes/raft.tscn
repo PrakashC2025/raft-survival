@@ -6,12 +6,15 @@
 
 [ext_resource type="Script" path="res://scripts/raft_foam.gd" id="1_foam"]
 
+[ext_resource type="Shader" path="res://shaders/wood_planks.gdshader" id="2_wood"]
+
 [sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
 size = Vector3(2, 0.3, 2)
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0gc0m"]
-albedo_color = Color(0.38, 0.27, 0.17, 1)
-roughness = 0.9
+[sub_resource type="ShaderMaterial" id="StandardMaterial3D_0gc0m"]
+shader = ExtResource("2_wood")
+shader_parameter/base_color = Color(0.48, 0.34, 0.20, 1)
+shader_parameter/half_y = 0.15
 
 [sub_resource type="BoxMesh" id="BoxMesh_ybjjv"]
 material = SubResource("StandardMaterial3D_0gc0m")
@@ -72,7 +75,7 @@ accepts = Array[String](["Foundation", "Wall", "Stairs"])
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 1
-accepts = Array[String](["PlanterPot", "PlanterBox", "TreePot"])
+accepts = Array[String](["PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector"])
 
 [node name="Socket_NorthEast" type="Marker3D" parent="BuildSockets" unique_id=66666666]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.707, 0.15, 0.707)
