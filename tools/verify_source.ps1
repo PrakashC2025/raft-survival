@@ -7,7 +7,7 @@ $projectRoot = Split-Path $PSScriptRoot -Parent
 $sourceRoot = Join-Path $projectRoot ('build/source-check-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sourceRoot | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'project.godot') -Destination (Join-Path $sourceRoot 'project.godot')
-foreach ($folder in @('.godot', 'addons', 'audio', 'models', 'scenes', 'scripts', 'shaders', 'textures', 'grass', 'Depries')) {
+foreach ($folder in @('.godot', 'addons', 'audio', 'models', '3d models', 'scenes', 'scripts', 'shaders', 'textures', 'grass', 'Depries')) {
     $target = Join-Path $projectRoot $folder
     if (Test-Path -LiteralPath $target) {
         New-Item -ItemType Junction -Path (Join-Path $sourceRoot $folder) -Target $target | Out-Null

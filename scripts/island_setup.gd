@@ -36,6 +36,7 @@ const SCAN_WATER_LINE := 11.0
 const ISLAND_VERTICAL_SQUASH := 0.62
 
 @export var island_root: NodePath = ^"../Island"
+@export_file("*.glb,*.gltf") var sketchfab_palm_model := "res://models/coconut_palm.glb"
 @export var generate_collision := true
 @export var snap_palms := true
 @export var apply_terrain_material := true
@@ -49,6 +50,8 @@ func _ready() -> void:
 	if island != null and _is_sketchfab_island(island):
 		# Rescale BEFORE collision/snap/grass so everything sees final geometry.
 		_normalize_sketchfab_island(island)
+	if island != null:
+		_apply_imported_palm_models(island)
 	if generate_collision:
 		# Cooking a scan mesh can be expensive on mobile. Yield between generated
 		# bodies so the startup work does not pile up in a single frame.
@@ -89,6 +92,48 @@ func _process(_delta: float) -> void:
 func island_root_path() -> String:
 	var p := String(island_root)
 	return p if not p.is_empty() else "../Island"
+
+func _apply_imported_palm_models(island: Node3D) -> void:
+	var candidates: Array[String] = []
+	if not sketchfab_palm_model.is_empty():
+		candidates.append(sketchfab_palm_model)
+	candidates.append("res://models/coconut_palm.glb")
+	candidates.append("res://3d models/coconut_palm (1).glb")
+	var template: Node3D = null
+	for candidate in candidates:
+		template = _load_glb_node(candidate)
+		if template != null:
+			break
+	if template == null:
+		return
+	for child in island.get_children():
+		if not (child is Node3D and child.name.begins_with("Palm")):
+			continue
+		var palm := child as Node3D
+		for old_child in palm.get_children():
+			palm.remove_child(old_child)
+			old_child.free()
+		var inst := template.duplicate() as Node3D
+		if inst != null:
+			inst.name = "CoconutPalmModel"
+			palm.add_child(inst)
+	template.free()
+
+func _load_glb_node(path: String) -> Node3D:
+	if path.is_empty():
+		return null
+	if ResourceLoader.exists(path):
+		var res := load(path)
+		if res is PackedScene:
+			return (res as PackedScene).instantiate() as Node3D
+	if FileAccess.file_exists(path):
+		var bytes := FileAccess.get_file_as_bytes(path)
+		if not bytes.is_empty():
+			var doc := GLTFDocument.new()
+			var state := GLTFState.new()
+			if doc.append_from_buffer(bytes, path.get_base_dir(), state) == OK:
+				return doc.generate_scene(state) as Node3D
+	return null
 
 func _apply_palm_visuals() -> void:
 	var island := get_node_or_null(island_root) as Node3D

@@ -3,6 +3,7 @@ extends RefCounted
 ## fruit sockets and saved transforms keep their existing geometry.
 
 static var _leaves: ShaderMaterial
+static var _textured_leaves: Dictionary = {}
 static var _bark: ShaderMaterial
 static var _grass_tuft: ArrayMesh
 static var _fronds: ArrayMesh
@@ -88,10 +89,32 @@ static func apply_palm(root: Node3D) -> void:
 		if mesh_instance.mesh == null:
 			continue
 		for surface in range(mesh_instance.mesh.get_surface_count()):
-			var original := mesh_instance.mesh.surface_get_material(surface)
-			var label := str(mesh_instance.name).to_lower()
+			var original := mesh_instance.get_active_material(surface)
+			if original == null:
+				original = mesh_instance.mesh.surface_get_material(surface)
+			var tex: Texture2D = null
+			if original is BaseMaterial3D:
+				tex = (original as BaseMaterial3D).albedo_texture
+			var node_name := str(mesh_instance.name).to_lower()
+			var label := node_name
 			if original != null:
 				label += original.resource_name.to_lower()
+			if tex != null:
+				# Textured Sketchfab coconut palm: keep its real 3D geometry and
+				# bark/collar textures, and animate its main frond mesh ('leafs')
+				# with palm_leaf.gdshader while preserving its frond texture.
+				if node_name == "leafs":
+					var key := tex.get_rid().get_id()
+					var mat: ShaderMaterial = _textured_leaves.get(key)
+					if mat == null:
+						mat = ShaderMaterial.new()
+						mat.shader = preload("res://shaders/palm_leaf.gdshader")
+						mat.set_shader_parameter("use_albedo_texture", true)
+						mat.set_shader_parameter("albedo_texture", tex)
+						_textured_leaves[key] = mat
+					mesh_instance.set_surface_override_material(surface, mat)
+					mesh_instance.extra_cull_margin = maxf(mesh_instance.extra_cull_margin, 0.3)
+				continue
 			if label.contains("leaf"):
 				mesh_instance.mesh = palm_fronds()
 				mesh_instance.set_surface_override_material(surface, _leaves)

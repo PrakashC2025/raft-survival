@@ -27,12 +27,31 @@ CC BY requires attribution and a link to the license; include creator, source UR
 3. If the imported tree has separate leaves and trunk, preserve node names/materials as appropriate. `IslandSetup` creates trunk colliders and skips leaf collisions; add leaf meshes under a node containing “leaf” or to group `no_collision` to keep them visual-only. Verify that palm snapping does not move it onto its own collision body.
 4. For CC BY assets, add the source line to `ASSET_CREDITS.md`. Keep the existing Kenney scene instances if the download is unavailable; the current game remains playable without external Sketchfab files.
 
+## Import realistic grass (`realistic_grass.zip`)
+
+1. Run the bundled converter on your downloaded `.zip` archive (supports Sketchfab glTF zips with `scene.gltf` + `scene.bin` + `textures/`, `.glb` zips, and `.obj` zips):
+   ```bash
+   python tools/import_grass_zip.py path/to/realistic_grass.zip --wire-scene
+   ```
+   This writes `models/realistic_grass.glb` (plus any companion textures in `models/`) and assigns `sketchfab_grass_model = "res://models/realistic_grass.glb"` on `Island/IslandGrass` in `scenes/main.tscn`.
+2. At runtime, `scripts/island_grass.gd` automatically centers and grounds imported grass meshes at `y = 0`, normalizes tuft height (`target_tuft_height = 0.38`), bakes a vertical `0..1` `COLOR_0` wind-sway gradient if the source model was not vertex-painted, forwards any imported `albedo_texture` (with alpha cutout) to `shaders/grass_wind.gdshader`, and budgets instance count by triangle count so high-poly grass clumps stay mobile-safe.
+3. Add the creator credit and license from the archive's `license.txt` to `ASSET_CREDITS.md`. Leave `sketchfab_grass_model` blank to keep the built-in 3-blade procedural tuft fallback.
+
 ## Existing runtime hooks
 
 ```gdscript
+# scripts/island_setup.gd -- swaps island Palm* nodes to the prepared coconut palm GLB
+@export_file("*.glb,*.gltf") var sketchfab_palm_model := "res://models/coconut_palm.glb"
+
 # scripts/island_birds.gd -- set in the IslandBirds Inspector
 @export_file("*.glb") var sketchfab_bird_model := ""
 @export_range(1, 8, 1) var bird_count := 4
+
+# scripts/island_grass.gd -- uses the prepared 24-triangle realistic grass tuft GLB
+@export_file("*.glb,*.gltf,*.scn,*.tscn") var sketchfab_grass_model := "res://models/realistic_grass.glb"
+@export var target_tuft_height := 0.38
 ```
+
+`tools/prepare_island_models.py` prepares `3d models/coconut_palm (1).glb` and `3d models/realistic_grass.glb` into `models/coconut_palm.glb` and `models/realistic_grass.glb` (and updates the files in `3d models/` in place). Both `IslandSetup` and `IslandGrass` load via `ResourceLoader` when imported by Godot Editor and fall back to runtime `GLTFDocument` buffer parsing before the editor has generated `.godot/imported/*.scn`.
 
 `IslandMountain` in the existing home-island scene is generated locally by `scripts/island_mountain.gd`; no external mountain project or model is required. Sand gathering, held-item presentation, planter top-dressing, save restoration, and pooled footprints are already implemented in the current game source.
