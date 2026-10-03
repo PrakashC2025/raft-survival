@@ -28,3 +28,5 @@ export_presets.cfg
 grass/*.obj
 grass/*.glb
 models/*.glb
+!models/coconut_palm.glb
+!models/realistic_grass.glb

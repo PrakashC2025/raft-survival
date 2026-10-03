@@ -10,6 +10,9 @@ render_mode cull_disabled;
 uniform vec3 grass_color : source_color = vec3(0.23, 0.36, 0.12);
 uniform vec3 tip_color : source_color = vec3(0.48, 0.55, 0.25);
 uniform vec3 dry_color : source_color = vec3(0.49, 0.43, 0.24);
+uniform bool use_albedo_texture = false;
+uniform sampler2D albedo_texture : source_color, filter_linear_mipmap, repeat_enable;
+uniform float alpha_scissor_threshold : hint_range(0.0, 1.0) = 0.35;
 uniform vec3 wind_direction = vec3(-0.707, 0.0, 0.707); // matches Sky3D wind_direction = 2.356 rad (135 deg)
 uniform float wind_strength = 0.07;   // keep 0.35 m grass rooted during gusts
 uniform float wind_speed = 1.6;       // sway cycles per second
@@ -45,8 +48,15 @@ void vertex() {
 
 void fragment() {
     vec3 green = mix(grass_color, tip_color, v_mask * 0.72);
-    ALBEDO = mix(green, dry_color, smoothstep(0.78, 1.0, v_dry) * 0.55);
-    ALBEDO *= mix(0.83, 1.12, v_tint);
+    vec3 base_albedo = mix(green, dry_color, smoothstep(0.78, 1.0, v_dry) * 0.55);
+    if (use_albedo_texture) {
+        vec4 tex = texture(albedo_texture, UV);
+        if (tex.a < alpha_scissor_threshold) {
+            discard;
+        }
+        base_albedo = mix(tex.rgb, dry_color, smoothstep(0.82, 1.0, v_dry) * 0.35);
+    }
+    ALBEDO = base_albedo * mix(0.83, 1.12, v_tint);
     ALBEDO *= 0.92 + 0.08 * sin(UV.x * 3.14159);
     NORMAL = FRONT_FACING ? NORMAL : -NORMAL;
     ROUGHNESS = 0.86;

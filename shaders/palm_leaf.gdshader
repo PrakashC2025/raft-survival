@@ -3,6 +3,9 @@ render_mode cull_disabled, diffuse_burley;
 
 uniform vec3 leaf_color : source_color = vec3(0.20, 0.34, 0.12);
 uniform vec3 leaf_tip_color : source_color = vec3(0.30, 0.40, 0.17);
+uniform bool use_albedo_texture = false;
+uniform sampler2D albedo_texture : source_color, filter_linear_mipmap, repeat_enable;
+uniform float alpha_scissor_threshold : hint_range(0.0, 1.0) = 0.26;
 uniform float leaf_radius = 0.52;
 uniform float wind_strength = 0.035;
 varying vec3 leaf_position;
@@ -24,8 +27,16 @@ void fragment() {
 	float radius = length(leaf_position.xz);
 	float veins = sin(radius * 155.0 + leaf_position.y * 19.0);
 	float mottling = sin(leaf_position.x * 17.0) * sin(leaf_position.z * 23.0);
-	ALBEDO = mix(leaf_color, leaf_tip_color, leaf_tip * 0.42);
-	ALBEDO *= 0.94 + 0.04 * veins + 0.04 * mottling;
+	if (use_albedo_texture) {
+		vec4 tex = texture(albedo_texture, UV);
+		if (tex.a < alpha_scissor_threshold) {
+			discard;
+		}
+		ALBEDO = tex.rgb;
+	} else {
+		ALBEDO = mix(leaf_color, leaf_tip_color, leaf_tip * 0.42);
+		ALBEDO *= 0.94 + 0.04 * veins + 0.04 * mottling;
+	}
 	NORMAL = FRONT_FACING ? NORMAL : -NORMAL;
 	ROUGHNESS = 0.62;
 	SPECULAR = 0.32;

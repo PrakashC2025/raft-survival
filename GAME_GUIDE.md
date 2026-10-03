@@ -82,8 +82,8 @@ The first person hand hierarchy is `CamPivot/SpringArm3D/Camera3D/HandPivot`, wi
 | `scripts/ocean_ambience.gd` | Ocean sound behavior |
 | `scripts/vegetation_visual.gd` | Shared procedural grass tufts/palm fronds and natural foliage materials |
 | `scripts/rain_system.gd` | Weather/rain effects |
-| `scripts/island_setup.gd` | Island normalization, collision setup, pickups and foliage preparation |
-| `scripts/island_grass.gd` | Batched surface placement and MultiMesh grass |
+| `scripts/island_setup.gd` | Island normalization, imported `coconut_palm.glb` placement, collision setup, pickups and foliage preparation |
+| `scripts/island_grass.gd` | Batched surface placement and MultiMesh grass (`models/realistic_grass.glb` 24-triangle textured tuft with procedural fallback) |
 | `scripts/island_mountain.gd` / `island_birds.gd` | Home-island procedural peak and optional imported gull flock |
 | `scripts/sand_footprints.gd` | Pooled, fading island-footprint decals |
 | `scripts/island_destination.gd` | Distant island destination behavior |

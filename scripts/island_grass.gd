@@ -26,10 +26,12 @@ const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
 ## so allow a generous number of frames before giving up.
 const RETRY_FRAMES := 120
 
-@export_file("*.glb") var grass_mesh_path := "res://models/grass_blade.glb": set = set_grass_mesh_path
+@export_file("*.glb,*.gltf,*.scn,*.tscn") var sketchfab_grass_model := "res://models/realistic_grass.glb": set = set_sketchfab_grass_model
+@export_file("*.glb,*.gltf,*.obj") var grass_mesh_path := "res://models/grass_blade.glb": set = set_grass_mesh_path
 @export_file("*.gdshader") var shader_path := "res://shaders/grass_wind.gdshader": set = set_shader_path
 @export var instance_count := 3000: set = set_instance_count
 @export var natural_tufts := true
+@export var target_tuft_height := 0.38 ## normalizes imported grass meshes to island scale (m)
 @export var scatter_radius := 10.0: set = set_scatter_radius
 @export var scatter_seed := 12345: set = set_seed
 @export var raycast_up := 8.0 ## how far above the node to start searching
@@ -42,6 +44,8 @@ const RETRY_FRAMES := 120
 var _rng := RandomNumberGenerator.new()
 var _retries_left := RETRY_FRAMES
 var _build_generation := 0
+var _imported_albedo_texture: Texture2D = null
+var _using_imported_model := false
 
 # Hundreds of Mesh-vs-ray queries in one frame can stall phones while the
 # island's dense trimesh is being scattered. Time-slice the work instead.
@@ -52,6 +56,10 @@ func _ready() -> void:
 		rebuild()
 
 # ---- editor live-rebuild on any tweak ----
+func set_sketchfab_grass_model(v: String) -> void:
+	sketchfab_grass_model = v
+	_rebuild_if_ready()
+
 func set_grass_mesh_path(v: String) -> void:
 	grass_mesh_path = v
 	_rebuild_if_ready()
@@ -93,9 +101,10 @@ func rebuild() -> void:
 func _build_field(generation: int) -> void:
 	if not is_inside_tree() or generation != _build_generation:
 		return
-	var src := _load_blade_mesh(grass_mesh_path)
+	var active_path := sketchfab_grass_model if not sketchfab_grass_model.is_empty() else grass_mesh_path
+	var src := _load_blade_mesh(active_path)
 	if src == null:
-		push_warning("IslandGrass: no Mesh found at %s (is the .glb imported?)" % grass_mesh_path)
+		push_warning("IslandGrass: no Mesh found at %s (is the model imported?)" % active_path)
 		return
 
 	var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
@@ -110,8 +119,14 @@ func _build_field(generation: int) -> void:
 	var xforms: Array[Transform3D] = []
 	var customs: Array[Color] = []
 	var target_count := maxi(instance_count, 0)
-	if not Engine.is_editor_hint() and (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")):
+	var is_mobile := not Engine.is_editor_hint() and (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"))
+	if is_mobile:
 		target_count = mini(target_count, 2500)
+	if _using_imported_model:
+		var tri_count := maxi(int(src.get_faces().size() / 3), 1)
+		if tri_count > 24:
+			var tri_budget := 75000 if is_mobile else 180000
+			target_count = mini(target_count, maxi(int(tri_budget / tri_count), 64))
 	var attempts := target_count * 3
 	var misses := 0
 	var rays_since_yield := 0
@@ -212,32 +227,137 @@ func _retry_rebuild(generation: int) -> void:
 		rebuild()
 
 func _load_blade_mesh(path: String) -> Mesh:
-	if natural_tufts and path == "res://models/grass_blade.glb":
+	_imported_albedo_texture = null
+	_using_imported_model = false
+	if sketchfab_grass_model.is_empty() and natural_tufts and path == "res://models/grass_blade.glb":
 		return VEGETATION_VISUAL.grass_tuft()
-	if path.is_empty() or not ResourceLoader.exists(path):
+	var candidates: Array[String] = []
+	if not path.is_empty():
+		candidates.append(path)
+	if not sketchfab_grass_model.is_empty() and not candidates.has("res://3d models/realistic_grass.glb"):
+		candidates.append("res://3d models/realistic_grass.glb")
+	var found: Mesh = null
+	var chosen_path := ""
+	for candidate in candidates:
+		found = _try_load_mesh_resource(candidate)
+		if found != null:
+			chosen_path = candidate
+			break
+	if found == null:
+		if natural_tufts:
+			return VEGETATION_VISUAL.grass_tuft()
 		return null
-	var res: Resource = load(path)
-	if res is Mesh:
-		return res
-	# glb scenes: dig out the first MeshInstance3D's mesh
-	if res is PackedScene:
-		var inst: Node = (res as PackedScene).instantiate()
-		var found := _find_mesh(inst)
-		inst.queue_free()
-		return found
+	var is_custom := (not sketchfab_grass_model.is_empty()) or chosen_path != "res://models/grass_blade.glb"
+	if is_custom:
+		_using_imported_model = true
+		return _prepare_imported_grass_mesh(found)
+	return found
+
+func _try_load_mesh_resource(path: String) -> Mesh:
+	if path.is_empty():
+		return null
+	if ResourceLoader.exists(path):
+		var res: Resource = load(path)
+		if res is Mesh:
+			_extract_mesh_albedo_texture(res as Mesh)
+			return res as Mesh
+		if res is PackedScene:
+			var inst: Node = (res as PackedScene).instantiate()
+			var m := _find_mesh(inst)
+			inst.queue_free()
+			return m
+	if FileAccess.file_exists(path):
+		var bytes := FileAccess.get_file_as_bytes(path)
+		if not bytes.is_empty():
+			var doc := GLTFDocument.new()
+			var state := GLTFState.new()
+			if doc.append_from_buffer(bytes, path.get_base_dir(), state) == OK:
+				var root := doc.generate_scene(state)
+				if root != null:
+					var m := _find_mesh(root)
+					root.free()
+					return m
 	return null
 
 func _find_mesh(n: Node) -> Mesh:
 	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
-		return (n as MeshInstance3D).mesh
+		var mi := n as MeshInstance3D
+		for s in range(mi.mesh.get_surface_count()):
+			var mat := mi.get_active_material(s)
+			if mat is BaseMaterial3D and (mat as BaseMaterial3D).albedo_texture != null:
+				_imported_albedo_texture = (mat as BaseMaterial3D).albedo_texture
+				break
+		if _imported_albedo_texture == null:
+			_extract_mesh_albedo_texture(mi.mesh)
+		return mi.mesh
 	for c in n.get_children():
 		var m := _find_mesh(c)
 		if m != null:
 			return m
 	return null
 
+func _extract_mesh_albedo_texture(mesh: Mesh) -> void:
+	if mesh == null:
+		return
+	for s in range(mesh.get_surface_count()):
+		var mat := mesh.surface_get_material(s)
+		if mat is BaseMaterial3D and (mat as BaseMaterial3D).albedo_texture != null:
+			_imported_albedo_texture = (mat as BaseMaterial3D).albedo_texture
+			return
+
+## Normalizes an external Sketchfab/GLB grass clump so its roots sit at y=0,
+## its height matches target_tuft_height, and COLOR_0 carries a 0..1 vertical
+## wind mask even when the source model lacks vertex-painted wind weights.
+func _prepare_imported_grass_mesh(src: Mesh) -> Mesh:
+	var aabb := src.get_aabb()
+	if aabb.size.y <= 0.0001 or src.get_surface_count() == 0:
+		return src
+	var desired_h := maxf(target_tuft_height, 0.1)
+	var scale_factor := desired_h / aabb.size.y
+	var center_x := aabb.position.x + aabb.size.x * 0.5
+	var center_z := aabb.position.z + aabb.size.z * 0.5
+	var min_y := aabb.position.y
+	var inv_h := 1.0 / aabb.size.y
+
+	var out := ArrayMesh.new()
+	for s in range(src.get_surface_count()):
+		var arrays := src.surface_get_arrays(s)
+		if arrays.is_empty():
+			continue
+		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		if verts.is_empty():
+			continue
+		var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR] if arrays[Mesh.ARRAY_COLOR] != null else PackedColorArray()
+		var has_gradient := false
+		if colors.size() == verts.size():
+			var c_min := 1.0
+			var c_max := 0.0
+			for c in colors:
+				c_min = minf(c_min, c.r)
+				c_max = maxf(c_max, c.r)
+			has_gradient = (c_max - c_min) > 0.25
+		if not has_gradient:
+			colors.resize(verts.size())
+		for i in range(verts.size()):
+			var v := verts[i]
+			var h := clampf((v.y - min_y) * inv_h, 0.0, 1.0)
+			verts[i] = Vector3(
+				(v.x - center_x) * scale_factor,
+				(v.y - min_y) * scale_factor,
+				(v.z - center_z) * scale_factor
+			)
+			if not has_gradient:
+				colors[i] = Color(h, h, h, 1.0)
+		arrays[Mesh.ARRAY_VERTEX] = verts
+		arrays[Mesh.ARRAY_COLOR] = colors
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out if out.get_surface_count() > 0 else src
+
 func _make_material() -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	if not shader_path.is_empty() and ResourceLoader.exists(shader_path):
 		mat.shader = load(shader_path)
+		if _imported_albedo_texture != null:
+			mat.set_shader_parameter("use_albedo_texture", true)
+			mat.set_shader_parameter("albedo_texture", _imported_albedo_texture)
 	return mat
