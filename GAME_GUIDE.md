@@ -1,6 +1,6 @@
 # Ocean Survival — game, code, and maintenance guide
 
-Last updated: **2026-10-02**. This is the current project handover for the owner and future coding AIs. Read it before changing gameplay. Paths below are relative to this project; `res://` means the Godot project directory and `user://` means Godot's platform-specific saved-data directory. Live source code remains authoritative if a later change makes this guide outdated. Update this guide when changing behavior, constants, architecture, or saved data.
+Last updated: **2026-10-03**. This is the current project handover for the owner and future coding AIs. Read it before changing gameplay. Paths below are relative to this project; `res://` means the Godot project directory and `user://` means Godot's platform-specific saved-data directory. Live source code remains authoritative if a later change makes this guide outdated. Update this guide when changing behavior, constants, architecture, or saved data.
 
 ## Owner's requirements and current delivery
 
@@ -24,8 +24,12 @@ Current changes and fixes:
 - Palms use finer procedural arching fronds with individual leaflets, wind motion, leaf backlighting and bark detail. Grass uses curved three-blade tufts, color/dryness variation and traveling wind gusts.
 - Recorded ocean waves are mixed with original generated wind/foliage beds, audible default rain and underwater low-pass filtering. The environment bus is owned and removed by each gameplay scene.
 - Island markers clamp both behind-camera and front-but-offscreen targets, including camera-plane edge cases. Diamonds draw around a local origin to avoid collapsed polygons from enormous projected coordinates. The reported unused-parameter, mixed ternary, integer division and shadowed/confusable name warnings are cleaned up.
+- The home island now has a generated faceted volcanic peak with a layered rock shader, and four light-weight orbiting gulls (procedural fallback; can load a creator-authorized Sketchfab GLB).
+- Island terrain shader detail now adds finer sand grain, wind-ripple variation and broken rock strata without replacing the scanned home-island textures.
+- Players can scoop Sand from a nearby island surface, equip it from the bag/hotbar, and apply a visible sand top-dressing to a planter. Planter sand state is saved with built pieces while old saves default to no top-dressing.
+- Walking on island ground stamps alternating, fading footprint decals from a small reusable pool; raft footsteps remain wood sounds and do not spawn prints.
 
-The source suite now has **181 passing checks**: 89 mobile, 17 foundation, 11 testing supplies, 20 rope, 23 environment and 21 island marker. Renderer previews include raft, island, close grass and sunset views; marker cases also run on the actual Mobile renderer. No Android phone was connected for current on-device performance verification.
+The last recorded source-suite run before the 2026-10-03 visual pass had **181 passing checks**: 89 mobile, 17 foundation, 11 testing supplies, 20 rope, 23 environment and 21 island marker. This visual pass adds environment smoke assertions for the mountain, bird flock, footprint pool and planter sand layer; those new checks have not yet been run in this sandbox. No Android phone was connected for current on-device performance verification.
 
 ## Project and entry points
 
@@ -80,18 +84,22 @@ The first person hand hierarchy is `CamPivot/SpringArm3D/Camera3D/HandPivot`, wi
 | `scripts/rain_system.gd` | Weather/rain effects |
 | `scripts/island_setup.gd` | Island normalization, collision setup, pickups and foliage preparation |
 | `scripts/island_grass.gd` | Batched surface placement and MultiMesh grass |
+| `scripts/island_mountain.gd` / `island_birds.gd` | Home-island procedural peak and optional imported gull flock |
+| `scripts/sand_footprints.gd` | Pooled, fading island-footprint decals |
 | `scripts/island_destination.gd` | Distant island destination behavior |
 | `scripts/island_beacon.gd` / `island_marker.gd` | World destination cues and HUD marker |
 | `scripts/plant_data.gd` | PlantDB definitions |
 | `scripts/planter.gd` / `plant_instance.gd` | Containers, growth, harvest, tree chopping and restoration |
 | `scripts/shark.gd` / `shark_spawner.gd` | Shark movement, detection, bites and spawning |
-| `scripts/crosshair.gd` / `ui_icons.gd` | Crosshair and shared drawn UI symbols |
+| `scripts/crosshair.gd` / `ui_icons.gd` | Crosshair and shared drawn UI symbols, including the Sand item icon |
 | `shaders/main.gdshader` | Ocean vertex waves and fragment shading |
 | `shaders/rope_fiber.gdshader` | Rope braid/fiber appearance |
 | `shaders/wood_planks.gdshader` | Wooden building appearance |
 | `shaders/grass_wind.gdshader` | Grass animation |
 | `shaders/palm_leaf.gdshader` / `palm_bark.gdshader` | Frond motion/backlighting and trunk surface detail |
 | `shaders/island_terrain.gdshader` | Island terrain material |
+| `shaders/island_mountain.gdshader` | Procedural rock color, grain and sediment seams |
+| `shaders/sand_surface.gdshader` / `sand_footprint.gdshader` | Handheld/planter sand grain and fading sole depressions |
 | `shaders/raft_foam.gdshader` | Raft foam appearance |
 
 Other useful files: `BUILD_ANDROID.md` gives build/install verification instructions; `ASSET_CREDITS.md` documents asset origins and licenses; `tools/verify_source.ps1` checks current source; `tools/verify_android.ps1` checks an exported APK. `DOCUMENTATION.md` contains historical notes and source snapshots and may have older constants/behavior. Use this guide and current source first.
@@ -267,6 +275,12 @@ Plant saved state includes plant `id`, numeric `stage`, stage `timer`, chopping 
 
 Adding a crop means updating PlantDB, seed/item presentation and interactions, compatibility with containers, saved-state defaults, resource yields, and practical tests for sow → grow → harvest → save/load. Adding only a model does not add playable farming.
 
+## Sand gathering and footprints
+
+Press Interact while aiming at a reachable, mostly upward-facing island surface (not palms/grass/beacon) to add one Sand to inventory; gathering has a short cooldown and respects bag overflow. Sand may land in a bag slot, so move it to a hotbar slot to display the sand scoop in first person. Aim at a planter with Sand selected and press Interact to apply one sandy top-dressing; the rough procedural grain material makes the added layer visible. Then select a compatible Seed and interact again to plant as before. Sand is optional, so old planting behavior and existing saves remain valid.
+
+Planter top-dressing is serialized as an optional `sand` boolean on the existing built-piece record. Missing `sand` in legacy records means false. Footprints use 28 reusable PlaneMesh decals, alternate left/right offsets, fade over 22 seconds, and are stamped only when the player's footstep contact belongs to an island. They add no physics bodies and cast no shadows. The island continues using its existing gravel step sample; no footprints are spawned on raft boards or while swimming.
+
 ## Islands, debris, and world resources
 
 The scene has a home island and destination islands including ReefIsle, DriftwoodCay, and FarCove. IslandSetup normalizes the source island's scale/height and shoreline, builds collision, prepares pickups and foliage, then starts grass/palm placement. The home island uses a normalized footprint around 36 m, shoreline waterline radius around 11 m, and vertical scale adjustment around 0.62. Inspect scene overrides before changing these values.
@@ -274,6 +288,8 @@ The scene has a home island and destination islands including ReefIsle, Driftwoo
 Collision preparation is asynchronous/batched. Palm/grass ground queries must wait until collision exists in the physics world. Raycasting in the same frame as creating collision can miss surfaces and place objects under water. Generated pickups use deterministic IDs; collected IDs persist in Inventory and suppress respawning on Continue. Keep IDs stable across ordinary releases or existing saves will regenerate resources.
 
 DebrisSpawner maintains floating resource population and prewarms a useful starting set (current mobile cap 48, prewarm 24). Debris contributes Wood, Rope, Plastic and other resources according to its item configuration. Fixed island pickups may share the `debris` group but should not be frozen/reparented as hookable rigid bodies.
+
+The home scene adds `IslandMountain` and `IslandBirds` as gameplay-detail children that are excluded from scanned-island rescaling. The peak is a deterministic, generated faceted mesh with one matching trimesh collider and a mobile-oriented procedural rock shader; the gull flock defaults to simple non-colliding geometry and can load a licensed imported GLB from its Inspector property. Downloaded Sketchfab models are not bundled; see `SKETCHFAB_ASSET_INTEGRATION.md` for model pages, license notes and import steps.
 
 Grass uses MultiMesh rather than separate nodes for every blade. Mobile generation is capped at 2,500 instances (three blades each with the default natural tufts), with batches of 64 ground rays per frame to avoid a single loading stall. Convert ray-hit world positions into the MultiMesh's local space. Mesh vertex color encodes bending behavior; preserve the COLOR_0 data expected by the grass wind shader.
 

@@ -4,6 +4,8 @@ extends CharacterBody3D
 # CONSTANTS
 # ============================================================
 const ROPE_VISUAL := preload("res://scripts/rope_launcher_visual.gd")
+const SAND_FOOTPRINTS_SCRIPT := preload("res://scripts/sand_footprints.gd")
+const SAND_SURFACE_SHADER: Shader = preload("res://shaders/sand_surface.gdshader")
 const WALK_SPEED := 3.0
 const SPRINT_SPEED := 5.0
 # Measured Quaternius men's gait cycle strides, scaled for this near-1x model.
@@ -129,7 +131,9 @@ var _fist_node: Node3D = null
 var _step_climb := 0.0  # current smooth auto-climb progress (stairs/curbs)
 var _footstep_audio: AudioStreamPlayer3D = null
 var _interaction_audio: AudioStreamPlayer3D = null
+var _footprint_manager: Node3D = null
 var _footstep_timer: float = 0.0
+var _sand_gather_cooldown := 0.0
 var _fishing_time_remaining := 0.0
 var _fishing_cooldown := 0.0
 var survival_day := 1
@@ -206,6 +210,7 @@ func _ready() -> void:
 	_mobile_build_preview = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")
 	add_to_group("player")
 	_setup_audio()
+	_setup_footprint_manager()
 	_setup_survivor_materials()
 	rope_system.player = self
 	rope_system.camera = camera
@@ -313,6 +318,17 @@ func _setup_audio() -> void:
 	_interaction_audio.unit_size = 5.0
 	_interaction_audio.max_distance = 28.0
 	add_child(_interaction_audio)
+
+
+func _setup_footprint_manager() -> void:
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		scene_root = get_parent() as Node3D
+	if scene_root == null:
+		return
+	_footprint_manager = SAND_FOOTPRINTS_SCRIPT.new() as Node3D
+	_footprint_manager.name = "SandFootprints"
+	scene_root.add_child(_footprint_manager)
 
 
 ## beach_survivor.glb imports with a blank white base material and carries the
@@ -427,7 +443,45 @@ func play_world_sfx(sound: AudioStream, level_db: float = -7.0) -> void:
 	_interaction_audio.play()
 
 
+func _find_island_ancestor(node: Node) -> Node3D:
+	var current := node
+	while current != null:
+		if current is Node3D and current.is_in_group("island"):
+			return current as Node3D
+		current = current.get_parent()
+	return null
+
+
+func _is_sand_surface_hit() -> bool:
+	if not aim_valid or aim_collider == null or aim_distance > PICKUP_RANGE \
+			or aim_normal.dot(Vector3.UP) < 0.58:
+		return false
+	var current: Node = aim_collider
+	while current != null:
+		if current.name.begins_with("Palm") or current.name.begins_with("IslandGrass") \
+				or current.name.begins_with("IslandBeacon"):
+			return false
+		if current.is_in_group("island"):
+			return true
+		current = current.get_parent()
+	return false
+
+
 func _island_underfoot() -> bool:
+	# A short ground probe is more reliable than slide contacts while walking
+	# over the nearly-flat beach; it also keeps wood decks on their own sound.
+	var query := PhysicsRayQueryParameters3D.create(
+		global_position + Vector3.UP * 0.12,
+		global_position + Vector3.DOWN * 1.25,
+		1,
+		[get_rid()]
+	)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if not hit.is_empty():
+		var hit_normal: Vector3 = hit.get("normal", Vector3.UP)
+		if hit_normal.dot(Vector3.UP) >= 0.55 \
+				and _find_island_ancestor(hit.get("collider") as Node) != null:
+			return true
 	for collision_index in range(get_slide_collision_count()):
 		var collision := get_slide_collision(collision_index)
 		if collision.get_normal().dot(Vector3.UP) < 0.55:
@@ -453,10 +507,32 @@ func _update_footsteps(delta: float, sprinting: bool) -> void:
 	if _footstep_timer < interval:
 		return
 	_footstep_timer = 0.0
-	var sounds: Array = FOOTSTEP_ISLAND if _island_underfoot() else FOOTSTEP_WOOD
+	var on_island := _island_underfoot()
+	var sounds: Array = FOOTSTEP_ISLAND if on_island else FOOTSTEP_WOOD
 	_footstep_audio.stream = sounds[randi_range(0, sounds.size() - 1)]
 	_footstep_audio.pitch_scale = randf_range(0.94, 1.06)
 	_footstep_audio.play()
+	if on_island:
+		_stamp_sand_footprint()
+
+
+func _stamp_sand_footprint() -> void:
+	if _footprint_manager == null or not is_instance_valid(_footprint_manager):
+		return
+	var space := get_world_3d().direct_space_state
+	var from := global_position + Vector3.UP * 0.14
+	var to := global_position + Vector3.DOWN * 1.15
+	var query := PhysicsRayQueryParameters3D.create(from, to, 1, [get_rid()])
+	var hit := space.intersect_ray(query)
+	if hit.is_empty() or _find_island_ancestor(hit.get("collider") as Node) == null:
+		return
+	var normal: Vector3 = hit.get("normal", Vector3.UP)
+	if normal.dot(Vector3.UP) < 0.55:
+		return
+	var travel := Vector3(velocity.x, 0.0, velocity.z)
+	if travel.length_squared() < 0.05:
+		travel = -global_transform.basis.z
+	_footprint_manager.call("stamp", hit["position"], hit["normal"], travel)
 
 
 # ============================================================
@@ -552,6 +628,7 @@ func _update_aim() -> void:
 # PHYSICS PROCESS
 # ============================================================
 func _physics_process(delta: float) -> void:
+	_sand_gather_cooldown = maxf(0.0, _sand_gather_cooldown - delta)
 	_update_aim()
 	var oc := _get_ocean()
 	var water_y: float = 0.0
@@ -689,6 +766,13 @@ func _handle_pickup() -> void:
 	if aim_valid and aim_collider != null:
 		var planter := _find_planter_ancestor(aim_collider)
 		if planter != null:
+			if active_item == "Sand":
+				if Inventory.has("Sand", 1) and planter.add_sand():
+					Inventory.remove("Sand", 1)
+					play_world_sfx(PICKUP_SOUND, -9.0)
+					_hud_toast("SAND ADDED TO SOIL")
+				return
+				return
 			if not planter.has_plant():
 				# Exact selected seed takes priority; otherwise auto-pick the first
 				# seed that fits this planter so aiming + E just works.
@@ -712,6 +796,17 @@ func _handle_pickup() -> void:
 		if toggler != null:
 			toggler.toggle()
 			return
+	if _is_sand_surface_hit():
+		if _sand_gather_cooldown > 0.0:
+			return
+		var overflow := Inventory.add("Sand", 1)
+		if overflow == 0:
+			_sand_gather_cooldown = 0.65
+			play_world_sfx(PICKUP_SOUND, -10.0)
+			_hud_toast("SAND  +1")
+		else:
+			_hud_toast("BAG FULL")
+		return
 	if aim_collider == null or not aim_collider.is_in_group("debris"):
 		for d in get_tree().get_nodes_in_group("debris"):
 			if d is Node3D and is_instance_valid(d):
@@ -1023,6 +1118,8 @@ func _poll_gameplay_actions() -> void:
 		crosshair.set_state(crosshair.State.ITEM)
 	elif aim_valid and aim_collider != null and "toggle" in aim_collider:
 		crosshair.set_state(crosshair.State.ITEM)
+	elif _is_sand_surface_hit():
+		crosshair.set_state(crosshair.State.ITEM)
 	else:
 		crosshair.set_state(crosshair.State.NONE)
 
@@ -1297,6 +1394,7 @@ func _serialize_built_pieces() -> Array:
 			],
 		}
 		if piece is Planter:
+			entry["sand"] = (piece as Planter).has_sand()
 			var plant_state: Dictionary = (piece as Planter).save_plant_state()
 			if not plant_state.is_empty():
 				entry["plant"] = plant_state
@@ -1348,8 +1446,11 @@ func _restore_built_pieces() -> void:
 		container.add_child(piece)
 		for c in cols:
 			(c as CollisionShape3D).set_deferred("disabled", false)
-		if piece is Planter and entry.has("plant") and entry["plant"] is Dictionary:
-			(piece as Planter).restore_plant_state(entry["plant"])
+		if piece is Planter:
+			if bool(entry.get("sand", false)):
+				(piece as Planter).restore_sand_state(true)
+			if entry.has("plant") and entry["plant"] is Dictionary:
+				(piece as Planter).restore_plant_state(entry["plant"])
 		piece.add_to_group("build_surface")
 		restored.append(piece)
 		# Grid occupancy (foundations are grid-registered; walls/doors/etc are
@@ -1498,6 +1599,25 @@ func _update_hand_item() -> void:
 			s2.radius = 0.075
 			s2.height = 0.15
 			_hand_part(s2, rock, Transform3D(Basis(Vector3.UP, 0.7), Vector3(0.08, -0.07, -0.15)))
+		"Sand":
+			var sand_scoop := SphereMesh.new()
+			sand_scoop.radius = 0.14
+			sand_scoop.height = 0.25
+			sand_scoop.radial_segments = 14
+			sand_scoop.rings = 7
+			var sand_material := ShaderMaterial.new()
+			sand_material.shader = SAND_SURFACE_SHADER
+			sand_material.set_shader_parameter("sand_color", Color(0.78, 0.62, 0.40, 1.0))
+			sand_material.set_shader_parameter("grain_scale", 38.0)
+			_hand_part_shader(sand_scoop, sand_material,
+					Transform3D(Basis.IDENTITY.scaled(Vector3(1.25, 0.52, 0.88)), Vector3(0.0, -0.04, -0.22)))
+			var grain := SphereMesh.new()
+			grain.radius = 0.035
+			grain.height = 0.07
+			grain.radial_segments = 8
+			grain.rings = 4
+			_hand_part_shader(grain, sand_material, Transform3D(Basis.IDENTITY, Vector3(-0.08, 0.01, -0.17)))
+			_hand_part_shader(grain, sand_material, Transform3D(Basis.IDENTITY, Vector3(0.06, 0.02, -0.20)))
 		"Barrel":
 			var wood2 := _hand_mat(Color(0.55, 0.28, 0.2))
 			var bar := CylinderMesh.new()
@@ -1640,6 +1760,14 @@ func _hand_part(mesh: Mesh, mat: StandardMaterial3D, xform: Transform3D) -> void
 	_hand_item.add_child(mi)
 
 
+func _hand_part_shader(mesh: Mesh, mat: ShaderMaterial, xform: Transform3D) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.transform = xform
+	_hand_item.add_child(mi)
+
+
 ## Subtle idle + walk sway for the held item (mobile juice, no camera shake).
 func _update_hand_sway(_delta: float) -> void:
 	if _hand_item == null or not is_instance_valid(_hand_item):
@@ -1692,6 +1820,9 @@ func can_interact_now() -> bool:
 			# at an empty planter while a seed is equipped (plant), or at a
 			# grown plant (pick fruit / chop / dig / remove stump).
 			if n is Planter:
+				if active_item == "Sand" and Inventory.has("Sand", 1) \
+						and not (n as Planter).has_sand():
+					return true
 				if not (n as Planter).has_plant() \
 					and active_item.ends_with(" Seed") and Inventory.has(active_item, 1):
 					return true
@@ -1699,6 +1830,8 @@ func can_interact_now() -> bool:
 			if n is PlantInstance:
 				return int(n.get("_stage")) >= 3  # MATURE / FALLING / STUMP
 			n = n.get_parent()
+	if _sand_gather_cooldown <= 0.0 and _is_sand_surface_hit():
+		return true
 	# Nearby debris the E key would collect without aiming.
 	for d in get_tree().get_nodes_in_group("debris"):
 		if d is Node3D and is_instance_valid(d) and d.get("collected") != true:

@@ -34,6 +34,8 @@
 [ext_resource type="PackedScene" path="res://scenes/destination_island.tscn" id="31_destination"]
 [ext_resource type="Script" path="res://scripts/shark_spawner.gd" id="32_sharks"]
 [ext_resource type="Script" path="res://scripts/island_destination.gd" id="33_island_dressing"]
+[ext_resource type="Script" path="res://scripts/island_mountain.gd" id="34_mountain"]
+[ext_resource type="Script" path="res://scripts/island_birds.gd" id="35_island_birds"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
 render_priority = 0
@@ -328,6 +330,20 @@ pickup_count = 12
 
 [node name="IslandTerrain" parent="Island" instance=ExtResource("21_island")]
 transform = Transform3D(0.126930, 0, 0, 0, 0.078697, 0, 0, 0, 0.126930, 0, -0.8657, 0)
+
+[node name="IslandMountain" type="Node3D" parent="Island"]
+position = Vector3(0.0, 2.4, -4.4)
+script = ExtResource("34_mountain")
+base_radius = 3.8
+peak_height = 6.8
+radial_segments = 32
+height_rings = 11
+
+[node name="IslandBirds" type="Node3D" parent="Island"]
+script = ExtResource("35_island_birds")
+bird_count = 4
+orbit_radius = 10.0
+flight_height = 9.0
 
 [node name="IslandBeacon" type="Node3D" parent="Island" unique_id=1667252892]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.2, 0)
