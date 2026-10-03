@@ -160,7 +160,8 @@ func _is_sketchfab_island(island: Node3D) -> bool:
 func _is_gameplay_node(node: Node) -> bool:
 	var n := node.name
 	return n.begins_with("Palm") or n.begins_with("IslandGrass") \
-			or n.begins_with("IslandBeacon")
+			or n.begins_with("IslandBeacon") or n.begins_with("IslandMountain") \
+			or n.begins_with("IslandBirds")
 
 func _is_gameplay_descendant(node: Node, island: Node3D) -> bool:
 	var current := node

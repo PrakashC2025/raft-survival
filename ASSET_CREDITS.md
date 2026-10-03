@@ -1,6 +1,6 @@
 # Third-party asset credits
 
-The assets below are separate from the Raft Survival source-code license. They are included here for provenance; all listed art/audio assets are CC0/public-domain, so attribution is appreciated but not required.
+The bundled assets below are separate from the Raft Survival source-code license; the listed bundled art/audio assets are CC0/public-domain, so attribution is appreciated but not required. Optional Sketchfab recommendations at the end are not bundled and are CC BY; follow their live license/attribution terms before importing.
 
 ## 3D models
 
@@ -15,6 +15,16 @@ The assets below are separate from the Raft Survival source-code license. They a
 - **Wood and island footsteps** — TinyWorlds, [Different Steps on Wood, Stone, Leaves, Gravel and Mud](https://opengameart.org/content/different-steps-on-wood-stone-leaves-gravel-and-mud), CC0. The OGG files are included through the [OGA Footsteps pack](https://kenney.nl/assets/oga-footsteps): three wood variations for raft surfaces and gravel for island ground.
 - **Pickup rustle and chopping sounds** — Kenney RPG Audio, CC0: [official pack](https://kenney.nl/assets/rpg-audio).
 - **Sea wind, foliage rustle, and rain ambience beds** — original procedural project audio, generated offline by `tools/generate_environment_audio.py`. These WAVs use filtered seeded noise and periodic stereo envelopes; they are not downloaded recordings. The credited recorded ocean above remains the main wave layer.
+
+## Optional Sketchfab integration recommendations (not bundled)
+
+These are external suggestions only; no Sketchfab downloads are included in this repository until the owner downloads and integrates them. Confirm each live license before use and add a full CC BY attribution here if imported:
+
+- Low-Poly Seagull (with Animation & Rigged) — simonaskLDE, [Sketchfab model page](https://sketchfab.com/3d-models/low-poly-seagull-with-animation-rigged-985024328902444c8270c0f09acc897e), CC BY 4.0 (as listed on the page, checked 2026-10-03).
+- Simple Low poly Coconut Tree — Jewel John, [Sketchfab model page](https://sketchfab.com/3d-models/simple-low-poly-coconut-tree-ec0493afa1664a63ba278d54703ef995), CC BY 4.0 (as listed on the page, checked 2026-10-03).
+- Stylized palm / coconut tree pack — W_illness, [Sketchfab model page](https://sketchfab.com/3d-models/stylized-palm-coconut-tree-pack-35e96b479cf942ad9407eb01a11ffa3a), CC BY 4.0 (as listed on the page, checked 2026-10-03).
+
+See `SKETCHFAB_ASSET_INTEGRATION.md` for import, attribution, and scene replacement steps. The current playable palms remain the Kenney CC0 assets listed above; the bird flock has an original low-poly fallback until a downloaded GLB is assigned.
 
 ## Procedural environment detail
 

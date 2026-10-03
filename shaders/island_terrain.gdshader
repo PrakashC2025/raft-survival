@@ -60,17 +60,27 @@ void fragment() {
 	vec2 p = v_world.xz * detail_scale;
 	float n1 = fbm(p);
 	float n2 = vnoise(p * 7.0); // fine grain (sand speckle / grass leafiness)
+	float n3 = vnoise(p * 19.0 + 3.7); // compressed sand grains and tiny soil flecks
 
-	// Painted albedo (vertex paint) with per-pixel organic variation.
+	// Painted albedo (vertex paint) with organic color variation and fine grain.
 	vec3 col = base_color * v_paint * paint_boost;
 	col *= 1.0 + (n1 - 0.5) * 2.0 * detail_strength;
-	col *= 0.92 + 0.16 * n2;
+	col *= 0.90 + 0.12 * n2 + 0.08 * n3;
 	col = clamp(col, vec3(0.0), vec3(1.0));
 
 	// Steep faces read as wet rock/soil (world-space normal, paint-independent).
 	float slope = 1.0 - clamp(v_wnormal.y, 0.0, 1.0);
 	float rock_k = smoothstep(rock_start, rock_full, slope);
 	col = mix(col, rock_color * (0.85 + 0.3 * n1), rock_k * 0.85);
+	// Weathered sediment seams break up the exposed steep faces without
+	// replacing the glb's original vertex paint or imported scan textures.
+	float strata = smoothstep(0.68, 0.94,
+		0.5 + 0.5 * sin(v_world.y * 8.0 + n1 * 4.0 + n2 * 1.3));
+	col = mix(col, col * vec3(0.69, 0.74, 0.78), strata * rock_k * 0.42);
+	// Shallow wind ripples show on broad sand flats, fading away on grass/rock.
+	float ripple = 0.97 + 0.03 * sin((v_world.x + v_world.z * 0.37) * 5.0 + n1 * 3.0);
+	col *= mix(0.94 + 0.12 * n3, ripple * (0.96 + 0.08 * n2),
+		(1.0 - rock_k) * (1.0 - clamp(v_paint.g - v_paint.r, 0.0, 1.0) * 0.65));
 
 	// Wet look near the water line: smooth darkening + glossier surface.
 	float band = 1.0 - smoothstep(0.0, wetness_fade, v_world.y - water_line);

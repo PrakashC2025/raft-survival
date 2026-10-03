@@ -18,10 +18,13 @@ enum PlanterCategory { POT, BOX, TREE_POT }
 @export var soil_color: Color = Color(0.32, 0.22, 0.14)
 
 const TREE_POT_SCENE: PackedScene = preload("res://models/kenney_pot_large.glb")
+const SAND_SURFACE_SHADER: Shader = preload("res://shaders/sand_surface.gdshader")
 
 var planted_id: String = ""
+var sand_applied := false
 var _plant: PlantInstance = null
 var _slot: Node3D = null
+var _sand_layer: MeshInstance3D = null
 
 
 func _ready() -> void:
@@ -123,6 +126,55 @@ func _node_local_aabb(root: Node3D) -> AABB:
 				lower = lower.min(point)
 				upper = upper.max(point)
 	return AABB(lower, upper - lower) if found else AABB()
+
+
+## A scoop of gathered beach sand is an optional top-dressing resource. It
+## changes the visible soil surface without changing legacy planting rules.
+func add_sand() -> bool:
+	if sand_applied:
+		return false
+	sand_applied = true
+	_build_sand_layer()
+	return true
+
+
+func has_sand() -> bool:
+	return sand_applied
+
+
+func restore_sand_state(applied: bool) -> void:
+	sand_applied = applied
+	if sand_applied:
+		_build_sand_layer()
+
+
+func _build_sand_layer() -> void:
+	if not sand_applied:
+		return
+	if _sand_layer != null and is_instance_valid(_sand_layer):
+		_sand_layer.queue_free()
+	_sand_layer = MeshInstance3D.new()
+	_sand_layer.name = "AppliedBeachSand"
+	if planter_category == PlanterCategory.TREE_POT:
+		var disk := CylinderMesh.new()
+		disk.top_radius = box_size.x * 0.30
+		disk.bottom_radius = disk.top_radius
+		disk.height = 0.012
+		disk.radial_segments = 20
+		_sand_layer.mesh = disk
+		_sand_layer.position.y = box_size.y * 0.33 + 0.006
+	else:
+		var layer := BoxMesh.new()
+		layer.size = Vector3(box_size.x * 0.78, 0.012, box_size.z * 0.78)
+		_sand_layer.mesh = layer
+		_sand_layer.position.y = box_size.y * 0.5 + 0.006
+	var material := ShaderMaterial.new()
+	material.shader = SAND_SURFACE_SHADER
+	material.set_shader_parameter("sand_color", Color(0.73, 0.56, 0.34, 1.0))
+	material.set_shader_parameter("grain_scale", 31.0)
+	_sand_layer.material_override = material
+	_sand_layer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_sand_layer)
 
 
 func category_name() -> String:

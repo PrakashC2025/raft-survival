@@ -193,6 +193,8 @@ static func item_color(item: String) -> Color:
 			return Color(0.75, 0.28, 0.2)
 		"Stone":
 			return Color(0.55, 0.55, 0.58)
+		"Sand":
+			return Color(0.78, 0.62, 0.40)
 		"Coconut":
 			return Color(0.43, 0.27, 0.14)
 		"Banana":
@@ -258,6 +260,18 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 				center + Vector2(-r * 0.4, r * 0.45),
 			])
 			c.draw_colored_polygon(pts2, col)
+		"Sand":
+			var mound := PackedVector2Array([
+				center + Vector2(-r * 0.62, r * 0.32),
+				center + Vector2(-r * 0.48, -r * 0.04),
+				center + Vector2(-r * 0.18, -r * 0.38),
+				center + Vector2(r * 0.12, -r * 0.48),
+				center + Vector2(r * 0.43, -r * 0.17),
+				center + Vector2(r * 0.62, r * 0.32),
+			])
+			c.draw_colored_polygon(mound, col)
+			_circle(c, center + Vector2(-r * 0.18, r * 0.02), r * 0.06, Color(0.94, 0.79, 0.56))
+			_circle(c, center + Vector2(r * 0.22, r * 0.11), r * 0.05, Color(0.94, 0.79, 0.56))
 		"Coconut":
 			_circle(c, center, r * 0.48, col)
 			_circle(c, center + Vector2(-r * 0.12, -r * 0.12), r * 0.08, Color(0.83, 0.68, 0.45))

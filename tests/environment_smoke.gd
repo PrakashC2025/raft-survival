@@ -29,6 +29,33 @@ func _run() -> void:
 			break
 	var ambience := current_scene.get_node("OceanAmbience")
 	var player := get_first_node_in_group("player") as Node3D
+	var mountain := current_scene.get_node_or_null("Island/IslandMountain") as Node3D
+	var mountain_mesh: MeshInstance3D = null
+	if mountain != null:
+		mountain_mesh = mountain.find_child("CraggyRockMesh", true, false) as MeshInstance3D
+	check(mountain_mesh != null and mountain_mesh.mesh != null \
+		and mountain.get_node_or_null("MountainCollision") is StaticBody3D,
+		"Home island has one generated craggy peak and matching collider")
+	var birds := current_scene.get_node_or_null("Island/IslandBirds")
+	check(birds != null and birds.get_child_count() == 4, "Home island has a small, non-colliding gull flock")
+	var footprints := current_scene.get_node_or_null("SandFootprints") as Node3D
+	var decal_pool: Array = []
+	if footprints != null:
+		decal_pool = footprints.get("_decals")
+	check(footprints != null and decal_pool.size() == 28,
+		"Sand prints use a bounded reusable decal pool")
+	if footprints != null:
+		footprints.call("stamp", Vector3.ZERO, Vector3.UP, Vector3.FORWARD)
+		decal_pool = footprints.get("_decals")
+		check(decal_pool.size() == 28 and (decal_pool[0] as MeshInstance3D).visible,
+			"Footstep stamp activates an impression without adding physics")
+	var test_pot := (load("res://scenes/planter_pot.tscn") as PackedScene).instantiate() as Planter
+	test_pot.position = Vector3(400.0, -20.0, 400.0)
+	current_scene.add_child(test_pot)
+	check(test_pot.add_sand() and test_pot.has_sand() \
+		and test_pot.get_node_or_null("AppliedBeachSand") is MeshInstance3D,
+		"A sand scoop visibly top-dresses a planter")
+	test_pot.queue_free()
 	player.set_physics_process(false)
 	var camera := root.get_camera_3d()
 	var ocean := get_first_node_in_group("ocean") as Node3D
