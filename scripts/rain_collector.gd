@@ -1,9 +1,11 @@
 extends StaticBody3D
 const SURFACES := preload("res://scripts/object_materials.gd")
+const CAPACITY := 12
 var water := 0
 var collected_seconds := 0.0
 var _sample := 0.0
 var _preview := false
+var _surface: MeshInstance3D
 
 func _ready() -> void:
 	_preview = get_parent() != null and get_parent().name == "BuildPreviewRoot"
@@ -36,6 +38,7 @@ func _ready() -> void:
 		band.position.y = height
 		add_child(band)
 	var surface := MeshInstance3D.new()
+	_surface = surface
 	var disk := CylinderMesh.new()
 	disk.top_radius = 0.29
 	disk.bottom_radius = 0.29
@@ -49,9 +52,10 @@ func _ready() -> void:
 	water_mat.metallic = 0.15
 	surface.material_override = water_mat
 	add_child(surface)
+	_update_surface()
 
 func _process(delta: float) -> void:
-	if _preview or water >= 5:
+	if _preview or water >= CAPACITY:
 		return
 	_sample += delta
 	if _sample < 1.0:
@@ -67,20 +71,28 @@ func _process(delta: float) -> void:
 		return
 	collected_seconds += step
 	if collected_seconds >= 20.0:
-		water = mini(5, water + 1)
+		water = mini(CAPACITY, water + 1)
 		collected_seconds -= 20.0
+		_update_surface()
 
 func interact_survival(player: Node) -> void:
 	if water <= 0:
 		player.call("_hud_toast", "COLLECTOR EMPTY · LEAVE IT OUT IN RAIN")
 	elif Inventory.add("Water", 1) == 0:
 		water -= 1
-		player.call("_hud_toast", "FRESH WATER COLLECTED · DRINK OR WATER CROPS")
+		_update_surface()
+		player.call("_hud_toast", "FRESH WATER COLLECTED · %d/%d STORED" % [water,CAPACITY])
 		player.call("_queue_save")
 
 func save_survival_state() -> Dictionary:
 	return {"water": water, "seconds": collected_seconds}
 
 func restore_survival_state(data: Dictionary) -> void:
-	water = clampi(int(data.get("water", 0)), 0, 5)
+	water = clampi(int(data.get("water", 0)), 0, CAPACITY)
 	collected_seconds = clampf(float(data.get("seconds", 0)), 0, 20)
+	_update_surface()
+
+func _update_surface() -> void:
+	if _surface == null: return
+	_surface.visible = water > 0
+	_surface.position.y = lerpf(-0.27,0.29,float(water)/CAPACITY)

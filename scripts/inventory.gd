@@ -55,6 +55,11 @@ const RECIPES := {
 	"PlanterPot":      {"Wood": 4},
 	"PlanterBox":      {"Wood": 6},
 	"TreePot":         {"Wood": 8, "Rope": 1},
+	"WaterPurifier": {"Metal": 4, "Stone": 3, "Plastic": 2},
+	"WindGenerator": {"Metal": 8, "Wood": 6, "Rope": 3, "Plastic": 4},
+	"ElectricLamp": {"Metal": 2, "Plastic": 2},
+	"ElectricPurifier": {"Metal": 8, "Plastic": 5, "Rope": 2},
+	"RescueRadio": {"Metal": 10, "Plastic": 6, "Rope": 2},
 }
 
 ## Portable survival and raft equipment. These recipes produce an inventory
@@ -67,6 +72,9 @@ const ITEM_RECIPES := {
 	"Life Vest": {"Plastic": 5, "Rope": 2},
 	"Bow": {"Wood": 5, "Rope": 3},
 	"Arrow": {"Wood": 1, "Stone": 1},
+	"Diving Tank": {"Metal": 6, "Plastic": 4, "Rope": 2},
+	"Bandage": {"Rope": 2},
+	"Torch": {"Wood": 2, "Rope": 1},
 }
 
 
@@ -281,6 +289,8 @@ func mark_island_pickup_collected(pickup_id: String) -> void:
 
 
 func can_afford(recipe: String) -> bool:
+	if not recipe_unlocked(recipe):
+		return false
 	if infinite:
 		return true
 	if not RECIPES.has(recipe):
@@ -305,6 +315,8 @@ func craft(recipe: String) -> bool:
 
 
 func can_afford_item(item_name: String) -> bool:
+	if not recipe_unlocked(item_name):
+		return false
 	if not ITEM_RECIPES.has(item_name):
 		return false
 	if infinite:
@@ -423,7 +435,16 @@ func craft_item(item_name: String) -> bool:
 	if not infinite:
 		for ingredient in ITEM_RECIPES[item_name]:
 			remove(str(ingredient), int(ITEM_RECIPES[item_name][ingredient]))
-	return add(item_name, 1) == 0
+	var success := add(item_name, 1) == 0
+	if success:
+		var progress := get_tree().get_first_node_in_group("survival_progression")
+		if progress != null:
+			progress.call("record", "craft:" + item_name)
+	return success
+
+func recipe_unlocked(recipe: String) -> bool:
+	var progress := get_tree().get_first_node_in_group("survival_progression")
+	return progress == null or bool(progress.call("unlocked", recipe))
 
 ## Commit costs and rewards together; a full inventory never loses ingredients.
 func try_exchange(costs: Dictionary, rewards: Dictionary) -> bool:

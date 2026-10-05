@@ -8,8 +8,13 @@ const PICKUP: PackedScene = preload("res://scenes/food_pickup.tscn")
 @export var flight_height := 8.5
 var _time := 0.0
 var _birds: Array[Dictionary] = []
+var _destinations: Array[Vector3] = []
 
 func _ready() -> void:
+	for island in get_tree().get_nodes_in_group("island"):
+		if island is Node3D and (island as Node3D).global_position.distance_to(global_position) > 30:
+			_destinations.append((island as Node3D).global_position)
+	if _destinations.is_empty(): _destinations.append(global_position+Vector3(180,0,-130))
 	var packed := GULL
 	if not sketchfab_bird_model.is_empty() and ResourceLoader.exists(sketchfab_bird_model):
 		packed = load(sketchfab_bird_model) as PackedScene
@@ -78,12 +83,27 @@ func _physics_process(delta: float) -> void:
 				data["fall_speed"] = 0.0
 			continue
 		var phase := _time * float(data["speed"]) + float(data["phase"])
-		var radius := float(data["radius"])
-		bird.position = Vector3(cos(phase) * radius, float(data["height"]) + sin(phase * 2.0) * 0.48, sin(phase) * radius)
-		var tangent := Vector3(-sin(phase), cos(phase) * 0.08, cos(phase)).normalized()
+		bird.global_position = flight_position(data,_time)
+		var tangent := (flight_position(data,_time+0.25)-bird.global_position).normalized()
 		bird.rotation = Vector3(0.0, atan2(-tangent.x, -tangent.z), sin(phase * 2.0) * 0.10)
 		var flap := sin(_time * 6.4 + float(data["phase"])) * 0.42
 		if data["left"] != null:
 			(data["left"] as Node3D).rotation.z = flap
 		if data["right"] != null:
 			(data["right"] as Node3D).rotation.z = -flap
+
+func flight_position(data: Dictionary, at_time: float) -> Vector3:
+	# Feed near shore, travel across water, then return; each bird has its own phase.
+	var cycle := fposmod(at_time/180.0+float(data["phase"])/TAU,1.0)
+	var destination := _destinations[int(float(data["phase"])/TAU*bird_count)%_destinations.size()]
+	var origin := global_position
+	var center := origin
+	var radius := float(data["radius"])
+	var angle := at_time*0.10+float(data["phase"])
+	if cycle >= 0.2 and cycle < 0.55:
+		center = origin.lerp(destination,smoothstep(0.2,0.55,cycle))
+	elif cycle >= 0.55 and cycle < 0.75:
+		center = destination
+	elif cycle >= 0.75:
+		center = destination.lerp(origin,smoothstep(0.75,1.0,cycle))
+	return Vector3(center.x+cos(angle)*radius,maxf(center.y,0)+float(data["height"])+sin(angle*2)*0.48,center.z+sin(angle)*radius)

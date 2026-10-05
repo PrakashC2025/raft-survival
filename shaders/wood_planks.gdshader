@@ -20,6 +20,8 @@ uniform float plank_width = 0.25;  // width of one board in meters
 uniform float seam_width = 0.006;  // width of the dark board seam in meters
 uniform float grain_strength = 0.16;
 uniform float tint_variation = 0.07;
+uniform bool photographic_wood = false;
+uniform sampler2D wood_texture : source_color, filter_linear_mipmap, repeat_enable;
 
 varying vec3 v_pos;    // object-space vertex position (meters, centered)
 varying vec3 v_normal; // object-space face normal
@@ -91,11 +93,17 @@ void fragment() {
 	float weather = vnoise(vec2(along * 1.5, across * 3.0));
 	albedo = mix(albedo, vec3(dot(albedo, vec3(0.30,0.59,0.11))), weather * 0.16);
 	albedo = mix(seam_color, albedo, 1.0 - line_weight);
+	if (photographic_wood) {
+		vec2 timber_uv = vec2(along*0.55 + hash12(vec2(board_id,2.0))*0.4, f*0.16 + hash12(vec2(board_id,5.0))*0.8);
+		vec3 timber = texture(wood_texture,timber_uv).rgb * board_shade * 0.55;
+		albedo = mix(seam_color*0.55,timber,1.0-line_weight);
+		grain = dot(timber,vec3(0.3,0.59,0.11));
+	}
 
 	ALBEDO = albedo;
 	ROUGHNESS = 0.78 + grain * 0.16;
 	SPECULAR = 0.25;
 	float relief = grain - line_weight * 0.8;
 	NORMAL_MAP = normalize(vec3(-dFdx(relief) * 0.4, -dFdy(relief) * 0.4, 1.0)) * 0.5 + 0.5;
-	NORMAL_MAP_DEPTH = 0.35;
+	NORMAL_MAP_DEPTH = photographic_wood ? 0.04 : 0.35;
 }

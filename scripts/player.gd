@@ -54,7 +54,7 @@ const CLIMB_OUT_RANGE := 2.2
 const CLIMB_LAND_INSET := 0.45
 
 # Build
-const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector"]
+const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio"]
 const BUILD_SCENES := [
 	"res://scenes/foundation.tscn",
 	"res://scenes/wall.tscn",
@@ -67,6 +67,11 @@ const BUILD_SCENES := [
 	"res://scenes/tree_pot.tscn",
 	"res://scenes/bonfire.tscn",
 	"res://scenes/rain_collector.tscn",
+	"res://scenes/water_purifier.tscn",
+	"res://scenes/wind_generator.tscn",
+	"res://scenes/electric_lamp.tscn",
+	"res://scenes/electric_purifier.tscn",
+	"res://scenes/rescue_radio.tscn",
 ]
 const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
 const HUMAN_HAND: PackedScene = preload("res://models/human_hand.glb")
@@ -212,6 +217,12 @@ func _get_ocean() -> Ocean:
 # INIT
 # ============================================================
 func _ready() -> void:
+	var progress := preload("res://scripts/survival_progression.gd").new()
+	progress.name = "SurvivalProgression"
+	add_child(progress)
+	var wildlife := preload("res://scripts/island_wildlife.gd").new()
+	wildlife.name = "IslandWildlife"
+	add_child(wildlife)
 	_equipment = SURVIVAL_EQUIPMENT.new()
 	_equipment.name = "SurvivalEquipment"
 	add_child(_equipment)
@@ -226,6 +237,8 @@ func _ready() -> void:
 	camera.current = true
 	_apply_camera_mode(true)
 	cam_mode = CAM_TPS if GameSettings.third_person else CAM_FPS
+	if get_tree().root.get_node_or_null("WakeHandoff") != null:
+		cam_mode = CAM_FPS
 	_apply_camera_mode(true)
 	if build_pieces.is_empty():
 		for scene_path in BUILD_SCENES:
@@ -270,6 +283,8 @@ func _ready() -> void:
 	# game starts on Day 1 instead of inheriting the scene's editor test date.
 	var sky3d: Node = get_parent().get_node_or_null("Sky3D")
 	if sky3d != null:
+		if get_tree().root.get_node_or_null("WakeHandoff") != null:
+			sky3d.set("current_time",6.25)
 		if Inventory.loaded_meta.has("game_time"):
 			sky3d.set("current_time", float(Inventory.loaded_meta["game_time"]))
 		var time_of_day := sky3d.get_node_or_null("TimeOfDay")
@@ -695,6 +710,8 @@ func _get_movement_direction(input_dir: Vector2) -> Vector3:
 
 func _update_land(delta: float, direction: Vector3, sprinting: bool) -> void:
 	var speed := SPRINT_SPEED if sprinting else WALK_SPEED
+	if get_node("SurvivalProgression").stamina < 10:
+		speed = WALK_SPEED * 0.8
 	velocity.x = direction.x * speed
 	velocity.z = direction.z * speed
 	velocity.y -= GRAVITY * delta
@@ -703,6 +720,8 @@ func _update_land(delta: float, direction: Vector3, sprinting: bool) -> void:
 
 func _update_swimming(delta: float, direction: Vector3, water_y: float, sprinting: bool) -> void:
 	var spd := SWIM_SPRINT_SPEED if sprinting else SWIM_SPEED
+	if get_node("SurvivalProgression").stamina < 10:
+		spd = SWIM_SPEED * 0.65
 	velocity.x = direction.x * spd
 	velocity.z = direction.z * spd
 	if Input.is_action_just_pressed("jump"):
@@ -773,7 +792,7 @@ func _handle_pickup() -> void:
 	if not Input.is_action_just_pressed("interact"):
 		return
 	# SHOOT is dedicated to the selected bow; CLIMB has its own touch button.
-	if active_item == "Bow":
+	if active_item in ["Bow", "Bandage", "Diving Tank", "Torch"]:
 		_handle_selected_item_use()
 		return
 	# Boarding the raft from the water takes priority over pickups: when the
@@ -856,6 +875,22 @@ func _handle_pickup() -> void:
 
 func _handle_selected_item_use() -> void:
 	match active_item:
+		"Torch":
+			get_node("SurvivalProgression").call("use_torch")
+		"Bandage":
+			if Stats.health < 100 and Inventory.has("Bandage", 1):
+				Inventory.remove("Bandage", 1)
+				Stats.change_health(25)
+				_hud_toast("BANDAGED · +25 HEALTH")
+			return
+		"Diving Tank":
+			var progress := get_node("SurvivalProgression")
+			if not progress.diving_tank and Inventory.has("Diving Tank", 1):
+				Inventory.remove("Diving Tank", 1)
+				progress.diving_tank = true
+				_queue_save()
+				_hud_toast("DIVING TANK EQUIPPED · LONGER BREATH · SURFACE TO REFILL")
+			return
 		"Bow":
 			_equipment.call("begin_draw")
 			return
@@ -865,12 +900,13 @@ func _handle_selected_item_use() -> void:
 				Stats.drink(35.0)
 				_hud_toast("FRESH WATER  +THIRST")
 			return
-		"Cooked Fish", "Roast Bird", "Baked Potato", "Carrot", "Tomato", "Potato":
+		"Cooked Fish", "Roast Bird", "Baked Potato", "Carrot", "Tomato", "Potato", "Cooked Meat", "Cooked Crab":
 			if Inventory.has(active_item, 1):
-				var nutrition := {"Cooked Fish": 40.0, "Roast Bird": 38.0, "Baked Potato": 30.0, "Carrot": 14.0, "Tomato": 18.0, "Potato": 10.0}
-				Inventory.remove(active_item, 1)
-				Stats.eat(float(nutrition[active_item]))
-				_hud_toast(active_item.to_upper() + "  +HUNGER")
+				var nutrition := {"Cooked Fish": 40.0, "Roast Bird": 38.0, "Baked Potato": 30.0, "Carrot": 14.0, "Tomato": 18.0, "Potato": 10.0, "Cooked Meat": 45.0, "Cooked Crab": 28.0}
+				var eaten := active_item
+				Inventory.remove(eaten, 1)
+				Stats.eat(float(nutrition[eaten]))
+				_hud_toast(eaten.to_upper() + "  +HUNGER")
 			return
 		"Coconut":
 			if Inventory.has("Coconut", 1):
@@ -1018,7 +1054,7 @@ func _get_aimed_shark() -> Node3D:
 	for _step in range(5):
 		if current == null:
 			break
-		if current.is_in_group("shark"):
+		if current.is_in_group("shark") or current.is_in_group("huntable_animal"):
 			return current as Node3D
 		current = current.get_parent()
 	return null
@@ -1413,6 +1449,8 @@ func _queue_save() -> void:
 ## and write it to the given slot ("main" autosave or "quick" quick-save).
 func _write_save(slot: String) -> void:
 	var meta := {"active_slot": active_slot_index, "rope_gun_selected": rope_gun_selected}
+	meta["progression"] = get_node("SurvivalProgression").call("save_state")
+	meta["wildlife"] = get_node("IslandWildlife").call("save_state")
 	var stat_state: Dictionary = Stats.save_state()
 	# Quitting from the death screen must not write a zero-health Continue save.
 	if float(stat_state.get("health", 100.0)) <= 0.0:
@@ -1653,6 +1691,12 @@ func _update_hand_item() -> void:
 	# the fist (offsets below are fist-local: +X right, +Y up, -Z forward).
 	var along_forward := Basis(Vector3.RIGHT, PI / 2.0)
 	match active_item:
+		"Torch":
+			var torch := preload("res://scripts/torch_visual.gd").new()
+			torch.name = "Torch"
+			torch.position = Vector3(0,-0.02,-0.20)
+			_hand_item.add_child(torch)
+			return
 		"Rope":
 			_rope_launcher = ROPE_VISUAL.create_launcher()
 			_hand_item.add_child(_rope_launcher)
@@ -1826,6 +1870,16 @@ func _update_hand_item() -> void:
 			_hand_part(produce, _hand_mat(color), Transform3D(Basis.IDENTITY.scaled(shape), Vector3(0.0, 0.0, -0.2)))
 		"Water":
 			_hand_item.add_child(RESOURCE_VISUAL.create("Plastic"))
+		"Diving Tank":
+			_add_hand_asset("res://models/diving_tank.glb",0.38)
+		"Bandage":
+			var roll := CylinderMesh.new()
+			roll.top_radius = 0.07
+			roll.bottom_radius = 0.07
+			roll.height = 0.12
+			_hand_part(roll, OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.CLOTH,Color(0.70,0.69,0.55)),Transform3D(Basis.IDENTITY,Vector3(0,0,-0.2)))
+		"Raw Meat", "Cooked Meat", "Raw Crab", "Cooked Crab":
+			_add_hand_asset("res://models/shore_crab.glb" if active_item.ends_with("Crab") else ("res://models/raw_meat.glb" if active_item == "Raw Meat" else "res://models/cooked_meat.glb"),0.25)
 		_:
 			return
 
@@ -1928,6 +1982,10 @@ func _update_hand_sway(_delta: float) -> void:
 ##     case — in real life you only take debris that is within your pickable
 ##     range, and the E key collects those even without precise aiming).
 func interaction_caption() -> String:
+	if active_item == "Torch":
+		return "PUT OUT" if get_node("SurvivalProgression").torch_fuel > 0 else "LIGHT"
+	if active_item in ["Diving Tank", "Bandage"]:
+		return "EQUIP" if active_item == "Diving Tank" else "HEAL"
 	if active_item == "Bow":
 		return "SHOOT"
 	if aim_valid and aim_collider != null and aim_distance <= PICKUP_RANGE:
@@ -1944,12 +2002,19 @@ func interaction_caption() -> String:
 		return "FISH"
 	if active_item == "Water":
 		return "DRINK"
-	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato"]:
+	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Cooked Meat", "Cooked Crab"]:
 		return "EAT"
 	return "USE"
 
 
 func can_interact_now() -> bool:
+	if active_item == "Torch" and Inventory.has("Torch",1): return true
+	if active_item in ["Cooked Meat", "Cooked Crab"] and Inventory.has(active_item,1):
+		return true
+	if active_item == "Bandage" and Stats.health < 100 and Inventory.has("Bandage", 1):
+		return true
+	if active_item == "Diving Tank" and Inventory.has("Diving Tank", 1) and not get_node("SurvivalProgression").diving_tank:
+		return true
 	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Water"] and Inventory.has(active_item, 1):
 		return true
 	if active_item == "Bow":
@@ -4675,7 +4740,9 @@ func _update_build_preview() -> void:
 	var piece_name: String = BUILD_RECIPE_NAMES[selected_piece_index]
 	_ensure_ghost_materials()
 	var resolved := _resolve_placement(piece_name, aim_point)
-	var is_valid: bool = bool(resolved.get("valid", false))
+	var is_valid: bool = bool(resolved.get("valid", false)) and Inventory.recipe_unlocked(piece_name)
+	if not Inventory.recipe_unlocked(piece_name):
+		_diag["invalid_reason"] = "COMPLETE MISSION TO UNLOCK"
 	# Apply material FIRST — before ghost becomes visible — so it never
 	# flashes with the wrong color.
 	_apply_ghost_material(is_valid)
@@ -5048,6 +5115,9 @@ func _try_build() -> void:
 		and _ghost_target_socket == null:
 		_hud_toast("AIM AT A FREE CONNECTION POINT")
 		return
+	if not Inventory.recipe_unlocked(piece_name):
+		_hud_toast("LOCKED · COMPLETE YOUR LEVEL MISSION")
+		return
 	if not Inventory.can_afford(piece_name):
 		var needed: PackedStringArray = []
 		for material in Inventory.RECIPES.get(piece_name, {}):
@@ -5115,6 +5185,7 @@ func _try_build() -> void:
 	for _pc in piece_cols:
 		(_pc as CollisionShape3D).set_deferred("disabled", false)
 	piece.add_to_group("build_surface")
+	get_node("SurvivalProgression").call("record", "build:" + piece_name)
 	# Link sockets if available (walls use direct transform, no socket)
 	if _ghost_target_socket != null:
 		_ghost_target_socket.occupy(piece)
@@ -5184,6 +5255,11 @@ const RECIPE_REFUND := {
 	"TreePot": {"Wood": 8, "Rope": 1},
 	"Bonfire": {"Wood": 8, "Stone": 4},
 	"RainCollector": {"Wood": 6, "Barrel": 1, "Rope": 2},
+	"WaterPurifier": {"Metal": 4, "Stone": 3, "Plastic": 2},
+	"WindGenerator": {"Metal": 8, "Wood": 6, "Rope": 3, "Plastic": 4},
+	"ElectricLamp": {"Metal": 2, "Plastic": 2},
+	"ElectricPurifier": {"Metal": 8, "Plastic": 5, "Rope": 2},
+	"RescueRadio": {"Metal": 10, "Plastic": 6, "Rope": 2},
 }
 
 

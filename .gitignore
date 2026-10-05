@@ -35,3 +35,10 @@ models/*.glb
 !models/coastal_ridge.glb
 !models/human_hand.glb
 !models/survival_bow.glb
+!models/wild_boar.glb
+!models/sea_turtle.glb
+!models/shore_crab.glb
+!models/reef_shark.glb
+!models/raw_meat.glb
+!models/cooked_meat.glb
+!models/diving_tank.glb

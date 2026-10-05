@@ -29,7 +29,7 @@ var _refresh_seconds := 0.0
 ## ============================================================
 
 const PIECE_ORDER := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
-const CRAFT_ORDER := ["Fishing Rod", "Spear", "Sail Kit", "Motor Kit", "Life Vest", "Bow", "Arrow"]
+const CRAFT_ORDER := ["Fishing Rod", "Spear", "Sail Kit", "Motor Kit", "Life Vest", "Bow", "Arrow", "Bandage", "Diving Tank", "Torch"]
 const RESOURCE_PILL_ITEMS := ["Wood", "Rope", "Plastic", "Metal"]
 const STATS := [["health", "Health"], ["hunger", "Hunger"], ["thirst", "Thirst"]]
 const MAP_RANGE_METERS := 430.0
@@ -603,6 +603,9 @@ func _build_cache_key() -> String:
 	key += "|map_selected" + (str(_selected_island.name) if _selected_island != null and is_instance_valid(_selected_island) else "")
 	if p == null:
 		return key
+	var progress := p.get_node_or_null("SurvivalProgression")
+	if progress != null:
+		key += str(progress.level) + str(progress.call("objective")) + str(int(progress.oxygen)) + str(int(progress.stamina))
 	key += "|bm" + str(p.get("build_mode") == true)
 	key += "|ed" + str(_editing())
 	key += "|sel" + str(int(p.get("selected_piece_index")))
@@ -857,6 +860,9 @@ func _start_selected_course() -> void:
 
 
 func _craft_item(item_name: String) -> void:
+	if not Inventory.recipe_unlocked(item_name):
+		_show_toast("COMPLETE YOUR MISSION TO UNLOCK " + item_name.to_upper())
+		return
 	if Inventory.craft_item(item_name):
 		_show_toast("CRAFTED " + item_name.to_upper())
 	else:
@@ -1047,6 +1053,7 @@ func _draw() -> void:
 	_draw_pause_btn()
 	_draw_pills()
 	_draw_chip()
+	_draw_mission()
 	if _bag_open:
 		_draw_bag_panel()
 	else:
@@ -1128,9 +1135,9 @@ func _draw_map_overlay() -> void:
 	_draw_rounded(panel, 24.0, Color(0.56, 0.82, 0.79, 0.48), false, 2.0)
 	var title_fs: int = int(clampf(panel.size.y * 0.055, 22.0, 34.0))
 	var sub_fs: int = int(clampf(title_fs * 0.43, 12.0, 16.0))
-	_draw_text("VOYAGE CHART", Vector2(panel.position.x + panel.size.x * 0.07,
+	_draw_text("THE FLOODED WORLD", Vector2(panel.position.x + panel.size.x * 0.07,
 			panel.position.y + panel.size.y * 0.075 + title_fs * 0.36), title_fs, Color(0.9, 0.95, 0.85, 0.98))
-	_draw_text("NORTH UP   •   ISLANDS, DISTANCES & ACTIVE COURSE", Vector2(panel.position.x + panel.size.x * 0.07,
+	_draw_text("95% SUBMERGED   •   RARE ISLANDS & YOUR FLOATING CAMP", Vector2(panel.position.x + panel.size.x * 0.07,
 			panel.position.y + panel.size.y * 0.12 + title_fs * 0.48 + sub_fs), sub_fs,
 			Color(0.65, 0.81, 0.81, 0.9))
 	var close_center := _map_close_rect.get_center()
@@ -1251,7 +1258,11 @@ func _draw_crafting_overlay() -> void:
 	var sub_fs: int = int(clampf(title_fs * 0.45, 12.0, 16.0))
 	_draw_text("FIELD CRAFTING", Vector2(panel.position.x + panel.size.x * 0.07,
 			panel.position.y + panel.size.y * 0.075 + title_fs * 0.36), title_fs, Color(0.98, 0.9, 0.7, 0.98))
-	_draw_text("CRAFT SURVIVAL GEAR AND UPGRADE YOUR RAFT TO SAIL.",
+	var progress := _get_player().get_node_or_null("SurvivalProgression")
+	var mission := "CRAFT SURVIVAL GEAR AND UPGRADE YOUR RAFT TO SAIL."
+	if progress != null:
+		mission = "LV %d · %s" % [progress.level, progress.call("objective")]
+	_draw_text(mission,
 			Vector2(panel.position.x + panel.size.x * 0.07,
 				panel.position.y + panel.size.y * 0.12 + title_fs * 0.48 + sub_fs),
 			sub_fs, Color(0.75, 0.79, 0.75, 0.9))
@@ -1281,11 +1292,35 @@ func _draw_crafting_overlay() -> void:
 		_draw_text(cost_text, Vector2(rect.position.x + rect.size.x * 0.29,
 				rect.position.y + rect.size.y * 0.49 + cost_fs * 0.34), cost_fs, Color(0.73, 0.79, 0.75, 0.88))
 		var status := "TAP TO CRAFT" if ready_to_craft else ("BAG FULL" if can_afford else "NEED MATERIALS")
+		if not Inventory.recipe_unlocked(item_name):
+			status = "LOCKED · COMPLETE MISSIONS"
 		var status_fs: int = int(clampf(rect.size.y * 0.12, 11.0, 15.0))
 		_draw_text(status, Vector2(rect.position.x + rect.size.x * 0.29,
 				rect.position.y + rect.size.y * 0.77 + status_fs * 0.34), status_fs,
 				Color(0.55, 0.93, 0.66, 0.95) if ready_to_craft else Color(0.89, 0.68, 0.57, 0.88))
 
+
+func _draw_mission() -> void:
+	if gameplay_input_blocked() or _vp.x < 500:
+		return
+	var player := _get_player()
+	if player == null:
+		return
+	var progress := player.get_node_or_null("SurvivalProgression")
+	if progress == null:
+		return
+	var width := minf(380, _vp.x * 0.34)
+	var rect := Rect2(Vector2((_vp.x-width)*0.5, 12),Vector2(width,59))
+	_draw_rounded(rect, 9, Color(0.03,0.10,0.115,0.80))
+	_draw_text("LEVEL %d · %s" % [progress.level, progress.CHAPTERS[progress.level-1][0]], rect.position+Vector2(12,20),14,Color(0.86,0.77,0.57))
+	var font := ThemeDB.fallback_font
+	var objective := str(progress.call("objective"))
+	var fs := 13
+	while font.get_string_size(objective,HORIZONTAL_ALIGNMENT_LEFT,-1,fs).x > width-24 and fs > 9:
+		fs -= 1
+	_draw_text(objective,rect.position+Vector2(12,43),fs,Color(0.82,0.90,0.85))
+	if progress.oxygen < 99 or progress.stamina < 80:
+		_draw_text("OXYGEN %d%% · STAMINA %d%%" % [int(progress.oxygen),int(progress.stamina)],rect.position+Vector2(12,76),13,Color(0.78,0.89,0.92))
 
 func _draw_pause_overlay() -> void:
 	draw_rect(Rect2(Vector2.ZERO, _vp), Color(0.0, 0.0, 0.0, 0.55))

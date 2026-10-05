@@ -23,6 +23,10 @@ func _ready() -> void:
 		get_node_or_null("F4"),
 	]
 	rotation = Vector3.ZERO
+	var starter := preload("res://scripts/starter_raft_visual.gd").create()
+	add_child(starter)
+	var old_deck := get_node_or_null("MeshInstance3D") as MeshInstance3D
+	if old_deck != null: old_deck.hide()
 
 
 func _get_ocean() -> Ocean:
@@ -143,6 +147,8 @@ func _carry_passenger(raft_before_move: Vector3, movement: Vector3) -> void:
 
 
 func _refresh_upgrade_visuals() -> void:
+	var decoration := get_node_or_null("StarterRaftVisual/DecorativeRig") as Node3D
+	if decoration != null: decoration.visible = upgrade_tier == 0
 	if upgrade_tier >= 1 and get_node_or_null("SailUpgradeVisual") == null:
 		_build_sail_visual()
 	if upgrade_tier >= 2 and get_node_or_null("MotorUpgradeVisual") == null:

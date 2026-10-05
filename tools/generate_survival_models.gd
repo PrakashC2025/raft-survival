@@ -60,6 +60,9 @@ func batch_static(root_node: Node3D) -> void:
 			continue
 		var source_material := instance.material_override as StandardMaterial3D
 		var key := source_material.albedo_color.to_html() + str(source_material.roughness) + str(source_material.metallic) + str(source_material.cull_mode)
+		key += str(source_material.vertex_color_use_as_albedo)
+		if source_material.albedo_texture != null:
+			key += str(source_material.albedo_texture.get_instance_id())
 		if not batches.has(key):
 			var surface := SurfaceTool.new()
 			surface.begin(Mesh.PRIMITIVE_TRIANGLES)

@@ -3,6 +3,8 @@ extends RefCounted
 ## rather than blindly slicing the sheet and clipping long weapons or leaves.
 const ATLAS := preload("res://textures/ui/survival_items.png")
 const ROPE_LAUNCHER := preload("res://textures/ui/rope_launcher.png")
+const ADVANCED_IMAGES := {"Raw Meat":"raw_meat", "Cooked Meat":"cooked_meat", "Raw Crab":"raw_crab", "Cooked Crab":"cooked_crab", "Diving Tank":"diving_tank", "Bandage":"bandage", "Torch":"torch"}
+static var _pictures: Dictionary = {}
 const REGIONS := {
 	"Wood": Rect2(0.000, 0.002, 0.207, 0.176),
 	"Rope": Rect2(0.210, 0.014, 0.190, 0.163),
@@ -44,6 +46,17 @@ static var _outlines := {
 }
 
 static func draw(canvas: CanvasItem, item: String, center: Vector2, radius: float) -> bool:
+	if ADVANCED_IMAGES.has(item):
+		var texture := _pictures.get(item) as Texture2D
+		var path := "res://textures/ui/advanced_"+str(ADVANCED_IMAGES[item])+".png"
+		if texture == null and ResourceLoader.exists(path):
+			texture = load(path) as Texture2D
+			_pictures[item] = texture
+		if texture != null:
+			canvas.draw_texture_rect(texture,Rect2(center-Vector2.ONE*radius,Vector2.ONE*radius*2),false)
+			return true
+	if item in ["Raw Meat", "Cooked Meat"]:
+		return draw(canvas,"Roast Bird" if item == "Cooked Meat" else "Raw Bird",center,radius)
 	if item == "Rope Gun":
 		var size := ROPE_LAUNCHER.get_size()
 		var extent := size * (radius * 2.0 / maxf(size.x, size.y))

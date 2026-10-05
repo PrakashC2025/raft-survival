@@ -1,7 +1,7 @@
 extends StaticBody3D
 const SURFACES := preload("res://scripts/object_materials.gd")
 const FLAME: Shader = preload("res://shaders/campfire.gdshader")
-const COOKED := {"Fish": "Cooked Fish", "Raw Bird": "Roast Bird", "Potato": "Baked Potato"}
+const COOKED := {"Fish": "Cooked Fish", "Raw Bird": "Roast Bird", "Potato": "Baked Potato", "Raw Meat": "Cooked Meat", "Raw Crab": "Cooked Crab"}
 var fuel := 180.0
 var burning := true
 var cook_remaining := 0.0
@@ -10,6 +10,7 @@ var _flames: Node3D
 var _light: OmniLight3D
 var _preview := false
 var _seconds := 0.0
+var _crackle: AudioStreamPlayer3D
 
 func _ready() -> void:
 	_preview = get_parent() != null and get_parent().name == "BuildPreviewRoot"
@@ -64,6 +65,12 @@ func _ready() -> void:
 	add_child(_light)
 	_flames.visible = not _preview
 	_light.visible = not _preview
+	if not _preview:
+		_crackle = AudioStreamPlayer3D.new()
+		_crackle.stream = preload("res://scripts/survival_audio.gd").fire_stream()
+		_crackle.volume_db = -20
+		_crackle.max_distance = 14
+		add_child(_crackle)
 
 func exposed_to_rain() -> bool:
 	var rain := get_tree().get_first_node_in_group("rain_system")
@@ -92,12 +99,15 @@ func interact_survival(player: Node) -> void:
 		cook_remaining = 12.0
 		player.call("_hud_toast", "COOKING " + item.to_upper())
 	else:
-		player.call("_hud_toast", "SELECT FISH, BIRD OR POTATO TO COOK · WOOD TO REFUEL")
+		player.call("_hud_toast", "SELECT RAW FOOD TO COOK · WOOD TO REFUEL")
 	player.call("_queue_save")
 
 func _process(delta: float) -> void:
 	if _preview:
 		return
+	if _crackle != null:
+		if burning and fuel > 0 and not _crackle.playing: _crackle.play()
+		elif (not burning or fuel <= 0) and _crackle.playing: _crackle.stop()
 	_seconds += delta
 	if _seconds >= 1.0:
 		_seconds = 0.0

@@ -5,6 +5,10 @@ const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
 ## inventory flow can collect island items and overflow drops anywhere.
 
 const MODEL_PATHS := {
+	"Raw Meat": "res://models/raw_meat.glb",
+	"Cooked Meat": "res://models/cooked_meat.glb",
+	"Raw Crab": "res://models/shore_crab.glb",
+	"Cooked Crab": "res://models/shore_crab.glb",
 	"Fish": "res://models/coastal_fish.glb",
 	"Cooked Fish": "res://models/coastal_fish.glb",
 	"Raw Bird": "res://models/coastal_gull.glb",

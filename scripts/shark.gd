@@ -114,6 +114,14 @@ func _bite_player(player: Node3D) -> void:
 
 
 func _build_visual() -> void:
+	if ResourceLoader.exists("res://models/reef_shark.glb"):
+		var imported := (load("res://models/reef_shark.glb") as PackedScene).instantiate() as Node3D
+		imported.name = "SharkVisual"
+		add_child(imported)
+		_tail_fin = imported.find_child("TailFin",true,false) as Node3D
+		for node in imported.find_children("*","MeshInstance3D",true,false):
+			(node as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		return
 	var visual := Node3D.new()
 	visual.name = "SharkVisual"
 	add_child(visual)

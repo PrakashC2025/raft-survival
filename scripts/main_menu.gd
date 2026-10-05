@@ -32,6 +32,7 @@ const GAME_SCENE := "res://scenes/main.tscn"
 const UI_SURFACE := preload("res://scripts/ui_surface.gd")
 const SEA_BACKDROP: Shader = preload("res://shaders/menu_sea.gdshader")
 var _redraw_seconds := 0.0
+var _intro: Control
 ## A healthy resource request can spend a long time importing/uploading one
 ## dependency. Elapsed time is information, never proof that loading failed.
 const LONG_LOAD_NOTICE_AFTER := 30.0
@@ -161,6 +162,7 @@ func _save_sub(slot: String) -> String:
 func _process(delta: float) -> void:
 	_t += delta
 	_poll_game_load()
+	if is_instance_valid(_intro): _intro.set("progress",_load_progress)
 	# The tap came in before the background load finished -> go now.
 	if _waiting_to_enter:
 		_wait_seconds += delta
@@ -204,6 +206,7 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if is_instance_valid(_intro): return
 	if GameSettings.is_open:
 		return
 	var handled := false
@@ -286,6 +289,10 @@ func _activate(btn_idx: int) -> void:
 	# Remember the choice; the save slot is only touched once we know the game
 	# scene can really be opened (never wipe a save for a transition that fails).
 	_selected_id = action_id
+	if action_id == "new" and DisplayServer.get_name() != "headless":
+		_intro = load("res://scripts/flooded_world_intro.gd").new() as Control
+		add_child(_intro)
+		_intro.cancelled.connect(_cancel_loading)
 	if _packed_game == null and not _load_requested:
 		_request_game_load()
 	if _busy:
@@ -324,6 +331,8 @@ func _enter_game() -> void:
 ## Cancelling the choice does not cancel or duplicate the resource request.
 ## It can finish warming in the background; no inventory/save changes occurred.
 func _cancel_loading() -> void:
+	if is_instance_valid(_intro): _intro.queue_free()
+	_intro = null
 	_busy = false
 	_waiting_to_enter = false
 	_pending_idx = -1
@@ -343,6 +352,9 @@ func _remove_cancel_button() -> void:
 
 
 func _swap_scene(packed: PackedScene) -> void:
+	if is_instance_valid(_intro) and not bool(_intro.get("complete")):
+		_waiting_to_enter = true
+		return
 	# Resolve every dependency BEFORE changing inventory or touching a save.
 	if packed == null:
 		packed = ResourceLoader.load(GAME_SCENE) as PackedScene
@@ -352,9 +364,14 @@ func _swap_scene(packed: PackedScene) -> void:
 	var previous_slots: Array = Inventory.slots.duplicate(true)
 	var previous_meta: Dictionary = Inventory.loaded_meta.duplicate(true)
 	var previous_pickups: Dictionary = Inventory.collected_island_pickups.duplicate(true)
+	var handoff: CanvasLayer
+	if _selected_id == "new" and is_instance_valid(_intro):
+		handoff = load("res://scripts/wake_transition.gd").new() as CanvasLayer
+		get_tree().root.add_child(handoff)
 	_apply_selection()
 	var err: int = get_tree().change_scene_to_packed(packed)
 	if err != OK:
+		if handoff != null: handoff.queue_free()
 		Inventory.slots = previous_slots
 		Inventory.loaded_meta = previous_meta
 		Inventory.collected_island_pickups = previous_pickups
@@ -366,6 +383,8 @@ func _swap_scene(packed: PackedScene) -> void:
 ## Never leave the player with a menu that ignores every tap: say why it
 ## failed and unlock the buttons so they can try again.
 func _fail(msg: String) -> void:
+	if is_instance_valid(_intro): _intro.queue_free()
+	_intro = null
 	push_error("[MainMenu] " + msg + " (" + GAME_SCENE + ")")
 	_error = msg
 	_busy = false
