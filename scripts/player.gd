@@ -1449,6 +1449,13 @@ func _queue_save() -> void:
 ## and write it to the given slot ("main" autosave or "quick" quick-save).
 func _write_save(slot: String) -> void:
 	var meta := {"active_slot": active_slot_index, "rope_gun_selected": rope_gun_selected}
+	meta["island_layout"] = preload("res://scripts/island_layout.gd").version(Inventory.loaded_meta)
+	meta["island_groves"] = Inventory.loaded_meta.get("island_groves",{}).duplicate(true)
+	for grove in get_tree().get_nodes_in_group("island_grove"):
+		var key := str(grove.get_parent().name)
+		var tree_states: Dictionary = meta["island_groves"].get(key,{})
+		tree_states.merge(grove.call("save_state"),true)
+		meta["island_groves"][key] = tree_states
 	meta["progression"] = get_node("SurvivalProgression").call("save_state")
 	meta["wildlife"] = get_node("IslandWildlife").call("save_state")
 	var stat_state: Dictionary = Stats.save_state()
@@ -1702,9 +1709,8 @@ func _update_hand_item() -> void:
 			_hand_item.add_child(_rope_launcher)
 			_third_person_launcher = ROPE_VISUAL.create_launcher(false)
 			_third_person_launcher.name = "ThirdPersonLauncher"
-			_third_person_launcher.position = Vector3(0.32, 0.17, -0.26)
-			_third_person_launcher.scale = Vector3.ONE * 0.8
 			add_child(_third_person_launcher)
+			preload("res://scripts/rope_hand_grip.gd").attach(_third_person_launcher,_body_visual)
 			_third_person_launcher.visible = cam_mode == CAM_TPS
 		"Wood":
 			var wood := _hand_mat(Color(0.62, 0.43, 0.22))

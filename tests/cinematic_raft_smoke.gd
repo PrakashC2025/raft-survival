@@ -27,7 +27,9 @@ func _run() -> void:
 		var clip: AudioStream = intro.VOICES[i]
 		var duration: float = intro.call("shot_start",i+1)-intro.call("shot_start",i)
 		check(clip.get_length() > 2 and duration >= clip.get_length()+0.8,"Recorded voice finishes before story shot "+str(i)+" changes")
-	check(intro.call("total_duration") > 20 and intro.call("total_duration") < 40,"Narrated story stays bounded and lightweight")
+	check(intro.call("total_duration") > 20 and intro.call("total_duration") < 60,"Narrated story stays bounded and lightweight")
+	intro.call("_process",100.0)
+	check(intro.get("_shot") == 0 and intro.get("started_shots") == [0],"Long loading frames cannot skip narration shots")
 	var tap := InputEventScreenTouch.new()
 	tap.pressed = true
 	tap.position = intro.get("_skip").get_global_rect().get_center()

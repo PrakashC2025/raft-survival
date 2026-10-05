@@ -357,6 +357,18 @@ func _build_tree_visual(stage: int) -> void:
 	if plant_id == "Coconut":
 		_build_coconut_palm_visual(stage)
 		return
+	if plant_id == "Banana" and stage != Stage.SEED:
+		var banana := preload("res://scripts/coastal_tree_visual.gd").create(0)
+		_container.add_child(banana)
+		var target_height: float = _grow_y(float(_def.get("trunk_height",2.2)))
+		banana.scale = Vector3.ONE*target_height/2.25
+		if stage >= Stage.MATURE:
+			var crown := Node3D.new()
+			crown.name = "Canopy"
+			crown.position = Vector3(0,target_height*0.84,0)
+			_container.add_child(crown)
+		_update_collision()
+		return
 	var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.2)))
 	var trunk_r: float = float(_def.get("trunk_radius", 0.13))
 	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 0.9)))

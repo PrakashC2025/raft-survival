@@ -26,14 +26,14 @@ func _run() -> void:
 		quit(1)
 		return
 	await capture("opening")
-	var tap := InputEventScreenTouch.new()
-	tap.index = 1
-	tap.pressed = true
-	tap.position = intro.get("_skip").get_global_rect().get_center()
-	Input.parse_input_event(tap)
-	await process_frame
-	if is_instance_valid(intro) and not intro.get("complete"):
-		push_error("FAIL: Native Skip touch was intercepted")
+	# Let the audio backend play EVERY clip. Retain the trace before the menu
+	# is freed so this covers normal story playback instead of only Skip.
+	var started: Array = intro.get("started_shots")
+	var spoken: Array = intro.get("spoken_shots")
+	while is_instance_valid(intro) and not intro.get("complete"):
+		await process_frame
+	if started != [0,1,2,3] or spoken != [0,1,2,3]:
+		push_error("FAIL: Full story narration missing: starts %s finishes %s" % [started,spoken])
 		quit(1)
 		return
 	while is_instance_valid(menu): await process_frame
@@ -49,5 +49,5 @@ func _run() -> void:
 	await capture("playable")
 	var ambient := current_scene.get_node_or_null("OceanAmbience")
 	if ambient != null: ambient.call("stop_environment")
-	print("NATIVE CINEMATIC HANDOFF: New Game, touch Skip, dawn fade and playable controls passed")
+	print("NATIVE CINEMATIC HANDOFF: all four narration clips played to completion, dawn fade and playable controls passed")
 	quit()

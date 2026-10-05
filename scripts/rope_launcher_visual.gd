@@ -49,11 +49,24 @@ static func create_launcher(with_hand: bool = true) -> Node3D:
 	for z in [-0.075, -0.22]:
 		_cylinder(batches, steel, 0.011, 0.011, 0.007, Vector3(0.066, 0.07, z), Vector3.FORWARD, PI / 2.0)
 	if with_hand:
-		var hand := HUMAN_HAND.instantiate() as Node3D
-		OBJECT_MATERIALS.apply_model(hand, OBJECT_MATERIALS.Kind.SKIN)
-		hand.name = "HumanHand"
-		hand.position = Vector3(0.04, -0.065, -0.015)
-		root.add_child(hand)
+		# One shared skin batch combines the forearm and wrapped pistol grip.
+		var grip := Node3D.new()
+		grip.name = "WrappedFingers"
+		root.add_child(grip)
+		var skin := OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.SKIN,Color(0.63,0.43,0.31),0.82)
+		var hand_batches: Dictionary = {}
+		_tube(hand_batches,skin,PackedVector3Array([Vector3(0.055,-0.06,0.01),Vector3(0.062,-0.067,0.10),Vector3(0.080,-0.10,0.25),Vector3(0.085,-0.13,0.42)]),0.037,12)
+		var palm := SphereMesh.new()
+		palm.radius = 1.0
+		palm.height = 2.0
+		palm.radial_segments = 12
+		palm.rings = 6
+		_append(hand_batches,skin,palm,Transform3D(Basis.IDENTITY.scaled(Vector3(0.025,0.060,0.052)),Vector3(0.055,-0.06,-0.032)))
+		for finger in range(4):
+			var y := -0.018-float(finger)*0.031
+			_tube(hand_batches,skin,PackedVector3Array([Vector3(0.057,y,-0.061),Vector3(0.033,y,-0.098),Vector3(-0.025,y-0.004,-0.102),Vector3(-0.044,y-0.01,-0.060)]),0.012,8)
+		_tube(hand_batches,skin,PackedVector3Array([Vector3(0.060,-0.024,0.002),Vector3(0.006,-0.01,0.012),Vector3(-0.039,-0.018,-0.015)]),0.014,8)
+		_finish(grip,hand_batches)
 	_finish(root, batches)
 	var muzzle := Marker3D.new()
 	muzzle.name = "LaunchMuzzle"

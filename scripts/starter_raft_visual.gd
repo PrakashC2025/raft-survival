@@ -55,7 +55,9 @@ static func create() -> Node3D:
 	var rig := Node3D.new()
 	rig.name = "DecorativeRig"
 	rig.set_meta("cosmetic_only",true)
-	rig.position = Vector3(0.72,0.13,-0.78)
+	# Keep the cosmetic cloth at the aft edge, clear of the starting view and
+	# the centre of the third-person camera's line of sight.
+	rig.position = Vector3(-0.88,0.13,0.68)
 	root.add_child(rig)
 	var mast := MeshInstance3D.new()
 	var pole := CylinderMesh.new()

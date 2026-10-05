@@ -4,7 +4,7 @@ signal finished
 signal cancelled
 const ART: Texture2D = preload("res://textures/ui/flooded_world_story.png")
 const VOICES := [preload("res://audio/intro_space.wav"),preload("res://audio/intro_city.wav"),preload("res://audio/intro_flood.wav"),preload("res://audio/intro_raft.wav")]
-const CAPTIONS := ["A world before the flood.","The impact came from the sky.","Ninety-five percent of the land vanished beneath the ocean.","You wake alone. Salvage. Build. Survive."]
+const CAPTIONS := ["Before the flood, our cities were alive. I thought the ocean ended at the shore.", "Then a stone from space struck the sea. A wave higher than the buildings came toward us.", "In one day, the ocean swallowed our cities. Ninety-five percent of the land disappeared. Only a few islands remained.", "I woke alone on a raft of tied logs. With my rope gun, I must salvage, build, and survive."]
 const FRAME_SECONDS := 5.0
 var elapsed := 0.0
 var complete := false
@@ -16,6 +16,11 @@ var _effects: AudioStreamPlayer
 var _ocean: AudioStreamPlayer
 var _shot := -1
 var _durations: Array[float] = []
+var _shot_elapsed := 0.0
+var _voice_done := false
+var started_shots: Array[int] = []
+var spoken_shots: Array[int] = []
+var _caption: Label
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -33,6 +38,14 @@ func _ready() -> void:
 	_voice = AudioStreamPlayer.new()
 	_voice.volume_db = -1
 	add_child(_voice)
+	_voice.finished.connect(func():
+		_voice_done = true
+		spoken_shots.append(_shot))
+	_caption = Label.new()
+	_caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_caption.add_theme_color_override("font_color", Color(0.94,0.91,0.82))
+	add_child(_caption)
 	_effects = AudioStreamPlayer.new()
 	_effects.volume_db = -9
 	add_child(_effects)
@@ -58,8 +71,15 @@ func _layout_buttons() -> void:
 	_skip.size = Vector2(172,48)
 	_cancel.position = Vector2(22,22)
 	_cancel.size = Vector2(178,48)
+	_caption.position = Vector2(34,size.y-135)
+	_caption.size = Vector2(size.x-68,90)
+	_caption.add_theme_font_size_override("font_size",int(clampf(size.x/48,16,26)))
 func _start_shot(index: int) -> void:
 	_shot = index
+	_shot_elapsed = 0.0
+	_voice_done = false
+	started_shots.append(index)
+	_caption.text = CAPTIONS[index]
 	_voice.stream = VOICES[index]
 	_voice.play()
 	_ocean.volume_db = -42 if index < 2 else -25
@@ -68,10 +88,13 @@ func _start_shot(index: int) -> void:
 		_effects.play()
 func _process(delta: float) -> void:
 	if not complete:
-		elapsed += minf(delta,0.2)
-		var index := shot_at(elapsed)
-		if index != _shot: _start_shot(index)
-		if elapsed >= total_duration(): finish()
+		_shot_elapsed += minf(delta,0.2)
+		# Advance only after the audio backend reports the whole clip finished.
+		# A busy loading frame or suspended phone cannot skip later narration.
+		elapsed = shot_start(_shot)+minf(_shot_elapsed,_durations[_shot]-0.001)
+		if _voice_done and _shot_elapsed >= _durations[_shot]:
+			if _shot == 3: finish()
+			else: _start_shot(_shot+1)
 	_layout_buttons()
 	queue_redraw()
 func finish() -> void:
@@ -102,8 +125,6 @@ func _draw() -> void:
 	var fade := maxf(1-smoothstep(0,0.1,fraction),smoothstep(0.9,1,fraction))
 	if complete: fade = 0
 	draw_rect(Rect2(Vector2.ZERO,size),Color(0,0,0,fade))
-	draw_rect(Rect2(0,size.y-125,size.x,125),Color(0.01,0.03,0.04,0.86))
-	var fs := int(clampf(size.x/44,16,28))
-	draw_string(ThemeDB.fallback_font,Vector2(34,size.y-76),CAPTIONS[index],HORIZONTAL_ALIGNMENT_LEFT,size.x-68,fs,Color(0.94,0.91,0.82))
+	draw_rect(Rect2(0,size.y-155,size.x,155),Color(0.01,0.03,0.04,0.86))
 	if complete:
 		draw_string(ThemeDB.fallback_font,Vector2(34,size.y-38),"Preparing your raft · %d%%" % roundi(progress*100),HORIZONTAL_ALIGNMENT_LEFT,-1,18,Color(0.6,0.84,0.86))

@@ -17,6 +17,7 @@ const PICKUP_TYPES := ["Coconut", "Banana", "Coconut", "Stone", "Banana", "Cocon
 
 
 func _enter_tree() -> void:
+	preload("res://scripts/island_layout.gd").apply(self,Inventory.loaded_meta)
 	var beacon := get_node_or_null("IslandBeacon")
 	if beacon != null:
 		beacon.set("beacon_color", beacon_color)
@@ -25,6 +26,9 @@ func _enter_tree() -> void:
 func _ready() -> void:
 	add_to_group("island")
 	set_meta("map_label", map_label)
+	var grove := preload("res://scripts/island_grove.gd").new() as Node3D
+	grove.name = "CoastalGrove"
+	add_child(grove)
 	call_deferred("_spawn_pickups")
 
 

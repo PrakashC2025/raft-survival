@@ -218,6 +218,7 @@ func _create_island_collision() -> void:
 func _is_collision_skipped(mesh_inst: MeshInstance3D, island: Node3D) -> bool:
 	var n: Node = mesh_inst
 	while n != null and n != island:
+		if n.name == "CoastalGrove": return true
 		if n.is_in_group("no_collision"):
 			return true
 		# Palm fronds are visual-only; colliding with their flat surfaces is
@@ -247,7 +248,7 @@ func _is_gameplay_node(node: Node) -> bool:
 	var n := node.name
 	return n.begins_with("Palm") or n.begins_with("IslandGrass") \
 			or n.begins_with("IslandBeacon") or n.begins_with("IslandMountain") \
-			or n.begins_with("IslandBirds")
+			or n.begins_with("IslandBirds") or n == "CoastalGrove"
 
 func _is_gameplay_descendant(node: Node, island: Node3D) -> bool:
 	var current := node

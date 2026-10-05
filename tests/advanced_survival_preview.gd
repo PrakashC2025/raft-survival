@@ -75,6 +75,7 @@ func _run() -> void:
 	root.add_child(intro)
 	intro.set_process(false)
 	for frame_index in range(4):
+		intro.call("_start_shot",frame_index)
 		intro.set("elapsed",intro.call("shot_start",frame_index)+2.5)
 		intro.queue_redraw()
 		await capture("story-"+str(frame_index))
