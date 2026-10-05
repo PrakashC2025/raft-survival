@@ -53,26 +53,38 @@ func _ready() -> void:
 		# Rescale BEFORE collision/snap/grass so everything sees final geometry.
 		_normalize_sketchfab_island(island)
 	if island != null:
-		_apply_imported_palm_models(island)
+		await _apply_imported_palm_models(island)
+	if not is_inside_tree():
+		return
 	if generate_collision:
 		# Cooking a scan mesh can be expensive on mobile. Yield between generated
 		# bodies so the startup work does not pile up in a single frame.
 		await _create_island_collision()
+	if not is_inside_tree():
+		return
 	if apply_terrain_material:
 		_apply_terrain_materials()
-	_apply_palm_visuals()
+	await _apply_palm_visuals()
+	if not is_inside_tree():
+		return
 	if snap_palms:
 		if generate_collision:
 			# Freshly created colliders only enter the physics space after a
 			# step — wait one physics frame or every palm ray misses.
 			await get_tree().physics_frame
+			if not is_inside_tree():
+				return
 		_snap_palm_trees()
 	if generate_collision:
 		# IslandGrass raycasts against the collider we just generated, but its
 		# own _ready ran earlier in tree order — rebuild it after physics has
 		# registered the new body (a plain process frame is too early).
 		await get_tree().physics_frame
+		if not is_inside_tree():
+			return
 		await get_tree().physics_frame
+		if not is_inside_tree():
+			return
 		var grass := get_node_or_null(island_root_path().path_join("IslandGrass"))
 		if grass != null and grass.has_method("rebuild"):
 			grass.call("rebuild")
@@ -108,6 +120,11 @@ func _apply_imported_palm_models(island: Node3D) -> void:
 			break
 	if template == null:
 		return
+	# Keep the temporary imported root owned during yields, including exits.
+	template.name = "PalmPreparationTemplate"
+	template.visible = false
+	template.add_to_group("no_collision")
+	add_child(template)
 	for child in island.get_children():
 		if not (child is Node3D and child.name.begins_with("Palm")):
 			continue
@@ -118,7 +135,15 @@ func _apply_imported_palm_models(island: Node3D) -> void:
 		var inst := template.duplicate() as Node3D
 		if inst != null:
 			inst.name = "CoconutPalmModel"
+			inst.visible = true
+			inst.remove_from_group("no_collision")
 			palm.add_child(inst)
+		# Importing every detailed palm in one frame creates a startup hitch.
+		await get_tree().physics_frame
+		if not is_inside_tree():
+			if is_instance_valid(template):
+				template.free()
+			return
 	template.free()
 
 func _load_glb_node(path: String) -> Node3D:
@@ -146,6 +171,9 @@ func _apply_palm_visuals() -> void:
 	for child in island.get_children():
 		if child is Node3D and child.name.begins_with("Palm"):
 			VEGETATION_VISUAL.apply_palm(child as Node3D)
+			await get_tree().physics_frame
+			if not is_inside_tree():
+				return
 
 func _create_island_collision() -> void:
 	var island := get_node_or_null(island_root) as Node3D
@@ -182,6 +210,8 @@ func _create_island_collision() -> void:
 		body.global_transform = mesh_inst.global_transform
 		print("[IslandSetup] collision generated for ", mesh_inst.name)
 		await get_tree().physics_frame
+		if not is_inside_tree():
+			return
 
 ## Generated visuals flagged no_collision (beacon pillar/glow) are skipped for
 ## BOTH collision generation and material overrides.

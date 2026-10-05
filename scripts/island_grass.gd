@@ -127,10 +127,12 @@ func _build_field(generation: int) -> void:
 		# more/fewer tufts without new terrain rays or another loading stall.
 		target_count = mini(target_count, 2400)
 	if _using_imported_model:
-		var tri_count := maxi(int(src.get_faces().size() / 3), 1)
+		var tri_count := maxi(floori(float(src.get_faces().size()) / 3.0), 1)
 		if tri_count > 24:
 			var tri_budget := 75000 if is_mobile else 180000
-			target_count = mini(target_count, maxi(int(tri_budget / tri_count), 64))
+			target_count = mini(target_count, maxi(floori(float(tri_budget) / float(tri_count)), 64))
+	# Four islands scatter concurrently: bound their combined physics work.
+	var ray_batch := 16 if is_mobile else RUNTIME_RAY_BATCH_SIZE
 	var attempts := target_count * 3
 	var misses := 0
 	var rays_since_yield := 0
@@ -180,7 +182,7 @@ func _build_field(generation: int) -> void:
 					xforms.append(world_to_local * Transform3D(b, pos + n * 0.02))
 					customs.append(Color(_rng.randf(), _rng.randf(), _rng.randf(), _rng.randf()))
 
-		if not Engine.is_editor_hint() and rays_since_yield >= RUNTIME_RAY_BATCH_SIZE:
+		if not Engine.is_editor_hint() and rays_since_yield >= ray_batch:
 			rays_since_yield = 0
 			await get_tree().physics_frame
 			if not is_inside_tree() or generation != _build_generation:

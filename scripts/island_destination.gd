@@ -87,10 +87,16 @@ func _wait_for_island_collider() -> void:
 		if not is_inside_tree():
 			return
 		var setup := get_node_or_null("IslandSetup")
-		if setup != null and setup.get("setup_complete") == true:
-			return
-		# Any StaticBody3D under this island means the trimesh / palm bodies
-		# are already in place (island_setup.gd cooks the terrain first).
-		if find_children("*", "StaticBody3D", true, false).size() > 0:
-			return
+		if setup == null:
+			var sibling := get_node_or_null("../IslandSetup")
+			if sibling != null and sibling.get_node_or_null(sibling.get("island_root")) == self:
+				setup = sibling
+		if setup != null:
+			if setup.get("setup_complete") == true:
+				return
+		else:
+			# Fallback only for islands without a setup controller. Mountain and
+			# palm colliders do not prove that the terrain is ready for pickups.
+			if find_children("*", "StaticBody3D", true, false).size() > 0:
+				return
 		await get_tree().physics_frame

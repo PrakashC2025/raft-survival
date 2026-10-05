@@ -124,6 +124,50 @@ func _run() -> void:
 	player.set("build_mode", true)
 	rope.call("_physics_process", 0.01)
 	check(not rope.get("_is_charging"), "Entering build mode cancels a held cast")
+	player.set("build_mode", false)
+	var inventory := root.get_node("Inventory")
+	player.call("equip_rope_gun")
+	inventory.call("remove", "Rope", int(inventory.call("total", "Rope")))
+	check(int(inventory.call("total", "Rope")) == 0 and player.get("_rope_launcher") != null, "Spending every rope material cannot remove the permanent gun")
+	player.call("select_hotbar_slot", 5)
+	controls.call("_sync_mode")
+	check(button.visible, "CAST remains available with another item selected and no rope materials")
+	await process_frame
+	root.push_input(down, true)
+	rope.call("_handle_idle", 0.01)
+	check(player.get("rope_gun_selected") and player.get("_rope_launcher") != null and rope.get("_is_charging"), "CAST re-equips the permanent gun and charges with zero rope")
+	root.push_input(up, true)
+	controls.call("reset_input")
+	rope.call("_force_cancel")
+	inventory.call("place_at", 0, "Wood", 1)
+	inventory.call("drop_into", 0, 10)
+	check(player.get("_rope_launcher") != null and player.get("rope_gun_selected"), "Dragging inventory stacks cannot drag away the gun")
+	inventory.call("add", "Stone", 60000)
+	var full := true
+	for slot_index in range(30):
+		full = full and not bool(inventory.call("slot_empty", slot_index))
+	var full_slots: Array = inventory.get("slots").duplicate(true)
+	player.call("select_hotbar_slot", 5)
+	check(full and player.call("equip_rope_gun") and inventory.get("slots") == full_slots, "Permanent gun equips with a full bag without displacing any inventory")
+	player.call("quick_save")
+	inventory.call("load_game", "quick")
+	change_scene_to_file("res://scenes/main.tscn")
+	await scene_changed
+	await process_frame
+	player = get_first_node_in_group("player")
+	check(player.get("rope_gun_selected") and player.get("_rope_launcher") != null and int(inventory.call("total", "Rope")) == 0, "Continue restores the gun when all rope materials have been spent")
+	# Let the new scene's deferred restoration finish before testing another load.
+	await physics_frame
+	await physics_frame
+	# Legacy saves do not carry the new optional equipped-state field.
+	inventory.get("loaded_meta").erase("rope_gun_selected")
+	change_scene_to_file("res://scenes/main.tscn")
+	await scene_changed
+	await process_frame
+	player = get_first_node_in_group("player")
+	controls = player.get_node("CanvasLayer/MobileControls")
+	controls.call("_sync_mode")
+	check((controls.get("_btn_rope") as Button).visible and player.call("equip_rope_gun"), "Legacy saves also receive an always-available gun without changing their slots")
 	print("ROPE SMOKE: %d checks, %d failures" % [checks, failures])
 	var ambience := current_scene.get_node_or_null("OceanAmbience") as AudioStreamPlayer
 	if ambience != null:

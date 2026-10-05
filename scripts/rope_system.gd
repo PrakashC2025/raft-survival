@@ -269,6 +269,9 @@ func _handle_idle(delta: float) -> void:
 		_cancel_charge()
 		return
 	if Input.is_action_just_pressed("rope_throw"):
+		if player != null and player.has_method("equip_rope_gun") and not bool(player.call("equip_rope_gun")):
+			return
+		_update_hook_origin()
 		_is_charging = true
 		_charge_distance = minf(quick_cast_distance, max_hook_distance)
 	elif _is_charging and Input.is_action_pressed("rope_throw"):

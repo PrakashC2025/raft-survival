@@ -7,7 +7,7 @@ var _refresh_seconds := 0.0
 
 ## ============================================================
 ## MOBILE SURVIVAL HUD — graphical overlay shown on touch devices (and the
-## desktop F10 preview). All art is drawn from primitives (no external icons).
+## desktop F10 preview). Item art shares an original textured atlas.
 ##
 ## NORMAL MODE (Build Mode OFF):
 ##   - bottom-center: HOTBAR of inventory slots 0..5 (items the player owns)
@@ -423,7 +423,7 @@ func _compute_layout() -> void:
 	# bag panel grid (5 cols x 5 bag rows + 1 hotbar row = 30 slots)
 	_bag_slot_rects.clear()
 	if _bag_open:
-		var cell: float = clampf(minf(_vp.x * 0.082, _vp.y * 0.072), 44.0, 78.0)
+		var cell: float = clampf(minf(_vp.x * 0.082, _vp.y * 0.092), 44.0, 78.0)
 		var cg: float = cell * 0.16
 		var pad: float = cell * 0.5
 		var head_h: float = cell * 1.85
@@ -685,11 +685,11 @@ func _input(event: InputEvent) -> void:
 	_compute_layout()
 	if _death_open:
 		if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
+			_consume_input()
 			if event.is_action_pressed("ui_accept") or (event as InputEventKey).keycode == KEY_ENTER:
 				_respawn_from_death()
 			elif event.is_action_pressed("ui_cancel") or (event as InputEventKey).keycode == KEY_ESCAPE:
 				_quit_to_menu()
-			get_viewport().set_input_as_handled()
 		elif event is InputEventScreenTouch or event is InputEventMouseButton:
 			_handle_death_pointer(event)
 		return
@@ -709,15 +709,15 @@ func _input(event: InputEvent) -> void:
 				_set_paused(false)
 			else:
 				_set_paused(true)
-			get_viewport().set_input_as_handled()
+			_consume_input()
 			return
 		if event.is_action_pressed("toggle_map"):
 			toggle_map()
-			get_viewport().set_input_as_handled()
+			_consume_input()
 			return
 		if event.is_action_pressed("toggle_crafting"):
 			toggle_crafting()
-			get_viewport().set_input_as_handled()
+			_consume_input()
 			return
 	if not visible:
 		return
@@ -737,26 +737,26 @@ func _input(event: InputEvent) -> void:
 		if touch.pressed:
 			if _pause_btn_rect.has_point(touch.position):
 				_set_paused(true)
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 			if _map_button_rect.has_point(touch.position):
 				toggle_map()
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 			if _craft_button_rect.has_point(touch.position):
 				toggle_crafting()
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 	elif event is InputEventMouseButton:
 		var mouse := event as InputEventMouseButton
 		if mouse.button_index == MOUSE_BUTTON_LEFT and mouse.pressed:
 			if _map_button_rect.has_point(mouse.position):
 				toggle_map()
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 			if _craft_button_rect.has_point(mouse.position):
 				toggle_crafting()
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 	if not (event is InputEventScreenTouch or event is InputEventScreenDrag):
 		return
@@ -764,6 +764,12 @@ func _input(event: InputEvent) -> void:
 		_handle_bag_input(event)
 	else:
 		_handle_bar_input(event)
+
+
+func _consume_input() -> void:
+	var input_viewport := get_viewport()
+	if input_viewport != null:
+		input_viewport.set_input_as_handled()
 
 
 func _handle_death_pointer(event: InputEvent) -> void:
@@ -780,11 +786,11 @@ func _handle_death_pointer(event: InputEvent) -> void:
 		pointer = mouse.position
 		pressed = mouse.pressed
 	if pressed:
+		_consume_input()
 		if _death_respawn_rect.has_point(pointer):
 			_respawn_from_death()
 		elif _death_menu_rect.has_point(pointer):
 			_quit_to_menu()
-		get_viewport().set_input_as_handled()
 
 
 func _handle_modal_pointer(event: InputEvent) -> void:
@@ -824,7 +830,7 @@ func _handle_modal_pointer(event: InputEvent) -> void:
 				if _craft_card_rects[i].has_point(pointer):
 					_craft_item(CRAFT_ORDER[i])
 					break
-	get_viewport().set_input_as_handled()
+	_consume_input()
 
 
 func _start_selected_course() -> void:
@@ -859,13 +865,14 @@ func _craft_item(item_name: String) -> void:
 
 
 func _handle_pause_mouse(pointer: Vector2) -> void:
+	# Scene changes detach this HUD immediately: claim the event first.
+	_consume_input()
 	if _pause_resume_rect.has_point(pointer):
 		_set_paused(false)
 	elif _pause_settings_rect.has_point(pointer):
 		GameSettings.open()
 	elif _pause_quit_rect.has_point(pointer):
 		_quit_to_menu()
-	get_viewport().set_input_as_handled()
 
 
 func _handle_bar_input(event: InputEvent) -> void:
@@ -877,14 +884,14 @@ func _handle_bar_input(event: InputEvent) -> void:
 				_bag_open = true
 				GameSettings.release_gameplay_input()
 				queue_redraw()
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 			for i in range(_hotbar_rects.size()):
 				if (_hotbar_rects[i] as Rect2).has_point(touch.position):
 					_pressed_visual = i
 					_tap_bar_slot(i)
 					queue_redraw()
-					get_viewport().set_input_as_handled()
+					_consume_input()
 					return
 		else:
 			_pressed_visual = -1
@@ -908,17 +915,17 @@ func _handle_bag_input(event: InputEvent) -> void:
 		var touch := event as InputEventScreenTouch
 		if touch.pressed:
 			if _inventory_touch_id != -1:
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 			if _close_rect.has_point(touch.position) or not _panel_rect.has_point(touch.position):
 				_bag_open = false
 				_cancel_drag()
 				queue_redraw()
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 			if _save_rect.has_point(touch.position):
 				_do_quick_save()
-				get_viewport().set_input_as_handled()
+				_consume_input()
 				return
 			_press_pos = touch.position
 			_inventory_touch_id = touch.index
@@ -929,7 +936,7 @@ func _handle_bag_input(event: InputEvent) -> void:
 			else:
 				_press_slot = -1
 			queue_redraw()
-			get_viewport().set_input_as_handled()
+			_consume_input()
 			return
 		# released
 		if touch.index != _inventory_touch_id:
@@ -956,7 +963,7 @@ func _handle_bag_input(event: InputEvent) -> void:
 						p.call("select_hotbar_slot", _press_slot)
 				_cancel_drag()
 			queue_redraw()
-			get_viewport().set_input_as_handled()
+			_consume_input()
 			return
 		# tap on background: close unless it started on the panel chrome
 		if _close_rect.has_point(touch.position):
@@ -965,7 +972,7 @@ func _handle_bag_input(event: InputEvent) -> void:
 		elif not _panel_rect.has_point(touch.position):
 			_bag_open = false
 			queue_redraw()
-		get_viewport().set_input_as_handled()
+		_consume_input()
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
 		if drag.index != _inventory_touch_id:
@@ -977,7 +984,7 @@ func _handle_bag_input(event: InputEvent) -> void:
 			if _dragging:
 				_drag_pos = drag.position
 			queue_redraw()
-			get_viewport().set_input_as_handled()
+			_consume_input()
 
 
 func _handle_pause_input(t: InputEventScreenTouch) -> void:
@@ -1076,27 +1083,42 @@ func _draw_pause_btn() -> void:
 
 func _draw_map_button() -> void:
 	var rect := _map_button_rect
-	_draw_rounded(rect, rect.size.y * 0.45, Color(0.035, 0.12, 0.16, 0.78))
-	_draw_rounded(rect, rect.size.y * 0.45, Color(0.55, 0.88, 0.92, 0.48), false, 1.5)
-	var left := Vector2(rect.position.x + rect.size.x * 0.2, rect.position.y + rect.size.y * 0.28)
-	var right := Vector2(rect.position.x + rect.size.x * 0.48, rect.position.y + rect.size.y * 0.72)
-	draw_polyline(PackedVector2Array([left, left + Vector2(8, -3), right + Vector2(8, -3), right]),
-			Color(0.7, 0.92, 0.9, 0.95), 2.0, true)
-	draw_line(left + Vector2(8, -3), right + Vector2(8, -3), Color(0.7, 0.92, 0.9, 0.95), 2.0, true)
-	var fs: int = int(clampf(rect.size.y * 0.38, 12.0, 16.0))
-	_draw_text("MAP", Vector2(rect.position.x + rect.size.x * 0.59,
-			rect.position.y + rect.size.y * 0.59 + fs * 0.34), fs, Color(1, 1, 1, 0.96))
+	_draw_ocean_tab(rect, Color(0.10, 0.25, 0.27))
+	Icons.sea_chart(self, Vector2(rect.position.x + rect.size.y * 0.76, rect.get_center().y), rect.size.y * 0.36)
+	_draw_tab_caption(rect, "MAP", "ISLAND CHART")
 
 
 func _draw_craft_button() -> void:
 	var rect := _craft_button_rect
-	_draw_rounded(rect, rect.size.y * 0.45, Color(0.12, 0.09, 0.055, 0.8))
-	_draw_rounded(rect, rect.size.y * 0.45, Color(0.96, 0.73, 0.38, 0.5), false, 1.5)
-	var center := Vector2(rect.position.x + rect.size.x * 0.25, rect.get_center().y)
-	Icons.hammer(self, center, rect.size.y * 0.32, 2.0, Color(1.0, 0.86, 0.61, 0.96))
-	var fs: int = int(clampf(rect.size.y * 0.34, 11.0, 15.0))
-	_draw_text("CRAFT", Vector2(rect.position.x + rect.size.x * 0.42,
-			rect.position.y + rect.size.y * 0.59 + fs * 0.34), fs, Color(1, 1, 1, 0.96))
+	_draw_ocean_tab(rect, Color(0.20, 0.19, 0.12))
+	Icons.salvage_tools(self, Vector2(rect.position.x + rect.size.y * 0.76, rect.get_center().y), rect.size.y * 0.34)
+	_draw_tab_caption(rect, "CRAFT", "SURVIVAL GEAR")
+
+
+func _draw_ocean_tab(rect: Rect2, base: Color) -> void:
+	var radius := rect.size.y * 0.14
+	_draw_rounded(Rect2(rect.position + Vector2(0, 2), rect.size), radius, Color(0, 0, 0, 0.65))
+	_draw_rounded(rect, radius, base.darkened(0.35))
+	_draw_rounded(rect.grow(-2.0), radius, base)
+	# Weathered wood grain and a restrained wave etching inside a brass rim.
+	for grain_index in range(4):
+		var y := rect.position.y + rect.size.y * (0.19 + float(grain_index) * 0.20)
+		draw_line(Vector2(rect.position.x + 7.0, y), Vector2(rect.end.x - 7.0, y + 1.0), Color(0.85, 0.84, 0.63, 0.06), 1.0, true)
+	var wave := PackedVector2Array()
+	for wave_index in range(25):
+		var t := float(wave_index) / 24.0
+		wave.append(Vector2(lerpf(rect.position.x + 8.0, rect.end.x - 8.0, t), rect.end.y - 5.0 + sin(t * TAU * 3.0) * 1.0))
+	draw_polyline(wave, Color(0.51, 0.76, 0.69, 0.24), 1.0, true)
+	_draw_rounded(rect.grow(-1.0), radius, Color(0.71, 0.63, 0.42, 0.88), false, 1.0)
+	for rivet_x in [rect.position.x + 5.0, rect.end.x - 5.0]:
+		draw_circle(Vector2(rivet_x, rect.get_center().y), 1.6, Color(0.78, 0.70, 0.49))
+
+
+func _draw_tab_caption(rect: Rect2, title: String, subtitle: String) -> void:
+	var fs := int(clampf(rect.size.y * 0.34, 12.0, 16.0))
+	var x := rect.position.x + rect.size.y * 1.45
+	_draw_text(title, Vector2(x, rect.position.y + rect.size.y * 0.49), fs, Color(0.98, 0.91, 0.72))
+	_draw_text(subtitle, Vector2(x, rect.position.y + rect.size.y * 0.76), int(clampf(rect.size.y * 0.19, 7.0, 9.0)), Color(0.70, 0.80, 0.74))
 
 
 func _draw_map_overlay() -> void:
@@ -1246,7 +1268,7 @@ func _draw_crafting_overlay() -> void:
 		_draw_rounded(rect, 16.0, bg)
 		_draw_rounded(rect, 16.0, Color(0.7, 0.83, 0.68, 0.36) if ready_to_craft else Color(1, 1, 1, 0.13), false, 1.3)
 		var icon_center := Vector2(rect.position.x + rect.size.x * 0.16, rect.position.y + rect.size.y * 0.42)
-		Icons.item_icon(self, item_name, icon_center, minf(rect.size.y * 0.18, 24.0))
+		Icons.item_icon(self, item_name, icon_center, minf(rect.size.y * 0.32, 34.0))
 		var name_fs: int = int(clampf(rect.size.y * 0.19, 14.0, 21.0))
 		_draw_text(item_name.to_upper(), Vector2(rect.position.x + rect.size.x * 0.29,
 				rect.position.y + rect.size.y * 0.25 + name_fs * 0.34), name_fs, Color(0.96, 0.93, 0.83, 0.98))
@@ -1342,12 +1364,12 @@ func _draw_bottom_bar() -> void:
 			Icons.piece(self, PIECE_ORDER[i], rect.get_center(), _slot * 0.3,
 				Color(0.88, 0.72, 0.42, 0.95) if piece_sel else Color(0.75, 0.6, 0.34, 0.85))
 		else:
-			var item_sel: bool = i == act_slot and not Inventory.slot_empty(i)
+			var item_sel: bool = i == act_slot and not Inventory.slot_empty(i) and not (p != null and p.get("rope_gun_selected"))
 			_draw_slot(rect, _pressed_visual == i, item_sel)
 			_draw_item_slot(rect, i, item_sel)
 	if not building and _bag_rect.size.x > 0.0:
 		_draw_slot(_bag_rect, _press_bag, false)
-		Icons.backpack(self, _bag_rect.get_center(), _slot * 0.3, Color(0.9, 0.75, 0.45, 0.95))
+		Icons.backpack(self, _bag_rect.get_center(), _slot * 0.43, Color.WHITE)
 
 
 func _draw_item_slot(rect: Rect2, idx: int, selected: bool) -> void:
@@ -1356,7 +1378,7 @@ func _draw_item_slot(rect: Rect2, idx: int, selected: bool) -> void:
 	var item: String = Inventory.slot_item(idx)
 	var count: int = Inventory.slot_count(idx)
 	var glyph: Color = Color(1, 1, 1, 0.98) if selected else Color(0.95, 0.95, 0.95, 0.9)
-	Icons.item_icon(self, item, rect.get_center(), _slot * 0.26)
+	Icons.item_icon(self, Icons.ITEM_ART.slot_icon(item, idx), rect.get_center() - Vector2(0, _slot * 0.035), _slot * 0.43)
 	if count > 1:
 		var fs: int = int(clampf(_slot * 0.28, 13.0, 22.0))
 		var label := str(count)
@@ -1535,8 +1557,12 @@ func _draw_bag_panel() -> void:
 	draw_rect(Rect2(Vector2.ZERO, _vp), Color(0.0, 0.0, 0.0, 0.5))
 	var font := ThemeDB.fallback_font
 	var rect := _panel_rect
-	_draw_rounded(rect, 22.0, Color(0.055, 0.075, 0.1, 0.98))
-	_draw_rounded(rect, 22.0, Color(1, 1, 1, 0.2), false, 2.0)
+	_draw_rounded(rect, 12.0, Color(0.085, 0.095, 0.080, 0.98))
+	_draw_rounded(rect.grow(-3.0), 10.0, Color(0.52, 0.47, 0.34, 0.55), false, 1.0)
+	# Restrained canvas seams along the outside of the storage panel.
+	for seam_x in [rect.position.x + 10.0, rect.end.x - 10.0]:
+		for stitch_y in range(int(rect.position.y + 18.0), int(rect.end.y - 18.0), 9):
+			draw_line(Vector2(seam_x, stitch_y), Vector2(seam_x, stitch_y + 3.0), Color(0.63, 0.57, 0.40, 0.24), 1.0)
 	# header
 	var fs: int = int(clampf(rect.size.y * 0.028, 17.0, 25.0))
 	_draw_text("BACKPACK", Vector2(rect.position.x + rect.size.x * 0.045,
@@ -1567,20 +1593,34 @@ func _draw_bag_panel() -> void:
 	for idx in range(_bag_slot_rects.size()):
 		var b: Rect2 = _bag_slot_rects[idx]
 		var is_hotbar: bool = idx < HOTBAR_COUNT
-		var selected: bool = is_hotbar and idx == act_slot and not Inventory.slot_empty(idx)
+		var selected: bool = is_hotbar and idx == act_slot and not Inventory.slot_empty(idx) and not (p != null and p.get("rope_gun_selected"))
 		_draw_slot(b, _pressed_visual == idx, selected)
 		# hotbar row gets a subtle divider tint so it reads as the equip row
 		if is_hotbar:
 			_draw_rounded(b.grow(-2.0), b.size.x * 0.16, Color(1, 1, 1, 0.03), true, 1.0)
 		if not Inventory.slot_empty(idx):
-			Icons.item_icon(self, Inventory.slot_item(idx), b.get_center(), b.size.x * 0.24)
+			var display_item: String = Icons.ITEM_ART.slot_icon(Inventory.slot_item(idx), idx)
+			Icons.item_icon(self, display_item, b.get_center() - Vector2(0, b.size.y * 0.025), b.size.x * 0.43)
 			var count: int = Inventory.slot_count(idx)
 			if count > 0:
-				var cfs: int = int(clampf(b.size.x * 0.28, 11.0, 20.0))
+				var cfs: int = int(clampf(b.size.x * 0.22, 11.0, 18.0))
 				var label := str(count)
 				var tw2: float = font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, cfs).x
-				_draw_text(label, Vector2(b.end.x - tw2 - b.size.x * 0.08,
-						b.position.y + b.size.y * 0.78 + cfs * 0.26), cfs, Color(1, 1, 1, 0.95))
+				var badge := Rect2(b.end.x - tw2 - 8.0, b.position.y + 3.0, tw2 + 5.0, cfs + 3.0)
+				_draw_rounded(badge, 3.0, Color(0.018, 0.023, 0.019, 0.88))
+				_draw_text(label, badge.position + Vector2(2.0, cfs), cfs, Color(1, 1, 1, 0.95))
+			var name_size: int = int(clampf(b.size.x * 0.16, 8.0, 11.0))
+			var name_width: float = font.get_string_size(display_item, HORIZONTAL_ALIGNMENT_LEFT, -1, name_size).x
+			if name_width > b.size.x - 8.0:
+				name_size = maxi(7, int(float(name_size) * (b.size.x - 8.0) / name_width))
+			draw_string(font, b.position + Vector2(4.0, b.size.y - 4.0), display_item,
+				HORIZONTAL_ALIGNMENT_CENTER, b.size.x - 8.0, name_size, Color(0.86, 0.85, 0.77))
+
+
+	# Fixed equipment lives outside the draggable/material inventory grid.
+	var footer_center := Vector2(rect.position.x + 29.0, rect.end.y - 17.0)
+	Icons.item_icon(self, "Rope Gun", footer_center, 12.0)
+	_draw_text("ROPE GUN  •  PERMANENT", footer_center + Vector2(22.0, 4.0), 10, Color(0.76, 0.83, 0.70))
 
 
 func _draw_drag_ghost() -> void:
@@ -1589,7 +1629,7 @@ func _draw_drag_ghost() -> void:
 	var sz := _slot * 0.92
 	var r := Rect2(_drag_pos.x - sz * 0.5, _drag_pos.y - sz * 0.5, sz, sz)
 	_draw_slot(r, false, false)
-	Icons.item_icon(self, Inventory.slot_item(_drag_from), r.get_center(), sz * 0.28)
+	Icons.item_icon(self, Icons.ITEM_ART.slot_icon(Inventory.slot_item(_drag_from), _drag_from), r.get_center(), sz * 0.43)
 	var font := ThemeDB.fallback_font
 	var count: int = Inventory.slot_count(_drag_from)
 	if count > 1:
@@ -1605,8 +1645,10 @@ func _draw_slot(rect: Rect2, pressed: bool, selected: bool) -> void:
 		bg = Color(0.13, 0.18, 0.17, 0.95)
 	elif pressed:
 		bg = Color(0.16, 0.2, 0.26, 0.82)
-	var radius: float = rect.size.x * 0.10
+	var radius: float = rect.size.x * 0.065
+	_draw_rounded(rect.grow(1.0), radius, Color(0.015, 0.020, 0.017, 0.92))
 	_draw_rounded(rect, radius, bg)
+	_draw_rounded(rect.grow(-4.0), radius * 0.6, Color(0, 0, 0, 0.18))
 	var border: Color = Color(0.62, 0.58, 0.45, 0.5)
 	if selected:
 		border = Color(0.87, 0.75, 0.49, 0.95)

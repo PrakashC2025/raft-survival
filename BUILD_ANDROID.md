@@ -90,3 +90,10 @@ Android; this build does not provide an iPhone installer.
 
 A desktop packaged-asset test confirms loading and input logic. Confirm graphics,
 frame rate, heat, and multi-touch feel on the actual phone before distribution.
+
+
+## Latest source fixes and Xiaomi testing
+
+The 2026-10-03 source fixes the Pause → Quit detached-HUD error and the reported integer-division/fishing-variable warnings. Tree preparation is split across frames, and Android grass scattering uses smaller work batches to reduce startup spikes. Reopen Godot before manually exporting a fresh APK; installing the old build will not include these changes. No new APK was exported by the coding agent.
+
+For the owner's Xiaomi 11 Lite-class phone, begin with **Settings → Graphics → Battery Saver**, **Frame rate → 30 FPS**, in landscape. Keep ARM64 enabled and all required island textures included when exporting. Install the APK as an update with the existing signing key and package name, preserving app data/saves. Test New Game/Continue, walking and looking together, Pause → Quit → Continue, building and bag/map/crafting. Actual phone frame rate, temperature and memory use remain unverified. Try Balanced after stable play; High may need more GPU time than this device can sustain.

@@ -214,10 +214,16 @@ func _run() -> void:
 	check(float(performance.get("_render_scale")) < 0.82, "Auto graphics reduces resolution under sustained slow frames")
 	player.call("quick_save")
 	check(inventory.call("has_save", "quick"), "Touch-accessible quick save writes progress")
-	hud.call("_quit_to_menu")
+	hud.call("_set_paused", true)
+	var quit_event := InputEventMouseButton.new()
+	quit_event.button_index = MOUSE_BUTTON_LEFT
+	quit_event.pressed = true
+	quit_event.position = (hud.get("_pause_quit_rect") as Rect2).get_center()
+	root.push_input(quit_event, true)
 	await scene_changed
 	await process_frame
 	menu = current_scene
+	check(menu.scene_file_path == "res://scenes/main_menu.tscn" and not paused, "Pause Quit pointer safely detaches the HUD and enters the menu")
 	check(inventory.call("has_save", "main"), "Quit to menu saves survival progress")
 	for frame in range(5400):
 		if menu.get("_packed_game") != null:
@@ -231,6 +237,13 @@ func _run() -> void:
 	var ambience := current_scene.get_node_or_null("OceanAmbience") as AudioStreamPlayer
 	if ambience != null:
 		ambience.call("stop_environment")
-	# Continue starts asynchronous island setup; let its pending work settle.
-	await create_timer(1.0).timeout
+	# Wait for actual preparation completion rather than a fixed delay.
+	for frame in range(600):
+		var complete := true
+		for setup in current_scene.find_children("IslandSetup", "Node3D", true, false):
+			complete = complete and setup.get("setup_complete") == true
+		if complete:
+			break
+		await physics_frame
+	await process_frame
 	quit(0 if failures == 0 else 1)

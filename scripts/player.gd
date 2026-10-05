@@ -119,6 +119,7 @@ var build_mode: bool = false
 # inventory slots 0..5; tapping a slot in normal mode selects its item here.
 var active_slot_index: int = 0
 var active_item: String = "Rope"
+var rope_gun_selected := true  # Permanent equipment, outside inventory stacks.
 
 # Auto-save (debounced): writes the inventory + state to user:// after the
 # last change, and on quit/pause so closing the game never loses progress.
@@ -258,6 +259,9 @@ func _ready() -> void:
 	active_slot_index = int(Inventory.loaded_meta.get("active_slot", 0))
 	active_slot_index = clampi(active_slot_index, 0, Inventory.HOTBAR_COUNT - 1)
 	active_item = Inventory.slot_item(active_slot_index)
+	rope_gun_selected = bool(Inventory.loaded_meta.get("rope_gun_selected", active_item == "Rope"))
+	if rope_gun_selected:
+		active_item = "Rope"
 	Inventory.changed.connect(_refresh_active_item)
 	Inventory.changed.connect(_queue_save)
 	floor_snap_length = 0.32
@@ -568,6 +572,8 @@ func _handle_camera_and_hotbar_input(event: InputEvent) -> void:
 func add_look_input(rel: Vector2, sens: float = MOUSE_SENSITIVITY) -> void:
 	if cam_pivot == null:
 		return
+	if _equipment != null and _equipment.get("aiming"):
+		sens *= 0.55
 	rotate_y(-rel.x * sens)
 	cam_pivot.rotate_x(-rel.y * sens)
 	cam_pivot.rotation.x = clamp(cam_pivot.rotation.x, -_look_pitch_limit(), 1.4)
@@ -766,6 +772,10 @@ func _try_step_up() -> void:
 func _handle_pickup() -> void:
 	if not Input.is_action_just_pressed("interact"):
 		return
+	# SHOOT is dedicated to the selected bow; CLIMB has its own touch button.
+	if active_item == "Bow":
+		_handle_selected_item_use()
+		return
 	# Boarding the raft from the water takes priority over pickups: when the
 	# player is swimming right next to the raft/foundation, E climbs them out
 	# (the mobile CLIMB button calls climb_out() directly — same result).
@@ -963,14 +973,14 @@ func _tick_fishing(delta: float) -> void:
 func _valid_fishing_cast() -> bool:
 	if camera == null or is_swimming:
 		return false
-	var ocean := get_parent().get_node_or_null("Ocean")
-	if ocean == null:
+	var fishing_ocean := get_parent().get_node_or_null("Ocean")
+	if fishing_ocean == null:
 		return false
 	var start := camera.global_position
 	var direction := -camera.global_basis.z
 	if direction.y >= -0.03:
 		return false
-	var distance: float = (float(ocean.call("get_height", start)) - start.y) / direction.y
+	var distance: float = (float(fishing_ocean.call("get_height", start)) - start.y) / direction.y
 	if distance < 2.0 or distance > 28.0:
 		return false
 	var end := start + direction * distance
@@ -1168,7 +1178,7 @@ func _poll_gameplay_actions() -> void:
 		_poll_edit_actions()
 		return
 	# E double-click: pickup a piece for editing (works in and out of build mode).
-	if Input.is_action_just_pressed("interact"):
+	if Input.is_action_just_pressed("interact") and active_item != "Bow":
 		_handle_double_click_edit()
 		if _editing != null:
 			_update_edit_follow()
@@ -1366,11 +1376,28 @@ func select_hotbar_slot(index: int) -> void:
 		return
 	active_slot_index = clampi(index, 0, Inventory.HOTBAR_COUNT - 1)
 	active_item = Inventory.slot_item(active_slot_index)
+	rope_gun_selected = active_item == "Rope"
 	_update_hand_item()
+	_queue_save()
+
+
+func equip_rope_gun() -> bool:
+	var hud := get_node_or_null("CanvasLayer/SurvivalHUD")
+	if build_mode or _editing != null or get_tree().paused or GameSettings.is_open \
+			or (hud != null and bool(hud.call("gameplay_input_blocked"))):
+		return false
+	rope_gun_selected = true
+	active_item = "Rope"
+	if _equipment != null:
+		_equipment.call("cancel_draw")
+		_equipment.call("set_aiming", false)
+	_update_hand_item()
+	_queue_save()
+	return true
 
 
 func _refresh_active_item() -> void:
-	active_item = Inventory.slot_item(clampi(active_slot_index, 0, Inventory.HOTBAR_COUNT - 1))
+	active_item = "Rope" if rope_gun_selected else Inventory.slot_item(clampi(active_slot_index, 0, Inventory.HOTBAR_COUNT - 1))
 	_update_hand_item()
 
 
@@ -1385,7 +1412,7 @@ func _queue_save() -> void:
 ## Build the state meta (selected slot + time of day + the built structure)
 ## and write it to the given slot ("main" autosave or "quick" quick-save).
 func _write_save(slot: String) -> void:
-	var meta := {"active_slot": active_slot_index}
+	var meta := {"active_slot": active_slot_index, "rope_gun_selected": rope_gun_selected}
 	var stat_state: Dictionary = Stats.save_state()
 	# Quitting from the death screen must not write a zero-health Continue save.
 	if float(stat_state.get("health", 100.0)) <= 0.0:
@@ -1901,6 +1928,8 @@ func _update_hand_sway(_delta: float) -> void:
 ##     case — in real life you only take debris that is within your pickable
 ##     range, and the E key collects those even without precise aiming).
 func interaction_caption() -> String:
+	if active_item == "Bow":
+		return "SHOOT"
 	if aim_valid and aim_collider != null and aim_distance <= PICKUP_RANGE:
 		var target: Node = aim_collider
 		while target != null:
@@ -1911,8 +1940,6 @@ func interaction_caption() -> String:
 			if target.has_method("interact_survival"):
 				return "USE"
 			target = target.get_parent()
-	if active_item == "Bow":
-		return "DRAW"
 	if active_item == "Fishing Rod":
 		return "FISH"
 	if active_item == "Water":
@@ -1925,7 +1952,7 @@ func interaction_caption() -> String:
 func can_interact_now() -> bool:
 	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Water"] and Inventory.has(active_item, 1):
 		return true
-	if active_item == "Bow" and Inventory.has("Arrow", 1):
+	if active_item == "Bow":
 		return true
 	if active_item == "Life Vest" and Inventory.has("Life Vest", 1) and not life_vest_equipped:
 		return true

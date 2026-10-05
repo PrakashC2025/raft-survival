@@ -37,3 +37,9 @@ The shared wood/metal/stone/cloth/soil surface shaders, rope coils, plastic cani
 ## Original CC0 survival models (2026-10-03)
 
 models/coastal_fish.glb, coastal_gull.glb, human_hand.glb, survival_bow.glb and coastal_ridge.glb are original project assets generated offline by tools/generate_survival_models.gd. They have smooth modeled geometry and PBR materials, with no downloaded textures or geometry. Static meshes are merged by material; gull wing pivots stay separate for runtime animation. These assets are CC0 1.0; see models/ORIGINAL_SURVIVAL_ASSETS_LICENSE.md. The hollow rain barrel, planter walls, flames and projectile geometry are also original project code.
+
+## Inventory artwork (2026-10-05)
+
+`textures/ui/rope_launcher.png` is original AI-generated transparent rope-launcher artwork created with the built-in OpenAI ImageGen tool, with no input/reference images. Its text prompt describes this project's own olive/steel/rope launcher. The exact prompt is recorded in `textures/ui/ARTWORK.md`. The folded chart, compass, crossed salvage tools and nautical button trim are original project drawing code in `scripts/ui_icons.gd` and `scripts/survival_hud.gd`.
+
+`textures/ui/survival_items.png` is original AI-generated artwork created with the built-in OpenAI ImageGen tool, using a text prompt and no reference images or third-party game art. It supplies 29 inventory item icons plus a backpack. Generation details and the exact prompt are in `textures/ui/ARTWORK.md`. Runtime UV regions/silhouettes preserve transparent margins and item proportions. The legacy action/build symbols remain original procedural code.

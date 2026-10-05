@@ -50,6 +50,7 @@ var _dock := Vector2.ZERO   # resting joystick position (bottom-left)
 var _btn_jump: Button
 var _btn_run: Button
 var _btn_use: Button
+var _btn_aim: Button
 var _btn_dive: Button
 var _btn_rope: Button
 var _btn_recall: Button
@@ -81,6 +82,7 @@ var _was_blocked := false
 var _use_caption := ""
 var _moving := false
 var _rope_equipped := false
+var _bow_equipped := false
 var _can_build := false
 var _can_climb := false     # swimming next to the raft — CLIMB button available
 
@@ -274,6 +276,10 @@ func _release_touch_button(index: int, activate: bool) -> void:
 	_button_touches.erase(index)
 	button.set_pressed_no_signal(false)
 	button.button_up.emit()
+	if not activate and button == _btn_use and _bow_equipped:
+		var p := _get_player()
+		if p != null and p.get_node_or_null("SurvivalEquipment") != null:
+			p.get_node("SurvivalEquipment").call("cancel_draw")
 	if activate and button.visible:
 		button.pressed.emit()
 	queue_redraw()
@@ -292,6 +298,11 @@ func reset_input() -> void:
 	_stick = Vector2.ZERO
 	_knob = _dock
 	_release_all_actions()
+	var p := _get_player()
+	if p != null:
+		var equipment := p.get_node_or_null("SurvivalEquipment")
+		if equipment != null:
+			equipment.call("set_aiming", false)
 	queue_redraw()
 
 
@@ -396,6 +407,7 @@ func _build_buttons() -> void:
 	_btn_recall = _make_button("back")
 	_btn_run = _make_button("run")
 	_btn_use = _make_button("hand")
+	_btn_aim = _make_button("aim")
 	_btn_dive = _make_button("down")
 	_btn_edit = _make_button("pencil")
 	_btn_climb = _make_button("climb")
@@ -406,14 +418,14 @@ func _build_buttons() -> void:
 	_btn_remove = _make_button("trash")
 	_btn_help = _make_button("help")
 
-	_all_buttons = [_btn_jump, _btn_rope, _btn_recall, _btn_run, _btn_use, _btn_dive,
+	_all_buttons = [_btn_jump, _btn_rope, _btn_recall, _btn_run, _btn_use, _btn_aim, _btn_dive,
 			_btn_climb, _btn_edit, _btn_build, _btn_place, _btn_rotate, _btn_next,
 			_btn_remove, _btn_help]
 
 	# Hold-style buttons: press the action on touch-down, release on touch-up.
 	_btn_jump.button_down.connect(_press_action.bind("jump"))
 	_btn_jump.button_up.connect(_release_action.bind("jump"))
-	_btn_rope.button_down.connect(_press_action.bind("rope_throw"))
+	_btn_rope.button_down.connect(_on_cast_down)
 	_btn_rope.button_up.connect(_release_action.bind("rope_throw"))
 	_btn_run.button_down.connect(_press_action.bind("sprint"))
 	_btn_run.button_up.connect(_release_action.bind("sprint"))
@@ -434,8 +446,9 @@ func _build_buttons() -> void:
 
 	# Tap-style: USE is momentary (like pressing E), EDIT picks the aimed piece,
 	# CLIMB boards the raft directly (same as E while swimming next to it).
-	_btn_use.button_down.connect(_press_action.bind("interact"))
+	_btn_use.button_down.connect(_on_use_down)
 	_btn_use.button_up.connect(_release_action.bind("interact"))
+	_btn_aim.pressed.connect(_on_aim_pressed)
 	_btn_edit.pressed.connect(_on_edit_pressed)
 	_btn_climb.pressed.connect(_on_climb_pressed)
 	_btn_help.pressed.connect(_toggle_help)
@@ -450,6 +463,19 @@ func _build_buttons() -> void:
 
 func _queue_redraw() -> void:
 	queue_redraw()
+
+func _on_cast_down() -> void:
+	var p := _get_player()
+	if visible and not _input_blocked() and p != null and bool(p.call("equip_rope_gun")):
+		_press_action("rope_throw")
+
+func _on_use_down() -> void:
+	_press_action("interact")
+	var p := _get_player()
+	if p != null and p.get("active_item") == "Bow" and visible and not _input_blocked():
+		# Start the dedicated mobile draw at touch-down, even between physics
+		# ticks. begin_draw ignores the subsequent keyboard/action poll.
+		p.get_node("SurvivalEquipment").call("begin_draw")
 
 
 func _press_action(action: StringName) -> void:
@@ -500,6 +526,14 @@ func _make_button(kind: String) -> Button:
 # ============================================================
 # MODE SYNC — which buttons are visible, and what BUILD does per mode.
 # ============================================================
+func _on_aim_pressed() -> void:
+	var p := _get_player()
+	if p != null and not _input_blocked():
+		var equipment := p.get_node_or_null("SurvivalEquipment")
+		if equipment != null:
+			equipment.call("toggle_aim")
+	queue_redraw()
+
 func _sync_mode() -> void:
 	var p := _get_player()
 	var editing: bool = p != null and p.get("_editing") != null
@@ -526,6 +560,7 @@ func _sync_mode() -> void:
 	var use_caption := str(p.call("interaction_caption")) if p != null and p.has_method("interaction_caption") else "USE"
 	var moving := _move_id != -1
 	var rope_equipped: bool = p != null and p.get("active_item") == "Rope"
+	var bow_equipped: bool = p != null and p.get("active_item") == "Bow"
 	var can_build: bool = mode != "normal"
 	if p != null:
 		var raft := get_tree().get_first_node_in_group("raft") as Node3D
@@ -533,11 +568,12 @@ func _sync_mode() -> void:
 		can_build = can_build or (can_edit and float(p.get("aim_distance")) <= 5.0)
 	if mode == _mode and rope_busy == _rope_busy and swimming == _swimming \
 			and can_edit == _can_edit and can_interact == _can_interact and can_climb == _can_climb \
-			and moving == _moving and rope_equipped == _rope_equipped and can_build == _can_build and use_caption == _use_caption:
+			and moving == _moving and rope_equipped == _rope_equipped and bow_equipped == _bow_equipped and can_build == _can_build and use_caption == _use_caption:
 		return
 	_use_caption = use_caption
 	_moving = moving
 	_rope_equipped = rope_equipped
+	_bow_equipped = bow_equipped
 	_can_build = can_build
 	_mode = mode
 	_rope_busy = rope_busy
@@ -552,11 +588,12 @@ func _sync_mode() -> void:
 	# The HAND button only appears when the center crosshair is actually over
 	# an interactable (debris / door / usable piece) — same logic as the E key.
 	_btn_use.visible = normal and can_interact
+	_btn_aim.visible = normal and bow_equipped
 	_btn_dive.visible = normal and swimming
 	# CLIMB appears ONLY while swimming right next to the raft/foundation
 	# (same test as the E key) — never on land, never in open water.
 	_btn_climb.visible = normal and can_climb
-	_btn_rope.visible = normal and (rope_equipped or rope_busy)
+	_btn_rope.visible = normal  # The launcher is always-owned equipment.
 	_btn_recall.visible = normal and rope_busy
 	_btn_edit.visible = normal and can_edit
 	_btn_place.visible = mode != "normal"
@@ -618,6 +655,8 @@ func _layout() -> void:
 	_btn_run.size = Vector2(small, small)
 	_btn_use.position = Vector2(s_x, bottom - small - m - small)
 	_btn_use.size = Vector2(small, small)
+	_btn_aim.position = Vector2(s_x - small - m, _btn_use.position.y)
+	_btn_aim.size = Vector2(small, small)
 	_btn_dive.position = Vector2(s_x, bottom - small - m - small - m - small)
 	_btn_dive.size = Vector2(small, small)
 	_btn_climb.position = Vector2(s_x, bottom - small - m - small - m - small - m - small)
@@ -652,6 +691,8 @@ func _layout() -> void:
 # ============================================================
 func _button_icon_kind(b: Button) -> String:
 	var kind: String = str(b.get_meta("icon_kind", "?"))
+	if b == _btn_use and _bow_equipped:
+		return "shoot"
 	if b == _btn_build:
 		# The build toggle morphs with its mode: hammer = enter, X = exit/cancel.
 		kind = "x" if (_mode == "build" or _mode == "edit") else "hammer"
@@ -679,6 +720,8 @@ func _draw_action_button(b: Button) -> void:
 	var r := minf(rect.size.x, rect.size.y) * 0.5
 	var pressed := b.is_pressed() or b.has_focus()
 	var ring: Color = UI_SURFACE.BRASS
+	if b == _btn_rope and _rope_equipped:
+		ring = Color(0.53, 0.85, 0.76, 0.95)
 	if _button_icon_kind(b) == "hammer" and _mode == "normal":
 		ring = Color(0.55, 0.9, 0.5, 0.5)
 	elif _button_icon_kind(b) == "x":
@@ -698,6 +741,10 @@ func _draw_action_button(b: Button) -> void:
 
 
 func _button_caption(b: Button) -> String:
+	if b == _btn_aim:
+		var p := _get_player()
+		var equipment := p.get_node_or_null("SurvivalEquipment") if p != null else null
+		return "UN-AIM" if equipment != null and equipment.get("aiming") else "AIM"
 	if b == _btn_use:
 		var player := _get_player()
 		if player != null and player.has_method("interaction_caption"):
@@ -710,6 +757,12 @@ func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
 	var w := clampf(r * 0.26, 3.0, 7.0)
 	var kind := _button_icon_kind(b)
 	match kind:
+		"aim":
+			draw_arc(center, r * 0.65, 0.0, TAU, 24, col, maxf(w * 0.4, 1.0), true)
+			for direction in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT]:
+				draw_line(center + direction * r * 0.45, center + direction * r, col, maxf(w * 0.4, 1.0), true)
+		"shoot":
+			Icons.item_icon(self, "Bow", center, r * 1.35)
 		"jump":
 			Icons.arrow_up(self, center, r, w, col)
 		"down":
@@ -736,7 +789,7 @@ func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
 				wpts.append(Vector2(center.x - r * 0.6 + wt * r * 1.2, wy + sin(wt * PI) * r * 0.18))
 			draw_polyline(wpts, col, maxf(w * 0.7, 1.5), true)
 		"hook":
-			Icons.hook(self, center, r, w * 0.9, col)
+			Icons.item_icon(self, "Rope Gun", center, r * 1.65)
 		"hammer":
 			Icons.hammer(self, center, r, w, col)
 		"pencil":
@@ -802,12 +855,13 @@ func _dock_center() -> Vector2:
 # HELP PANEL — the "?" button opens an in-game controls guide
 # ============================================================
 const HELP_CONTENT := "[center][b]GAME CONTROLS[/b][/center]\n\n" \
+	+ "[b]BIRD HUNTING[/b]\nCraft a Bow and Arrows in BAG → CRAFT. Move the Bow to a hotbar slot and select it; Arrows can stay in the bag. Tap AIM to zoom, drag the view to line up a bird, then hold SHOOT to draw and release to fire. Lead moving birds and aim slightly above distant ones. Tap UN-AIM to return to normal view. Collect the bird where it lands and cook Raw Bird on a bonfire.\n\n" \
 	+ "[b]MOVE[/b]\nJoystick (bottom-left) = walk. Big button = jump / swim up. RUN = sprint (hold).\n\n" \
 	+ "[b]USE / HAND[/b] (tap or hold)\nCollect debris and open doors. Farming: aim at an empty planter with a Seed selected, then tap to plant. Tap a ripe fruit to pick it. Hold on a potato to dig it, hold on a tree trunk to chop it, hold on a stump to remove it.\n\n" \
 	+ "[b]BUILD[/b]\nHammer button (left) = enter/exit build mode. NEXT = choose piece (Wall, Roof, ... PlanterPot, PlanterBox, TreePot). Big PLACE button = put the green piece down. ROT = turn it.\n\n" \
 	+ "[b]EDIT / REPAIR[/b]\nWhile aiming at your own piece, tap the pencil to lift it, then PLACE to set it down or the trash button to remove it (materials refunded).\n\n" \
 	+ "[b]FARMING QUICK START[/b]\n1) Build mode → NEXT to a planter → PLACE on your deck. 2) Exit build mode. 3) Tap a Seed in the hotbar (Potato / Coconut / Banana). 4) Aim at the empty planter and tap USE to plant. 5) Watch it grow SEED → SPROUT → GROWING → MATURE. 6) Tap USE on a ripe fruit (only that fruit is picked). Hold USE to dig potatoes or chop a tree — the tree falls away from you, drops Wood + fruit, and leaves a stump. Hold USE on the stump to clear it and replant.\n\n" \
-	+ "[b]ROPE[/b]\nROPE button = hold to charge, release to throw the hook. BACK button = pull it back.\n\n" \
+	+ "[b]ROPE GUN[/b]\nYour gun is permanent equipment: it cannot be dropped, spent or lost. CAST always equips it; hold to charge and release to launch the hook. RECALL brings the hook back. Rope stacks in your bag are crafting materials.\n\n" \
 	+ "[b]BAG[/b]\nTap the BAG button to open your 30-slot inventory; drag items to move/swap/merge them. Tap a hotbar slot to select that item.\n\n" \
 	+ "[b]KEYBOARD (PC)[/b]\nWASD move · Space jump · Ctrl dive · E use · C craft · M map · B build · Tab next piece · P place · R/Y rotate · Delete remove · Q rope · F3 build overlay · F5 quick-save"
 

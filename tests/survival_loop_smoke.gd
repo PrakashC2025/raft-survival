@@ -15,6 +15,13 @@ func check(condition: bool, description: String) -> void:
 func frames(count: int) -> void:
 	for i in range(count):
 		await physics_frame
+func bow_touch(controls: Control, button: Button, pressed: bool, canceled: bool = false) -> void:
+	var event := InputEventScreenTouch.new()
+	event.index = 12
+	event.position = button.get_global_rect().get_center()
+	event.pressed = pressed
+	event.canceled = canceled
+	controls.call("_input", event)
 func _run() -> void:
 	if not OS.get_user_data_dir().contains("MobileTests"):
 		quit(2)
@@ -236,7 +243,56 @@ func _run() -> void:
 	check(dropped, "A hunted bird falls and creates collectible raw bird food")
 	inv.call("add", "Bow", 1)
 	inv.call("add", "Arrow", 3)
+	for slot_index in range(6, 30):
+		if inv.call("slot_item", slot_index) == "Bow":
+			inv.call("drop_into", slot_index, 0)
+			break
+	player.call("select_hotbar_slot", 0)
 	var equipment := player.get_node("SurvivalEquipment")
+	player.set("active_item", "Bow")
+	equipment.set_physics_process(false)
+	var controls := player.get_node("CanvasLayer/MobileControls") as Control
+	controls.set("force_show", true)
+	controls.call("_update_visibility")
+	controls.call("_sync_mode")
+	var aim_button := controls.get("_btn_aim") as Button
+	var shoot_button := controls.get("_btn_use") as Button
+	check(aim_button.visible and shoot_button.visible and controls.call("_button_caption", shoot_button) == "SHOOT", "Equipping Bow exposes distinct AIM and SHOOT controls")
+	var bow_camera := player.get_node("CamPivot/SpringArm3D/Camera3D") as Camera3D
+	var normal_fov := bow_camera.fov
+	bow_touch(controls, aim_button, true)
+	bow_touch(controls, aim_button, false, true)
+	check(not equipment.get("aiming"), "Canceled AIM touch does not toggle zoom")
+	bow_touch(controls, aim_button, true)
+	bow_touch(controls, aim_button, false)
+	check(equipment.get("aiming") and bow_camera.fov < normal_fov, "Tapping AIM zooms the actual camera")
+	var bow_yaw := player.rotation.y
+	player.call("add_look_input", Vector2(20, 0), 0.003)
+	check(is_equal_approx(player.rotation.y - bow_yaw, -20.0 * 0.003 * 0.55), "Aiming reduces look sensitivity for precise hunting")
+	bow_touch(controls, shoot_button, true)
+	player.call("_handle_pickup")
+	equipment.call("_physics_process", 0.7)
+	check(equipment.get("drawing"), "Owned SHOOT touch starts a bow draw through the player")
+	bow_touch(controls, shoot_button, false, true)
+	equipment.call("_physics_process", 0.01)
+	check(not equipment.get("drawing") and int(inv.call("total", "Arrow")) == 3, "Canceling a held SHOOT touch does not fire or consume ammo")
+	controls.call("reset_input")
+	check(not equipment.get("aiming") and is_equal_approx(bow_camera.fov, normal_fov), "Input interruption restores normal camera zoom")
+	inv.call("remove", "Arrow", 3)
+	controls.call("_sync_mode")
+	equipment.call("begin_draw")
+	check(shoot_button.visible and not equipment.get("drawing"), "SHOOT stays discoverable with no ammo and refuses a free shot")
+	inv.call("add", "Arrow", 3)
+	equipment.call("toggle_aim")
+	hud.set("_bag_open", true)
+	equipment.call("_physics_process", 0.01)
+	check(not equipment.get("aiming") and is_equal_approx(bow_camera.fov, normal_fov), "Opening the bag cancels aiming and restores FOV")
+	hud.set("_bag_open", false)
+	equipment.call("toggle_aim")
+	player.set("active_item", "Rope")
+	equipment.call("_physics_process", 0.01)
+	controls.call("_sync_mode")
+	check(not equipment.get("aiming") and not aim_button.visible, "Switching equipment hides AIM and clears zoom")
 	player.set("active_item", "Bow")
 	Input.action_press("interact")
 	equipment.call("begin_draw")
@@ -254,6 +310,17 @@ func _run() -> void:
 	Input.action_release("interact")
 	equipment.call("_physics_process", 0.01)
 	check(int(inv.call("total", "Arrow")) == 2 and equipment.get("_arrows").size() == 1, "Releasing a drawn bow spends one arrow and launches a projectile")
+	# Verify a real projectile ray hits a real gull Area3D, not just hit_bird().
+	var flying: Dictionary = equipment.get("_arrows")[0]
+	(flying["node"] as Node3D).global_position = Vector3(1200, 8, 1200)
+	flying["velocity"] = Vector3(0, 0, -38)
+	birds.set_physics_process(false)
+	(birds.get("_birds")[1]["root"] as Node3D).global_position = Vector3(1200, 8, 1199)
+	await frames(2)
+	equipment.call("_physics_process", 0.05)
+	check(birds.get("_birds")[1]["state"] == "falling" and equipment.get("_arrows").is_empty(), "A launched arrow hits a gull collider and starts its hunted fall")
+	birds.set_physics_process(true)
+	equipment.set_physics_process(true)
 	player.set("active_item", "Fish")
 	player.call("_update_hand_item")
 	check(player.get_node("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist/HandItem/HumanHand") != null, "Held fish has the human hand GLB")

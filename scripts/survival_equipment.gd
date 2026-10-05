@@ -3,6 +3,8 @@ extends Node
 var player: CharacterBody3D
 var draw_time := 0.0
 var drawing := false
+var aiming := false
+var _normal_fov := 75.0
 var cooldown := 0.0
 var _arrows: Array[Dictionary] = []
 var _arrow_mesh: CylinderMesh
@@ -32,16 +34,46 @@ func begin_draw() -> void:
 	drawing = true
 	draw_time = 0.0
 
+func cancel_draw() -> void:
+	drawing = false
+	draw_time = 0.0
+
 func get_draw_fraction() -> float:
 	return clampf(draw_time / 1.1, 0.0, 1.0) if drawing else 0.0
+
+func toggle_aim() -> void:
+	var hud := player.get_node_or_null("CanvasLayer/SurvivalHUD")
+	if player.get("active_item") != "Bow" or player.get("build_mode") or get_tree().paused \
+			or GameSettings.is_open or (hud != null and bool(hud.call("gameplay_input_blocked"))):
+		return
+	set_aiming(not aiming)
+
+func set_aiming(enabled: bool) -> void:
+	if aiming == enabled:
+		return
+	var camera := player.get_node("CamPivot/SpringArm3D/Camera3D") as Camera3D
+	if enabled:
+		_normal_fov = camera.fov
+		camera.fov = minf(_normal_fov, 48.0)
+	else:
+		camera.fov = _normal_fov
+	aiming = enabled
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
+		set_aiming(false)
+		drawing = false
 
 func _physics_process(delta: float) -> void:
 	if get_tree().paused or GameSettings.is_open:
 		drawing = false
+		set_aiming(false)
 		return
 	cooldown = maxf(0.0, cooldown - delta)
 	var hud := player.get_node_or_null("CanvasLayer/SurvivalHUD")
 	var blocked := get_tree().paused or (hud != null and bool(hud.call("gameplay_input_blocked")))
+	if blocked or player.get("active_item") != "Bow" or player.get("build_mode"):
+		set_aiming(false)
 	if drawing:
 		if player.get("active_item") != "Bow" or blocked or player.get("build_mode"):
 			drawing = false

@@ -1,6 +1,6 @@
 # Ocean Survival — game, code, and maintenance guide
 
-Last updated: **2026-10-03**. This is the current project handover for the owner and future coding AIs. Read it before changing gameplay. Paths below are relative to this project; `res://` means the Godot project directory and `user://` means Godot's platform-specific saved-data directory. Live source code remains authoritative if a later change makes this guide outdated. Update this guide when changing behavior, constants, architecture, or saved data.
+Last updated: **2026-10-05**. This is the current project handover for the owner and future coding AIs. Read it before changing gameplay. Paths below are relative to this project; `res://` means the Godot project directory and `user://` means Godot's platform-specific saved-data directory. Live source code remains authoritative if a later change makes this guide outdated. Update this guide when changing behavior, constants, architecture, or saved data.
 
 ## Owner's requirements and current delivery
 
@@ -361,6 +361,7 @@ Main keys:
 | `testing_resources_granted` | Once-per-save temporary resource grant completed |
 | `collected_island_pickups` | Stable IDs already collected |
 | `active_slot` | Selected hotbar slot |
+| `rope_gun_selected` | Optional permanent-launcher equipped state; ownership is unconditional |
 | `health`, `hunger`, `thirst` | Survival values |
 | `raft_upgrade_tier` | 0, 1 sail, 2 motor |
 | `life_vest_equipped` | Persistent protection/equipment flag |
@@ -391,11 +392,11 @@ The default suite runs these scripts:
 
 | Test | Current checks | Coverage |
 | --- | --- | --- |
-| `tests/mobile_smoke.gd` | 92 | Scene/menu flow, touch routing, held actions, UI, inventory, construction, climbing, save/pause/settings |
+| `tests/mobile_smoke.gd` | 93 | Scene/menu flow, touch routing, held actions, UI, inventory, construction, climbing, save/pause/settings |
 | `tests/foundation_smoke.gd` | 17 | Keyboard/mobile foundation placement, transforms, costs, optional socket metadata, saved structures |
 | `tests/testing_resources_smoke.gd` | 11 | 2,000 grants, stack handling, spend, New Game, once-per-save persistence |
 | `tests/rope_smoke.gd` | 20 | Launcher/muzzle, touch charging, quick/long cast, arc/range, rope geometry, catch release, return, camera/hotbar/build interactions |
-| `tests/environment_smoke.gd` | 40 | Environmental sound, imported foliage/textures, shared trunk collision, mobile grass budgets/recovery, saved planter coconut restoration, Auto cloud recovery, mountain/birds/footprints/sand, water/AA profiles, audio cleanup and menu preloading |
+| `tests/environment_smoke.gd` | 41 | Environmental sound, imported foliage/textures, shared trunk collision, mobile grass budgets/recovery, saved planter coconut restoration, Auto cloud recovery, mountain/birds/footprints/sand, water/AA profiles, audio cleanup and menu preloading |
 | `tests/island_marker_smoke.gd` | 23 | Front/offscreen/behind targets, camera-plane/extreme projection, edge styles, arrival fade, tiny viewport and modal hide/restore; can also run natively to check real polygon drawing |
 | `tests/menu_loading_smoke.gd` | 21 | Simulated 120-second active loads, cancellation for all three save choices, repeated presses, untouched saves/inventory, late completion and retry |
 
@@ -507,7 +508,7 @@ scripts/survival_equipment.gd owns bow cancellation, arrow physics and fishing v
 
 ### Contextual touch interface (2026-10-03)
 
-The joystick is hidden at rest and appears while the player touches the bottom-left movement zone; that zone remains fixed so other touches still look around. RUN appears during movement; DIVE/CLIMB require swimming and a nearby ledge respectively. CAST requires equipped Rope or an active hook; RECALL requires an active hook. USE appears for nearby usable objects or usable equipped food, water, fishing rod or bow, with EAT/DRINK/FISH/DRAW/PLANT/HARVEST captions. Planter/plant/door actions require actual interaction reach. BUILD appears near the raft, nearby editable support, or while building/editing; placement/rotation/next/removal appear only in their modes. Jump, bag, pause and help remain discoverable essentials. Held actions release when context vanishes; all gameplay art hides during modal panels and redraws when the panel closes.
+The joystick is hidden at rest and appears while the player touches the bottom-left movement zone; that zone remains fixed so other touches still look around. RUN appears during movement; DIVE/CLIMB require swimming and a nearby ledge respectively. CAST is available in normal play and equips the permanent gun; RECALL requires an active hook. USE appears for nearby usable objects or usable equipped food, water, fishing rod or bow, with EAT/DRINK/FISH/DRAW/PLANT/HARVEST captions. Planter/plant/door actions require actual interaction reach. BUILD appears near the raft, nearby editable support, or while building/editing; placement/rotation/next/removal appear only in their modes. Jump, bag, pause and help remain discoverable essentials. Held actions release when context vanishes; all gameplay art hides during modal panels and redraws when the panel closes.
 
 MAP and CRAFT are tabs inside the bag, above the inventory grid, instead of persistent gameplay buttons. Desktop M/C shortcuts still work. The bag has a larger header to keep those tabs separate from drag slots, close and Quick Save. Existing finger ownership and inventory drag behavior remain intact.
 
@@ -519,3 +520,42 @@ New games begin with four Carrot Seed and four Tomato Seed in the bag. Existing 
 A subsequent fresh mobile recheck reproduced an intermittent threaded scene-loading stall after the eight-suite pass. The menu now prepares and retains its 30 gameplay script dependencies on the main thread, one per frame, before starting the background scene request. The menu renders first and can accept cancellation while preparation continues; the status poll waits for preparation to finish instead of treating an unstarted request as a missing resource. Progress reserves the first 15 percent for preparation. New Game/Continue still only modify player data after successful resource loading. This avoids overlapping script/scene preload work on loader threads; the engine issue is a probable explanation rather than a traced engine backtrace: https://github.com/godotengine/godot/issues/120827. After this workaround, the 92 mobile and 21 loading checks were rerun successfully in fresh isolated storage. Individual script preparation can still cause a short frame delay on a slow device. Real-phone loading/performance remains unverified.
 
 The final desktop Mobile/D3D12 menu-only preview also completed the actual background scene load with all 30 script dependencies prepared, with no engine/script errors (build/menu-prepared-render.log). The final survival preview produced all eight captures without engine/script errors; controls returned after modal panels closed. These checks used isolated storage and do not verify a phone or exported APK.
+
+
+### Reported pause error, warnings and startup hitches (2026-10-03)
+
+Fixed SurvivalHUD's Pause → Quit null viewport error by consuming the pointer before changing scenes. Death keyboard/pointer exits follow the same order, and a guarded input helper tolerates a HUD already detached from its viewport. The mobile regression now clicks the real pause-menu Quit button through viewport routing instead of invoking Quit directly; it verifies the main menu and saved progress.
+
+IslandGrass uses explicit floating-point ratios with floori for triangle budgets, removing the INTEGER_DIVISION warning without disabling it. Player's fishing_ocean local no longer shadows the ocean field. Palm import/visual preparation now yields between trees, with scene-owned temporary templates and teardown checks. Android grass generation yields after 16 terrain queries per island (desktop remains 64); density ceilings, shared shapes and quality switching stay intact. Pickups wait for the actual island setup controller, including the home island's sibling controller, so an early mountain collider cannot cause seeds to miss the terrain. The environment regression checks both home crop caches.
+
+Current targeted verification passed 197 checks: 93 mobile, 41 environment, 42 survival-loop and 21 menu-loading. Godot's isolated editor scan completed without reported errors. Existing saves and the once-per-save testing materials remain unchanged. No APK was exported and phone FPS is unverified. For the owner's Xiaomi 11 Lite-class phone, start Battery Saver at 30 FPS, then try Balanced only after the installed APK is stable. Re-export source changes manually; an older APK will retain older code.
+
+The 41 environment checks also passed with INTEGER_DIVISION, SHADOWED_VARIABLE and SHADOWED_VARIABLE_BASE_CLASS promoted to errors in the isolated test project's override.cfg; the original test override was restored afterward. The owner project's warnings were not suppressed. Strict-check logs are build/source-strict-warnings.log and -console.log. One shutdown-only ObjectDB leak warning remains; there were no script/engine ERROR lines in these checks.
+
+### Bag and equipment artwork (2026-10-05)
+
+The bag, hotbar, drag ghost, resource pills and crafting cards now share original textured item artwork through `scripts/item_art.gd` and `textures/ui/survival_items.png`. The sheet contains 29 resource/food/equipment/seed icons and a canvas backpack. Long equipment uses tight UV silhouettes to avoid sampling neighboring objects. Unknown items retain the existing vector fallback. This changes inventory images only; held 3D equipment is unchanged.
+
+The bag has larger inset slots, a muted canvas-colored panel with seams, readable item captions and upper-right quantity badges. Selection, drag/swap, Quick Save, map/craft tabs and authoritative slots keep their existing routing and saved identifiers. The original generated-art provenance and generation prompt are recorded in `textures/ui/ARTWORK.md`; the atlas is a referenced import dependency for manual Android exports. No export preset changes are needed. `tests/inventory_art_preview.gd` renders the actual HUD in isolated MobileTests storage without loading the world, producing `build/inventory-art-{bag,craft,hotbar}.png`.
+
+### Bow hunting controls (2026-10-05)
+
+Equipping Bow now exposes separate AIM and SHOOT touch buttons, including when out of arrows. Tap AIM to toggle a 48-degree camera zoom and 55% look sensitivity, then drag the view to aim. Hold SHOOT to draw (1.1 seconds to full power), release to fire one arrow; arrows can remain in bag slots. The center reticle adds precision ticks, draw progress and an ammunition count/instruction. SHOOT touch-down starts drawing immediately and keeps the existing owned `interact` action held. Canceled touches or dragging off SHOOT cancel the draw without firing; normal releases fire. Empty ammo shows CRAFT ARROWS FIRST.
+
+Aiming clears and restores the prior FOV on input reset, bag/map/craft/help/settings/pause, focus loss, equipment change or build mode. First/third-person mode remains selected. The bow's SHOOT action takes priority over nearby sand, planter, door, pickup and double-edit interactions; CLIMB retains its dedicated control. Hunting help explains crafting, selecting the Bow, aiming, leading birds, shooting and collecting/cooking their drops. Aim state is transient and adds no save fields. Existing desktop E hold/release remains supported.
+
+Final targeted source verification: 93 mobile checks and 53 survival-loop checks passed (146 total). Added hunting checks exercise AIM touch/cancel, real camera FOV/look sensitivity, owned SHOOT draw/cancel, no-ammo discoverability, modal/equipment restoration and an actual flying-arrow ray hitting a gull Area3D. Desktop Mobile renderer previews verify presentation only; no phone test or APK export was performed.
+
+### Rope launcher identification and ocean-themed bag tabs (2026-10-05)
+
+Rope in hotbar slots 0–5 now displays an original realistic rope-launcher image and the bag's equipped row caption reads Rope Gun. The CAST button uses the same image, making the held launcher recognizable. Bag storage slots, crafting costs and resource pills still display coiled rope as the material. `scripts/item_art.gd` selects this presentation without renaming Rope in inventory or saves, adding a recipe or changing quantities. Launcher geometry, launch muzzle, casting and first/third-person behavior stay unchanged.
+
+MAP and CRAFT inside the bag now use weathered teal/wood plates, brass rims/rivets and wave etching. MAP has a folded chart with island contours, dotted course and compass, plus ISLAND CHART; CRAFT has crossed salvage tools with rope-wrapped wood and steel, plus SURVIVAL GEAR. Their original hit rectangles and touch routing are retained. Original art provenance and the exact ImageGen launcher prompt are in `textures/ui/ARTWORK.md`. The referenced PNG imports with the project for the owner's manual export.
+Verification for the rope-gun image and nautical tabs: 93 mobile checks and 20 rope checks passed (113 total); the actual HUD bag/crafting/hotbar previews rendered with no script/engine errors. No APK was exported and phone appearance/performance was not tested.
+
+### Permanent rope gun (2026-10-05)
+
+The rope gun is now always-owned player equipment outside the 30 draggable inventory slots. CAST is always visible in normal play and equips the launcher before charging; desktop Q also equips it. Selecting another hotbar item still equips that item, while CAST returns to the gun. Rope materials can be moved or spent without removing the gun, and equipping it never occupies/displaces a slot, including with a full bag. Inventory Rope pictures remain coils; the bag footer shows a fixed Rope Gun / Permanent badge outside the drag grid. This supersedes the earlier hotbar Rope Gun picture mapping.
+
+Player owns `rope_gun_selected`, and inventory changes preserve that equipment selection. CAST cancels an active bow draw/aim before switching. First/third-person launcher visuals and muzzle origins are retained. Saves add optional `rope_gun_selected` for the equipped state; ownership is unconditional for both New Game and Continue. Missing fields on legacy saves preserve the previous hotbar selection while providing the gun through CAST. No existing slot/material/recipe identifiers or quantities change, and testing supplies remain 2,000 once per save.
+Permanent-equipment verification passed 173 checks: 27 rope, 93 mobile and 53 survival-loop checks, using isolated test storage. Coverage includes spent rope, inventory dragging, full-bag preservation, new/legacy save restoration and bow/touch switching. The actual bag renderer preview showed the fixed permanent badge without script/engine errors. No APK was exported or phone tested.

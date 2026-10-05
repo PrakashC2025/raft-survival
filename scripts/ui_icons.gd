@@ -1,4 +1,5 @@
 class_name UiIcons
+const ITEM_ART := preload("res://scripts/item_art.gd")
 ## Original vector icon library for the mobile UI. Every glyph is drawn from
 ## primitives (no external art): action buttons, build pieces, and survival
 ## resources. All drawing targets a CanvasItem (`c` = self).
@@ -215,6 +216,8 @@ static func item_color(item: String) -> Color:
 
 
 static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) -> void:
+	if ITEM_ART.draw(c, item, center, r):
+		return
 	if item.ends_with(" Seed"):
 		var packet := Rect2(center - Vector2(r * 0.48, r * 0.64), Vector2(r * 0.96, r * 1.28))
 		c.draw_rect(packet, Color(0.77, 0.70, 0.53))
@@ -353,6 +356,8 @@ static func status_icon(c: CanvasItem, kind: String, center: Vector2, r: float, 
 
 
 static func backpack(c: CanvasItem, center: Vector2, r: float, col: Color) -> void:
+	if ITEM_ART.draw(c, "Backpack", center, r):
+		return
 	c.draw_rect(Rect2(center.x - r * 0.55, center.y - r * 0.38, r * 1.1, r * 0.85), col)
 	# flap
 	c.draw_rect(Rect2(center.x - r * 0.55, center.y - r * 0.52, r * 1.1, r * 0.2), col)
@@ -361,3 +366,43 @@ static func backpack(c: CanvasItem, center: Vector2, r: float, col: Color) -> vo
 	c.draw_rect(Rect2(center.x + r * 0.14, center.y - r * 0.3, r * 0.16, r * 0.62), Color(0.9, 0.85, 0.7))
 	# pocket
 	c.draw_rect(Rect2(center.x - r * 0.2, center.y - r * 0.1, r * 0.4, r * 0.36), Color(0.85, 0.7, 0.45))
+
+
+static func sea_chart(c: CanvasItem, center: Vector2, r: float) -> void:
+	var paper := Color(0.80, 0.72, 0.50)
+	var ink := Color(0.13, 0.28, 0.27)
+	var corners := PackedVector2Array([center + Vector2(-0.95, -0.60) * r,
+		center + Vector2(-0.31, -0.78) * r, center + Vector2(0.33, -0.57) * r,
+		center + Vector2(0.94, -0.74) * r, center + Vector2(0.94, 0.56) * r,
+		center + Vector2(0.33, 0.76) * r, center + Vector2(-0.31, 0.56) * r,
+		center + Vector2(-0.95, 0.74) * r])
+	c.draw_colored_polygon(corners, paper)
+	c.draw_colored_polygon(PackedVector2Array([corners[1], corners[2], corners[5], corners[6]]), paper.darkened(0.15))
+	for fold_x in [-0.31, 0.33]:
+		_line(c, center + Vector2(fold_x, -0.55) * r, center + Vector2(fold_x, 0.54) * r, 1.0, Color(0.95, 0.87, 0.66, 0.65))
+	# Island contours, dotted course and a compass rose identify navigation.
+	c.draw_colored_polygon(PackedVector2Array([center + Vector2(-0.79, -0.28) * r, center + Vector2(-0.55, -0.40) * r,
+		center + Vector2(-0.37, -0.18) * r, center + Vector2(-0.57, 0.05) * r]), ink)
+	for dot_index in range(6):
+		var t := float(dot_index) / 5.0
+		_circle(c, center + Vector2(lerpf(-0.56, 0.48, t), 0.29 - sin(t * PI) * 0.26) * r, maxf(0.7, r * 0.035), ink)
+	var rose := center + Vector2(0.63, -0.17) * r
+	_circle(c, rose, r * 0.27, ink, false, 1.0)
+	c.draw_colored_polygon(PackedVector2Array([rose + Vector2(0, -0.43) * r, rose + Vector2(0.10, 0) * r,
+		rose + Vector2(0, 0.31) * r, rose - Vector2(0.10, 0) * r]), Color(0.51, 0.24, 0.11))
+
+
+static func salvage_tools(c: CanvasItem, center: Vector2, r: float) -> void:
+	# Crossed weathered hammer and open wrench, with rope binding on the grip.
+	var wood := Color(0.62, 0.40, 0.20)
+	var steel := Color(0.68, 0.76, 0.72)
+	_line(c, center + Vector2(-0.67, 0.67) * r, center + Vector2(0.56, -0.66) * r, r * 0.19, steel.darkened(0.3))
+	_line(c, center + Vector2(-0.67, 0.67) * r, center + Vector2(0.56, -0.66) * r, maxf(r * 0.08, 1.0), steel)
+	c.draw_arc(center + Vector2(0.62, -0.70) * r, r * 0.26, -0.30, PI * 1.48, 16, steel, maxf(r * 0.12, 1.2), true)
+	_line(c, center + Vector2(0.64, 0.72) * r, center + Vector2(-0.40, -0.48) * r, r * 0.22, wood.darkened(0.25))
+	_line(c, center + Vector2(0.60, 0.68) * r, center + Vector2(-0.44, -0.53) * r, maxf(r * 0.09, 1.1), wood.lightened(0.23))
+	_line(c, center + Vector2(-0.85, -0.23) * r, center + Vector2(-0.13, -0.83) * r, r * 0.31, steel.darkened(0.20))
+	_line(c, center + Vector2(-0.82, -0.26) * r, center + Vector2(-0.15, -0.82) * r, maxf(r * 0.07, 1.0), steel.lightened(0.22))
+	for wrap_index in range(3):
+		var offset := Vector2(0.22 + float(wrap_index) * 0.12, 0.27 + float(wrap_index) * 0.13) * r
+		_line(c, center + offset + Vector2(-0.09, 0.08) * r, center + offset + Vector2(0.09, -0.08) * r, maxf(r * 0.06, 1.0), Color(0.85, 0.75, 0.50))

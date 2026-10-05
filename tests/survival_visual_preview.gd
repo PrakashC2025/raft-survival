@@ -47,6 +47,13 @@ func _run() -> void:
 	player.set("active_item", "Fish")
 	player.call("_update_hand_item")
 	await capture("hand-fish")
+	inv.call("add", "Arrow", 12)
+	inv.call("add", "Bow", 1)
+	for slot_index in range(6, 30):
+		if inv.call("slot_item", slot_index) == "Bow":
+			inv.call("drop_into", slot_index, 0)
+			break
+	player.call("select_hotbar_slot", 0)
 	player.set("active_item", "Bow")
 	player.call("_update_hand_item")
 	player.get_node("SurvivalEquipment").set_physics_process(false)
@@ -54,6 +61,12 @@ func _run() -> void:
 	player.get_node("SurvivalEquipment").set("draw_time", 1.0)
 	player.call("_update_hand_sway", 0.016)
 	await capture("bow")
+	player.get_node("SurvivalEquipment").call("toggle_aim")
+	player.get_node("CanvasLayer/MobileControls").call("_sync_mode")
+	player.get_node("CanvasLayer/MobileControls").queue_redraw()
+	player.get_node("CanvasLayer/Crosshair").queue_redraw()
+	await capture("bow-aim")
+	player.get_node("SurvivalEquipment").call("set_aiming", false)
 	player.get_node("CanvasLayer").visible = false
 	var camera := Camera3D.new()
 	current_scene.add_child(camera)

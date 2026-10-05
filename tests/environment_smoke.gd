@@ -27,6 +27,11 @@ func _run() -> void:
 		await physics_frame
 		if current_scene.get_node_or_null("Island/IslandGrass/GrassField") != null:
 			break
+	for frame in range(360):
+		if current_scene.get_node_or_null("Island/CropSeedCache_Tomato") != null:
+			break
+		await physics_frame
+	check(current_scene.get_node_or_null("Island/CropSeedCache_Carrot") != null and current_scene.get_node_or_null("Island/CropSeedCache_Tomato") != null, "Home seed caches wait for terrain preparation rather than mountain collision")
 	var ambience := current_scene.get_node("OceanAmbience")
 	var player := get_first_node_in_group("player") as Node3D
 	var mountain := current_scene.get_node_or_null("Island/IslandMountain") as Node3D
