@@ -25,7 +25,10 @@ static func create(kind: int = 0) -> Node3D:
 		var mesh := MeshInstance3D.new()
 		mesh.name = "TexturedLeaves" if surface == 1 else "TexturedStem"
 		mesh.mesh = meshes[surface]
-		mesh.material_override = _leaf_material if surface == 1 else _bark_material
+		if surface == 1:
+			mesh.material_override = _leaf_material
+		else:
+			mesh.material_override = _bark_material
 		mesh.visibility_range_end = 120 if surface == 1 else 240
 		mesh.visibility_range_end_margin = 12
 		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if surface == 1 else GeometryInstance3D.SHADOW_CASTING_SETTING_ON

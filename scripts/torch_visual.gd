@@ -13,12 +13,12 @@ func _ready() -> void:
 	stick.material_override = SURFACES.make(SURFACES.Kind.WOOD,Color(0.26,0.15,0.06))
 	add_child(stick)
 	var head := MeshInstance3D.new()
-	var wrap := CylinderMesh.new()
-	wrap.top_radius = 0.041
-	wrap.bottom_radius = 0.032
-	wrap.height = 0.14
-	wrap.radial_segments = 12
-	head.mesh = wrap
+	var cloth_wrap := CylinderMesh.new()
+	cloth_wrap.top_radius = 0.041
+	cloth_wrap.bottom_radius = 0.032
+	cloth_wrap.height = 0.14
+	cloth_wrap.radial_segments = 12
+	head.mesh = cloth_wrap
 	head.position.y = 0.29
 	head.material_override = SURFACES.make(SURFACES.Kind.CLOTH,Color(0.31,0.24,0.13))
 	add_child(head)

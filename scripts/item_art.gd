@@ -59,8 +59,8 @@ static func draw(canvas: CanvasItem, item: String, center: Vector2, radius: floa
 		return draw(canvas,"Roast Bird" if item == "Cooked Meat" else "Raw Bird",center,radius)
 	if item == "Rope Gun":
 		var size := ROPE_LAUNCHER.get_size()
-		var extent := size * (radius * 2.0 / maxf(size.x, size.y))
-		canvas.draw_texture_rect(ROPE_LAUNCHER, Rect2(center - extent * 0.5, extent), false)
+		var launcher_extent := size * (radius * 2.0 / maxf(size.x, size.y))
+		canvas.draw_texture_rect(ROPE_LAUNCHER, Rect2(center - launcher_extent * 0.5, launcher_extent), false)
 		return true
 	if not REGIONS.has(item):
 		return false

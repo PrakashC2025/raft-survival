@@ -90,7 +90,7 @@ static func create() -> Node3D:
 			for point in [Vector2(x,y),Vector2(x+1,y),Vector2(x+1,y+1),Vector2(x,y),Vector2(x+1,y+1),Vector2(x,y+1)]:
 				var uv: Vector2 = Vector2(point)/Vector2(7,5)
 				surface.set_uv(uv)
-				surface.add_vertex(Vector3(-0.04-uv.x*0.68,0.6+uv.y*0.78+(sin(uv.x*17)*0.025 if y == 0 else 0),0))
+				surface.add_vertex(Vector3(-0.04-uv.x*0.68,0.6+uv.y*0.78+(sin(uv.x*17)*0.025 if y == 0 else 0.0),0))
 	surface.generate_normals()
 	cloth.mesh = surface.commit()
 	var canvas := ShaderMaterial.new()
