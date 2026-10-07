@@ -60,8 +60,8 @@ shader_parameter/moon_dir = Vector3(0, -0.5, -0.8)
 shader_parameter/sun_glint_color = Vector3(1, 0.95, 0.85)
 shader_parameter/moon_glint_color = Vector3(0.72, 0.82, 1)
 shader_parameter/sparkle_strength = 0.6
-shader_parameter/wave_height = 0.42
-shader_parameter/wave_speed = 0.45
+shader_parameter/wave_height = 0.68
+shader_parameter/wave_speed = 0.52
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_ybjjv"]
 material = SubResource("ShaderMaterial_0gc0m")
@@ -344,8 +344,8 @@ transform = Transform3D(0.126930, 0, 0, 0, 0.078697, 0, 0, 0, 0.126930, 0, -0.86
 [node name="IslandMountain" type="Node3D" parent="Island"]
 position = Vector3(0.0, 2.4, -4.4)
 script = ExtResource("34_mountain")
-base_radius = 3.8
-peak_height = 6.8
+base_radius = 5.2
+peak_height = 8.8
 radial_segments = 32
 height_rings = 11
 

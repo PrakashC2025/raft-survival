@@ -30,6 +30,11 @@ uniform float rock_full = 0.60;       // slope where rock is fully blended
 uniform float wetness_depth = 0.30;   // how far below the surface the "wet" darkening starts
 uniform float wetness_fade = 0.25;    // vertical fade range of the wet band (m above water)
 uniform float water_line = 0.0;       // current water Y, pushed every frame by island_setup.gd
+uniform sampler2D sand_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D sand_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D sand_arm : filter_linear_mipmap, repeat_enable;
+uniform sampler2D scan_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool use_scan_texture = false;
 
 varying vec3 v_world;
 varying vec3 v_wnormal;
@@ -52,18 +57,25 @@ float fbm(vec2 p) {
 
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	v_wnormal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	v_wnormal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 	v_paint = COLOR.rgb;
 }
 
 void fragment() {
-	vec2 p = v_world.xz * detail_scale;
-	float n1 = fbm(p);
-	float n2 = vnoise(p * 7.0); // fine grain (sand speckle / grass leafiness)
-	float n3 = vnoise(p * 19.0 + 3.7); // compressed sand grains and tiny soil flecks
+	// Photographic maps provide fine detail without unfiltered hash-grain shimmer.
+	float n1 = fbm(v_world.xz * 0.30);
+	float n2 = 0.5;
+	float n3 = 0.5;
 
 	// Painted albedo (vertex paint) with organic color variation and fine grain.
-	vec3 col = base_color * v_paint * paint_boost;
+	vec2 sand_uv = v_world.xz * 0.22;
+	vec3 sand_tex = texture(sand_albedo, sand_uv).rgb;
+	vec3 sand_properties = texture(sand_arm, sand_uv).rgb;
+	vec3 col = base_color * v_paint * paint_boost * sand_tex * 1.28;
+	if (use_scan_texture) {
+		// Keep the original scan grain while restoring pale dry coastal sand.
+		col = mix(texture(scan_albedo, UV).rgb * 1.65, sand_tex * 1.20, 0.62) * base_color;
+	}
 	col *= 1.0 + (n1 - 0.5) * 2.0 * detail_strength;
 	col *= 0.90 + 0.12 * n2 + 0.08 * n3;
 	col = clamp(col, vec3(0.0), vec3(1.0));
@@ -81,6 +93,10 @@ void fragment() {
 	float ripple = 0.97 + 0.03 * sin((v_world.x + v_world.z * 0.37) * 5.0 + n1 * 3.0);
 	col *= mix(0.94 + 0.12 * n3, ripple * (0.96 + 0.08 * n2),
 		(1.0 - rock_k) * (1.0 - clamp(v_paint.g - v_paint.r, 0.0, 1.0) * 0.65));
+	// The painted inland surface must give way to exposed sandy approaches.
+	float beach = (1.0 - smoothstep(0.75, 1.65, v_world.y - water_line))
+		* (1.0 - smoothstep(0.55, 0.85, slope));
+	col = mix(col, sand_tex * vec3(1.22,1.16,1.05), beach);
 
 	// Wet look near the water line: smooth darkening + glossier surface.
 	float band = 1.0 - smoothstep(0.0, wetness_fade, v_world.y - water_line);
@@ -94,5 +110,10 @@ void fragment() {
 	ALBEDO = col;
 	ROUGHNESS = mix(0.95, 0.45, wet);
 	// Subtle sparkle only on dry fine-grain peaks (sand shimmer).
-	SPECULAR = 0.5 + sand_glint * n2 * (1.0 - wet) * (1.0 - rock_k);
+	SPECULAR = 0.22 + wet * 0.12;
+	AO = mix(0.75, 1.0, sand_properties.r);
+	vec3 detail = texture(sand_normal, sand_uv).xyz * 2.0 - 1.0;
+	vec3 wn = normalize(v_wnormal);
+	vec3 mapped = normalize(wn + vec3(detail.x, 0.0, detail.y) * 0.28 * (1.0 - rock_k));
+	NORMAL = normalize((VIEW_MATRIX * vec4(mapped, 0.0)).xyz);
 }

@@ -21,6 +21,9 @@ func refresh() -> void:
 	var pieces: Array[Node3D] = []
 	for child in container.get_children():
 		if not child is Node3D or child.is_queued_for_deletion(): continue
+		# Torches have animated transparent flames and instance overrides;
+		# prefix matching WallTorch as a static Wall strips these materials.
+		if child.name.begins_with("WallTorch"): continue
 		if not (child.name.begins_with("Foundation") or child.name.begins_with("Wall") or child.name.begins_with("HalfWall") or child.name.begins_with("Roof")): continue
 		pieces.append(child)
 		signature = hash([signature,child.get_instance_id(),child.transform])

@@ -91,12 +91,14 @@ func interact_survival(player: Node) -> void:
 			Inventory.remove("Wood", 1)
 			fuel = minf(fuel + 90.0, 900.0)
 			burning = true
+			player.call("play_action","fire",0.8,global_position)
 			player.call("_hud_toast", "FIRE FUELLED · +90 SECONDS")
 	elif cook_remaining > 0.0:
 		player.call("_hud_toast", "COOKING · %d SECONDS" % ceili(cook_remaining))
 	elif COOKED.has(item) and Inventory.has(item, 1):
 		cook_item = item
 		cook_remaining = 12.0
+		player.call("play_action","fire",0.9,global_position)
 		player.call("_hud_toast", "COOKING " + item.to_upper())
 	else:
 		player.call("_hud_toast", "SELECT RAW FOOD TO COOK · WOOD TO REFUEL")

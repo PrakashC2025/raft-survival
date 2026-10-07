@@ -196,6 +196,10 @@ static func item_color(item: String) -> Color:
 			return Color(0.55, 0.55, 0.58)
 		"Sand":
 			return Color(0.78, 0.62, 0.40)
+		"Soil":
+			return Color(0.34,0.23,0.12)
+		"Sponge":
+			return Color(0.64,0.46,0.17)
 		"Coconut":
 			return Color(0.43, 0.27, 0.14)
 		"Banana":
@@ -228,6 +232,10 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 		return
 	var col := item_color(item)
 	match item:
+		"Sponge":
+			_circle(c,center,r*0.52,col)
+			for offset in [Vector2(-.24,-.16),Vector2(.15,-.24),Vector2(.31,.11),Vector2(-.12,.23),Vector2(-.34,.10),Vector2(.04,.02)]:
+				_circle(c,center+offset*r,r*.065,col.darkened(.55))
 		"Wood":
 			# three stacked logs (end-on rings)
 			for i in range(3):
@@ -271,7 +279,7 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 				center + Vector2(-r * 0.4, r * 0.45),
 			])
 			c.draw_colored_polygon(pts2, col)
-		"Sand":
+		"Sand", "Soil":
 			var mound := PackedVector2Array([
 				center + Vector2(-r * 0.62, r * 0.32),
 				center + Vector2(-r * 0.48, -r * 0.04),

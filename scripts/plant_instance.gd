@@ -22,6 +22,8 @@ enum Stage { SEED, SPROUT, GROWING, MATURE, FALLING, STUMP }
 const CAT_ROOT := "ROOT"
 const CAT_FRUIT := "FRUIT_TREE"
 const PALM_TALL_SCENE: PackedScene = preload("res://models/coconut_palm.glb")
+const TOMATO_SCENE: PackedScene = preload("res://models/tomato_plant.glb")
+const POTATO_SCENE: PackedScene = preload("res://models/potato_plant.glb")
 const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
@@ -63,6 +65,7 @@ var _hold_kind: String = ""
 var _health: int = 0
 var _fell_axis: Vector3 = Vector3.FORWARD
 var _pending_dig_drop: Dictionary = {}
+var _harvesting := false
 var _pending_fell_drops: Dictionary = {}
 
 # Small debris chips (wood/soil) flying briefly after hits
@@ -203,6 +206,8 @@ func _stage_time(idx: int) -> float:
 func _process(delta: float) -> void:
 	_anim_t += delta
 	_update_chips(delta)
+	if _harvesting:
+		return
 
 	if _stage == Stage.FALLING or _stage == Stage.STUMP:
 		_update_interaction(delta)
@@ -253,6 +258,7 @@ func _update_wind(_delta: float) -> void:
 # ============================================================
 func _rebuild_visual() -> void:
 	for c in _container.get_children():
+		_container.remove_child(c)
 		c.queue_free()
 	_fruits.clear()
 	var cat: String = _def.get("category", "")
@@ -299,6 +305,19 @@ func _build_root_visual(stage: int) -> void:
 		smat.albedo_color = Color(0.42, 0.32, 0.16)
 		seed_mesh.material_override = smat
 		_container.add_child(seed_mesh)
+		return
+	if plant_id in ["Tomato", "Potato"]:
+		var crop := (TOMATO_SCENE if plant_id == "Tomato" else POTATO_SCENE).instantiate() as Node3D
+		crop.name = plant_id + "PlantModel"
+		_container.add_child(crop)
+		# Import roots are at the soil line; tubers stay underneath until pulled.
+		crop.scale = Vector3.ONE * (0.55 if plant_id == "Tomato" else 0.85) * _hvar
+		for part in crop.find_children("*", "MeshInstance3D", true, false):
+			var part_name := str(part.name)
+			if part_name == "PotatoTuber":
+				(part as MeshInstance3D).material_override = OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.FOOD,Color(0.50,0.39,0.235),0.94)
+			if part_name.begins_with("Tomato_") or part_name in ["Flower", "PotatoFlower"]:
+				(part as Node3D).visible = stage == Stage.MATURE
 		return
 
 	var leaf_col: Color = _def.get("leaf_color", Color(0.25, 0.55, 0.2))
@@ -798,11 +817,15 @@ func _run_hold(kind: String, per_hit_time: float, delta: float) -> void:
 		_hold_kind = kind
 		_hold_progress = 0.0
 		_hold_target = per_hit_time
+		var actor := _get_player()
+		if actor!=null:actor.call("play_action","chop" if kind in ["chop","stump"] else "scoop",per_hit_time,global_position)
 	_hold_progress += delta
 	if _progress_bar != null:
 		_progress_bar.size.x = 180.0 * clampf(_hold_progress / _hold_target, 0.0, 1.0)
 	if _hold_progress >= _hold_target:
 		_hold_progress = 0.0
+		var actor := _get_player()
+		if actor!=null and kind in ["chop","stump"]:actor.call("play_action","chop",per_hit_time,global_position)
 		match kind:
 			"dig":
 				_do_dig()
@@ -831,6 +854,8 @@ func _pick_fruit(fruit) -> void:
 	if not yield_item.is_empty() and not Inventory.can_store_rewards({yield_item: amount}):
 		_notify_bag_full()
 		return
+	var actor := _get_player()
+	if actor!=null:actor.call("play_action","pick",0.6,global_position)
 	fruit["elapsed"] = 0.0
 	var m = fruit.get("mesh")
 	if m != null and is_instance_valid(m):
@@ -854,6 +879,8 @@ func _notify_bag_full() -> void:
 # HARVEST — root crop dig (plant shrinks back, planter freed)
 # ============================================================
 func _do_dig() -> void:
+	if _harvesting:
+		return
 	_cancel_hold()
 	_pending_dig_drop.clear()
 	var yield_item: String = str(_def.get("yield_item", ""))
@@ -870,7 +897,15 @@ func _do_dig() -> void:
 		_pending_dig_drop.clear()
 		_notify_bag_full()
 		return
+	_harvesting = true
+	var actor := _get_player()
+	if actor!=null:actor.call("play_action","harvest",1.7 if plant_id=="Potato" else 0.65,global_position)
 	var tw := create_tween()
+	if plant_id == "Potato":
+		# Lift the complete root system out of the soil before collecting it.
+		# Keep foliage/tubers full size during the readable reveal.
+		tw.tween_property(_container, "position:y", 0.38, 0.42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_interval(1.0)
 	tw.tween_property(_container, "scale", Vector3.ONE * 0.04, 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.tween_callback(_finish_dig)

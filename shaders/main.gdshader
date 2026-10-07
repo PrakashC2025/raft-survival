@@ -35,10 +35,38 @@ uniform vec3 sun_glint_color = vec3(1.0, 0.95, 0.85);
 uniform vec3 moon_glint_color = vec3(0.72, 0.82, 1.0);
 uniform float sparkle_strength : hint_range(0.0, 4.0) = 0.35;
 uniform float surface_detail : hint_range(0.0, 1.0) = 1.0;
+uniform sampler2D wave_normals : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform vec4 island_shores[4];
+uniform sampler2D shore_height_0 : filter_linear, repeat_disable;
+uniform sampler2D shore_height_1 : filter_linear, repeat_disable;
+uniform sampler2D shore_height_2 : filter_linear, repeat_disable;
+uniform sampler2D shore_height_3 : filter_linear, repeat_disable;
+
+float coastal_depth(vec3 position_value) {
+	for (int index = 0; index < 4; index++) {
+		vec4 zone = island_shores[index];
+		if (zone.z < 1.0) { continue; }
+		vec2 uv = (position_value.xz - zone.xy) / (zone.zw * 2.0) + 0.5;
+		if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) { continue; }
+		float ground = -20.0;
+		if (index == 0) { ground = texture(shore_height_0, uv).r; }
+		else if (index == 1) { ground = texture(shore_height_1, uv).r; }
+		else if (index == 2) { ground = texture(shore_height_2, uv).r; }
+		else { ground = texture(shore_height_3, uv).r; }
+		float edge = min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y));
+		float padding_depth = (1.0 - smoothstep(0.0, 0.13, edge)) * 12.0;
+		return position_value.y - ground + padding_depth;
+	}
+	return 20.0;
+}
 
 // --- waves (geometry shared with Ocean.get_height()) ---
-uniform float wave_height = 0.32;
-uniform float wave_speed = 0.45;
+uniform float wave_height = 0.68;
+uniform float wave_speed = 0.52;
+uniform float wave_time = 0.0;
+uniform bool raft_displacement = false;
+uniform mat4 world_to_raft;
+uniform sampler2D raft_deck : filter_nearest, repeat_disable;
 
 // Wave crest level (-1 trough .. +1 crest) interpolated to the fragment
 // so the surface can shade rolling wave bands + crest foam.
@@ -54,18 +82,18 @@ const vec2 L1_DIR = vec2(1.0, 0.15);
 const vec2 L2_DIR = vec2(-0.4, 0.92);
 const vec2 L3_DIR = vec2(0.8, -0.5);
 const vec2 L4_DIR = vec2(-0.75, -0.65);
-const float L1_F = 0.055;
-const float L2_F = 0.115;
-const float L3_F = 0.24;
-const float L4_F = 0.50;
+const float L1_F = 0.18;
+const float L2_F = 0.33;
+const float L3_F = 0.59;
+const float L4_F = 0.95;
 const float L1_A = 1.0;
 const float L2_A = 0.75;
 const float L3_A = 0.38;
 const float L4_A = 0.13;
-const float L1_S = 0.45;
-const float L2_S = 0.7;
-const float L3_S = 1.05;
-const float L4_S = 1.45;
+const float L1_S = 0.80;
+const float L2_S = 1.10;
+const float L3_S = 1.55;
+const float L4_S = 1.90;
 const float WAVE_SUM = 2.26;
 
 // Organic-field constants: a slow 2D "meander" that warps the wave sampling
@@ -116,7 +144,7 @@ void vertex() {
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	world_pos = wp;
 	vec2 p = wp.xz;
-	float t = TIME * wave_speed;
+	float t = wave_time * wave_speed;
 	vec2 warp = vec2(
 		M_AMP * sin(dot(M1_DIR, p) * M1_F + t * M1_S) + M_AMP2 * sin(dot(M2_DIR, p) * M2_F + t * M2_S),
 		M_AMP * sin(dot(M1_DIR, p) * M1_F + t * M1_S + 2.1) + M_AMP2 * sin(dot(M2_DIR, p) * M2_F + t * M2_S + 4.2));
@@ -150,6 +178,14 @@ void vertex() {
 }
 
 void fragment() {
+	// Solid deck volume displaces water; crests cannot flood through timber.
+	// This single compact mask also follows expansions, removal and raft yaw.
+	if (raft_displacement) {
+		vec3 raft_local = (world_to_raft*vec4(world_pos,1.0)).xyz;
+		vec2 cell = floor((raft_local.xz+vec2(1.0))/2.0)+vec2(64.0);
+		if (raft_local.y > -0.15 && all(greaterThanEqual(cell,vec2(0.0))) && all(lessThan(cell,vec2(128.0)))
+			&& texture(raft_deck,(cell+vec2(0.5))/128.0).r>0.5) discard;
+	}
 	// ---- Underside (swimming below the surface) ----
 	// With cull_disabled the plane renders from both sides. From below, shade
 	// the surface as a dim water ceiling that glows toward the sun/moon, so
@@ -179,7 +215,7 @@ void fragment() {
 	vec3 tocam = normalize(CAMERA_POSITION_WORLD - world_pos);
 	float ndv = max(dot(n, tocam), 0.0);  // 1 = looking straight down, 0 = grazing
 	vec2 p = world_pos.xz + v_warp;  // warped like the vertex waves: fine detail bends with the swells
-	float t = TIME * wave_speed;
+	float t = wave_time * wave_speed;
 
 	// Fragment-scale micro ripples (finer than the mesh can displace): three
 	// incommensurate directional lobes so the near field reads as irregular
@@ -202,18 +238,18 @@ void fragment() {
 		+ 0.09 * 4.6 * mdir2.y * cos(dot(mdir2, p) * 4.6 + t * 1.6)
 		+ 0.05 * 7.4 * mdir3.y * cos(dot(mdir3, p) * 7.4 + t * 2.0);
 	vec3 ripple = water_noise(p * 1.7 + vec2(t * 0.24, -t * 0.18));
-	vec2 ripple_slope = ripple.yz * 0.16;
-	vec3 wind_chop = water_noise(p*0.42+vec2(t*0.12,-t*0.08));
-	ripple_slope += wind_chop.yz*0.34;
+	vec2 normal_a = texture(wave_normals, p * 0.028 + vec2(t * 0.003,-t * 0.002)).xy * 2.0 - 1.0;
+	vec2 normal_b = texture(wave_normals, vec2(p.y,-p.x) * 0.085 + vec2(-t * 0.007,t * 0.006)).xy * 2.0 - 1.0;
+	vec2 ripple_slope = normal_a * 0.19 + normal_b * 0.075;
 	// Broader, irregular wave faces survive farther into the sea. Pixel-footprint
 	// filtering removes distant glitter aliasing without flattening nearby swells.
 	vec2 swell_uv = p*0.19+vec2(-t*0.10,t*0.07);
 	vec3 surface_swell = water_noise(swell_uv);
 	float swell_lod = 1.0-smoothstep(0.04,0.7,length(fwidth(swell_uv)));
-	ripple_slope += surface_swell.yz*0.48*swell_lod;
+	ripple_slope += surface_swell.yz*0.065*swell_lod;
 	if (surface_detail > 0.6) {
 		vec3 small_ripple = water_noise(p * 4.3 + vec2(-t * 0.35, t * 0.29));
-		ripple_slope += small_ripple.yz * 0.055;
+		ripple_slope += small_ripple.yz * 0.035;
 	}
 	n = normalize(vec3(n.x - mgx*0.08*fine - ripple_slope.x*mix(0.30,1.0,fine),
 		n.y, n.z - mgz*0.08*fine - ripple_slope.y*mix(0.30,1.0,fine)));
@@ -235,7 +271,7 @@ void fragment() {
 	// horizon (the real reason a morning sea reads as a sea, not a dark flat
 	// sheet). Night: faint navy. Used by the horizon, fresnel sheen and the
 	// sky-mirror band shading so surface structure tracks the actual sky.
-	vec3 sky_tone = mix(vec3(0.09, 0.40, 0.68), vec3(0.12, 0.30, 0.50), twilight_factor);
+	vec3 sky_tone = mix(vec3(0.10, 0.25, 0.36), vec3(0.13, 0.23, 0.32), twilight_factor);
 	sky_tone = mix(sky_tone, vec3(0.016, 0.06, 0.14), night_factor);
 
 	// ---- Near/steep = deep navy; far/grazing = lighter cobalt horizon ----
@@ -261,7 +297,7 @@ void fragment() {
 	// ---- Wave-band shading: rolling crest faces catch light, troughs darken ----
 	float crest = wave_crest;
 	float trough = smoothstep(-1.0, -0.08, -crest);
-	base *= 1.0 - trough * 0.35 * (1.0 - horizon_k * 0.75);
+	base *= 1.0 - trough * 0.24 * (1.0 - horizon_k * 0.75);
 	// Neutral wave-band contrast (works at any time of day, incl. night): rolling
 	// crests lift and troughs fall so wave bands stay visible even without sun.
 	base *= 1.0 + crest * 0.16 * (1.0 - horizon_k * 0.75);
@@ -291,7 +327,7 @@ void fragment() {
 	reflection += smoothstep(0.48, 0.78, cloud) * vec3(0.14, 0.15, 0.14) * (1.0 - night_factor);
 	base = mix(base, reflection, 0.08 + fres * 0.38);
 	// Dark troughs retain depth beneath brighter moving reflective facets.
-	base *= mix(0.72,1.03,smoothstep(-0.7,0.6,crest));
+	base *= mix(0.82,1.03,smoothstep(-0.7,0.6,crest));
 	float refl_up = r.y;
 	float mir_k = smoothstep(-0.14, 0.28, refl_up);
 	mir_k *= 1.0 - near_steep * 0.7;  // weakest looking straight down
@@ -328,7 +364,7 @@ void fragment() {
 	// chop, and fade out with distance — no round dots, no far-field grid.
 	float sdot = max(dot(r, sun_n), 0.0);
 	float glitter_dist = 1.0 - smoothstep(30.0, 120.0, dist);
-	float glitter = (pow(sdot, 24.0) * 0.22 + pow(sdot, 240.0) * 2.8) * chop
+	float glitter = (pow(sdot, 32.0) * 0.17 + pow(sdot, 210.0) * 2.2) * chop
 		* mix(0.55, 1.0, glitter_dist)
 		* sparkle_strength * (1.0 - night_factor);
 	// Moon path: wider lobe + stronger so the shimmer visibly tracks the swell
@@ -347,18 +383,27 @@ void fragment() {
 	// breaks the gate into flecks so it reads as churning foam, not circles.
 	float steep = 1.0 - n.y;
 	float cap = smoothstep(0.48, 0.86, surface_swell.x) * smoothstep(0.66, 0.9, ripple.x)
-		* smoothstep(0.003, 0.04, steep) * chop;
+		* smoothstep(0.025, 0.10, steep) * smoothstep(0.42,0.82,crest) * chop;
 	cap *= 1.0 - smoothstep(12.0, 70.0, dist);
 	// Whitecaps stay blue-white at night (moonlit foam, not gray flecks).
 	vec3 foam_col = mix(water_foam_color * 0.9, vec3(0.30, 0.40, 0.52), night_factor);
 	foam_col = mix(foam_col, water_foam_color * 0.5, twilight_factor * 0.6);
-	light_add += cap * foam_col * 0.38 * (1.0 - night_factor * 0.45);
+	light_add += cap * foam_col * 0.26 * (1.0 - night_factor * 0.45);
 
 	// ---- Atmospheric haze at the very far field ----
 	float haze = smoothstep(90.0, 380.0, dist);
 	vec3 haze_col = mix(water_haze_color, water_night_color * 1.3, night_factor);
 	haze_col = mix(haze_col, reflected_horizon, twilight_factor * 0.55);
 	base = mix(base, haze_col, haze * 0.24);
+	// Actual terrain-height masks keep shallows and foam at the beach instead
+	// of drawing an arbitrary circular ring. The ocean remains one opaque pass.
+	float shore_depth = coastal_depth(world_pos);
+	float shallow = (1.0 - smoothstep(0.25, 2.2, max(shore_depth, 0.0)));
+	vec3 shallow_colour = mix(vec3(0.018,0.19,0.24), vec3(0.014,0.10,0.15), night_factor);
+	base = mix(base, shallow_colour, shallow * 0.60);
+	float shore_foam = 1.0 - smoothstep(0.03, 0.24, abs(shore_depth));
+	shore_foam *= smoothstep(0.22, 0.72, ripple.x + sin(t * 0.9) * 0.13);
+	light_add += foam_col * shore_foam * 0.38;
 
 	// Never-black floor keeps the water reading as water even in deep night.
 	vec3 col = max(base + light_add, vec3(0.012, 0.03, 0.09));

@@ -141,5 +141,6 @@ func _run() -> void:
 	var ambience := current_scene.get_node_or_null("OceanAmbience") as AudioStreamPlayer
 	if ambience != null:
 		ambience.call("stop_environment")
-	await create_timer(0.1).timeout
+	current_scene.queue_free()
+	for unused in range(25): await process_frame
 	quit(0 if failures == 0 else 1)

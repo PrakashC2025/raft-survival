@@ -75,8 +75,8 @@ func _apply_profile() -> void:
 	var scene := get_tree().current_scene
 	if scene != null:
 		var ocean := get_tree().get_first_node_in_group("ocean") as MeshInstance3D
-		if ocean != null and ocean.mesh is PlaneMesh:
-			var water_material := (ocean.mesh as PlaneMesh).material as ShaderMaterial
+		if ocean != null:
+			var water_material := ocean.get_active_material(0) as ShaderMaterial
 			if water_material != null:
 				water_material.set_shader_parameter("surface_detail", 0.45 if GameSettings.quality == 1 else 1.0)
 		var environment_node := scene.get_node_or_null("Sky3D") as WorldEnvironment
@@ -149,6 +149,13 @@ func _has_viewport_property(property_name: String) -> bool:
 
 
 func refresh_foliage() -> void:
+	for node in get_tree().get_nodes_in_group("island_landscape_foliage"):
+		var batch := node as MultiMeshInstance3D
+		if batch == null or batch.multimesh == null: continue
+		var fraction: float = [1.0, 0.50, 0.75, 1.0][GameSettings.quality]
+		if _foliage_reduced: fraction *= 0.65
+		batch.multimesh.visible_instance_count = maxi(1, floori(batch.multimesh.instance_count * fraction))
+		batch.visibility_range_end = 55.0 if GameSettings.quality == 1 else 110.0
 	if not _mobile:
 		return
 	var quality := GameSettings.quality

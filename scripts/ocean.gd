@@ -19,12 +19,12 @@ class_name Ocean
 #   horizon (0.04, 0.45, 0.72)  -> bright azure toward the horizon
 #   deep (0.012, 0.10, 0.22)    -> near-black navy foreground/troughs
 #   night (0.018, 0.07, 0.17)   -> blue navy, alive under the moon
-@export var day_color := Color(0.016, 0.13, 0.24)
+@export var day_color := Color(0.012, 0.095, 0.155)
 @export var twilight_color := Color(0.04, 0.11, 0.22)
 @export var night_color := Color(0.012, 0.05, 0.12)
 @export var deep_color := Color(0.006, 0.05, 0.11)
-@export var horizon_color := Color(0.02, 0.22, 0.34)
-@export var crest_color := Color(0.10, 0.34, 0.46)
+@export var horizon_color := Color(0.045, 0.16, 0.23)
+@export var crest_color := Color(0.065, 0.22, 0.27)
 @export var foam_color := Color(1.15, 1.25, 1.42)
 @export var haze_color := Color(0.45, 0.6, 0.75)
 @export var sparkle_strength := 1.8
@@ -41,13 +41,27 @@ var _under_layer: CanvasLayer = null
 var _under_rect: ColorRect = null
 var _under_mat: ShaderMaterial = null
 
-@export var wave_height := 0.42
-@export var wave_speed := 0.45
+@export var wave_height := 0.68
+@export var wave_speed := 0.52
 var _time := 0.0
 
 var _sky3d: Node = null
 var _sky: Node = null
 var _mat: ShaderMaterial = null
+var _shore_zones := PackedVector4Array([Vector4.ZERO, Vector4.ZERO, Vector4.ZERO, Vector4.ZERO])
+static var _wave_normals: NoiseTexture2D
+var _raft_ref: Node3D
+var _deck_texture: ImageTexture
+var _deck_coverage: Image
+var _deck_refresh := 0.0
+var _deck_signature := -1
+
+func register_island_shore(island: Node3D, height_texture: Texture2D, extent: float) -> void:
+	var index: int = ["Island","ReefIsle","DriftwoodCay","FarCove"].find(str(island.name))
+	if index < 0 or _mat == null: return
+	_shore_zones[index] = Vector4(island.global_position.x, island.global_position.z, extent, extent)
+	_mat.set_shader_parameter("island_shores", _shore_zones)
+	_mat.set_shader_parameter("shore_height_" + str(index), height_texture)
 var _sun_light: DirectionalLight3D = null
 var _moon_light: DirectionalLight3D = null
 var _env: Environment = null
@@ -99,8 +113,26 @@ func _ready() -> void:
 		_moon_light = _sky3d.get_node_or_null("MoonLight") as DirectionalLight3D
 		_env = _sky3d.get("environment") as Environment
 	if mesh is PlaneMesh:
+		# Keep the dense patch under the active camera, including distant islands.
+		# A huge fixed grid undersamples the waves and exposes flat strip seams.
 		_mat = (mesh as PlaneMesh).material as ShaderMaterial
+		mesh = _ocean_patch()
+		mesh.surface_set_material(0,_mat)
 	if _mat != null:
+		if _wave_normals == null:
+			var noise := FastNoiseLite.new()
+			noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+			noise.seed = 8124
+			noise.frequency = 0.05
+			noise.fractal_octaves = 4
+			_wave_normals = NoiseTexture2D.new()
+			_wave_normals.width = 256
+			_wave_normals.height = 256
+			_wave_normals.seamless = true
+			_wave_normals.as_normal_map = true
+			_wave_normals.bump_strength = 8.0
+			_wave_normals.noise = noise
+		_mat.set_shader_parameter("wave_normals", _wave_normals)
 		_mat.set_shader_parameter("water_day_color", day_color)
 		_mat.set_shader_parameter("water_twilight_color", twilight_color)
 		_mat.set_shader_parameter("water_night_color", night_color)
@@ -119,7 +151,15 @@ func _ready() -> void:
 	_create_far_water()
 
 func _process(delta: float) -> void:
+	var active_camera := get_viewport().get_camera_3d()
+	if active_camera != null:
+		global_position.x = active_camera.global_position.x
+		global_position.z = active_camera.global_position.z
 	_time += delta
+	# The engine's shader TIME begins before scene loading. Use the same clock
+	# as get_height so the rendered crests and raft never drift out of phase.
+	if _mat!=null:_mat.set_shader_parameter("wave_time",_time)
+	_update_deck_displacement(delta)
 	if _mat == null or _sky == null:
 		return
 	# Smooth factors from the SkyDome's own sun/moon directions (origin.y is
@@ -144,11 +184,11 @@ func _process(delta: float) -> void:
 	_update_underwater()
 
 func _create_far_water() -> void:
-	if _mat == null or not (mesh is PlaneMesh):
+	if _mat == null:
 		return
 	# Four broad strips fill the horizon beyond the playable, detailed plane.
 	# They have a hole in the center: no full-screen overlapping water pass.
-	var inner := (mesh as PlaneMesh).size * 0.5
+	var inner := Vector2(400,400)
 	var extent := 12000.0
 	var corners: Array[Vector3] = [Vector3(-inner.x, 0, -inner.y), Vector3(inner.x, 0, -inner.y),
 		Vector3(inner.x, 0, inner.y), Vector3(-inner.x, 0, inner.y)]
@@ -285,10 +325,10 @@ func _update_debug_hud(night: float, twilight: float, moon_factor: float) -> voi
 # formula (same dirs/freqs/amps/speeds) so buoyancy matches the visible waves.
 # Tuned for a SMOOTH sea: two long rolling swells dominate, fine chop is tiny.
 const _WAVES := [
-	[Vector2(1.0, 0.15), 0.055, 1.0, 0.45],
-	[Vector2(-0.4, 0.92), 0.115, 0.75, 0.7],
-	[Vector2(0.8, -0.5), 0.24, 0.38, 1.05],
-	[Vector2(-0.75, -0.65), 0.50, 0.13, 1.45],
+	[Vector2(1.0, 0.15), 0.18, 1.0, 0.80],
+	[Vector2(-0.4, 0.92), 0.33, 0.75, 1.10],
+	[Vector2(0.8, -0.5), 0.59, 0.38, 1.55],
+	[Vector2(-0.75, -0.65), 0.95, 0.13, 1.90],
 ]  # [dir, freq, amp, time_speed]
 
 # Organic-field constants. MUST stay identical to main.gdshader's meander and
@@ -328,3 +368,61 @@ func get_height(world_pos: Vector3) -> float:
 		h += a * sin(pw.dot(d) * f + tt * s)
 	h *= env
 	return global_position.y + h * wave_height * 0.33
+
+func _update_deck_displacement(delta: float) -> void:
+	if _mat == null: return
+	if not is_instance_valid(_raft_ref):
+		_raft_ref = get_tree().get_first_node_in_group("raft") as Node3D
+	if _raft_ref == null: return
+	_mat.set_shader_parameter("world_to_raft",_raft_ref.global_transform.affine_inverse())
+	_deck_refresh -= delta
+	if _deck_refresh > 0: return
+	_deck_refresh = 0.4
+	var cells: Array[Vector2i] = [Vector2i.ZERO]
+	var pieces := _raft_ref.get_node_or_null("BuiltPieces")
+	if pieces != null:
+		for piece in pieces.get_children():
+			if piece is Node3D and piece.name.begins_with("Foundation") and not piece.is_queued_for_deletion() and absf(piece.position.y)<0.2:
+				cells.append(Vector2i(roundi(piece.position.x/2),roundi(piece.position.z/2)))
+	var signature := hash(cells)
+	if signature == _deck_signature: return
+	_deck_signature = signature
+	var field := Image.create(128,128,false,Image.FORMAT_R8)
+	for cell in cells:
+		var pixel := cell+Vector2i(64,64)
+		if pixel.x>=0 and pixel.x<128 and pixel.y>=0 and pixel.y<128: field.set_pixelv(pixel,Color.WHITE)
+	_deck_coverage=field
+	if _deck_texture == null: _deck_texture=ImageTexture.create_from_image(field)
+	else: _deck_texture.update(field)
+	_mat.set_shader_parameter("raft_deck",_deck_texture)
+	_mat.set_shader_parameter("raft_displacement",true)
+
+static func _ocean_patch() -> ArrayMesh:
+	# Same 128-square budget, concentrated within 80m of the camera. Uniform
+	# 800m grids had 6m spacing and flattened all the visible medium waves.
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for z in range(129):
+		var tz := float(z-64)
+		var pz := tz * (80.0/48.0) if absf(tz)<=48 else signf(tz)*(80+(absf(tz)-48)*20)
+		for x in range(129):
+			var tx := float(x-64)
+			var px := tx * (80.0/48.0) if absf(tx)<=48 else signf(tx)*(80+(absf(tx)-48)*20)
+			vertices.append(Vector3(px,0,pz))
+			normals.append(Vector3.UP)
+			uvs.append(Vector2(px,pz)/800.0+Vector2.ONE*0.5)
+	for z in range(128):
+		for x in range(128):
+			var i := z*129+x
+			indices.append_array(PackedInt32Array([i,i+1,i+129,i+1,i+130,i+129]))
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var result := ArrayMesh.new()
+	result.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,arrays)
+	return result

@@ -22,6 +22,17 @@ func shot(label: String) -> void:
 	root.get_texture().get_image().save_png(path)
 	print("PREVIEW ",path)
 
+func measure(label: String) -> void:
+	var timings: Array[float] = []
+	var previous := Time.get_ticks_usec()
+	for index in range(240):
+		await process_frame
+		var now := Time.get_ticks_usec()
+		if index > 30: timings.append(float(now-previous)/1000.0)
+		previous = now
+	timings.sort()
+	print("NATIVE BUILD METRICS: view=",label," adapter=",RenderingServer.get_video_adapter_name()," renderer=",RenderingServer.get_current_rendering_method()," pieces=",built.get_child_count()," timber_draws=",raft.get_node("ConstructionBatch").get_child_count()," median_ms=",timings[floori(float(timings.size())/2.0)]," p95_ms=",timings[int(timings.size()*0.95)]," max_ms=",timings[-1]," total_draws=",RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME))
+
 func _run() -> void:
 	if not OS.get_user_data_dir().contains("MobileTests"): quit(2); return
 	root.size = Vector2i(1280,720)
@@ -43,7 +54,7 @@ func _run() -> void:
 		for x in range(8):
 			if x != 0 or z != 0: add_piece("Foundation",Vector3(x*2,0,z*2))
 	for position in [Vector3(2,1.4,1),Vector3(2,1.4,3)]: add_piece("Wall",position)
-	var window := add_piece("Window",Vector3(4,1.4,1))
+	add_piece("Window",Vector3(4,1.4,1))
 	add_piece("Door",Vector3(4,1.4,3))
 	add_piece("Wall",Vector3(1,1.4,2),PI/2)
 	add_piece("Wall",Vector3(5,1.4,2),PI/2)
@@ -62,7 +73,30 @@ func _run() -> void:
 	camera.position = raft.to_global(Vector3(6,4.7,17))
 	camera.look_at(raft.to_global(Vector3(8,1.4,9)))
 	raft.get_node("ConstructionBatch").call("refresh")
+	if "--fix-preview" in OS.get_cmdline_user_args():
+		await shot("fixed-rope-ocean")
+		camera.position = raft.to_global(Vector3(5,2.5,14))
+		camera.look_at(raft.to_global(Vector3(8,0,11)))
+		await shot("fixed-rope-close")
+		camera.position = raft.to_global(Vector3(9,1.7,5.7))
+		camera.look_at(raft.to_global(Vector3(9,1.5,8)))
+		await shot("fixed-open-window")
+		var rain := player.get_node("RainSystem")
+		rain.set("_camera",camera)
+		rain.call("start_rain",120)
+		rain.set("_intensity",1.0)
+		camera.position = raft.to_global(Vector3(8,1.6,9.3))
+		camera.look_at(raft.to_global(Vector3(9,1.5,7)))
+		await create_timer(2).timeout
+		await shot("fixed-rain-shelter")
+		rain.call("stop_rain")
+		current_scene.get_node("OceanAmbience").call("stop_environment")
+		current_scene.queue_free()
+		for unused in range(20): await process_frame
+		quit()
+		return
 	await shot("timber-room")
+	await measure("late-afternoon")
 	camera.position = raft.to_global(Vector3(5,2.5,14))
 	camera.look_at(raft.to_global(Vector3(8,0,11)))
 	await shot("joined-timbers")
@@ -90,11 +124,10 @@ func _run() -> void:
 	camera.position = raft.to_global(Vector3(5,2.2,13.4))
 	camera.look_at(player.global_position+Vector3(0,0.1,0))
 	await shot("survivalist")
-	window.call("toggle")
 	camera.position = raft.to_global(Vector3(9,1.7,5.7))
 	camera.look_at(raft.to_global(Vector3(9,1.5,8)))
 	await shot("window-open")
-	var lamp := add_piece("ElectricLamp",Vector3(4,0.8,4))
+	add_piece("ElectricLamp",Vector3(4,0.8,4))
 	var generator := add_piece("WindGenerator",Vector3(6,0.8,3))
 	generator.charge = 120
 	current_scene.get_node("Sky3D/TimeOfDay").current_time = 22
@@ -102,15 +135,7 @@ func _run() -> void:
 	camera.look_at(raft.to_global(Vector3(8,1.4,9)))
 	await create_timer(1.0).timeout
 	await shot("night-camp")
-	var timings: Array[float] = []
-	var previous := Time.get_ticks_usec()
-	for index in range(240):
-		await process_frame
-		var now := Time.get_ticks_usec()
-		if index > 30: timings.append(float(now-previous)/1000.0)
-		previous = now
-	timings.sort()
-	print("NATIVE BUILD METRICS: adapter=",RenderingServer.get_video_adapter_name()," renderer=",RenderingServer.get_current_rendering_method()," pieces=",built.get_child_count()," timber_draws=",raft.get_node("ConstructionBatch").get_child_count()," median_ms=",timings[floori(float(timings.size())/2.0)]," p95_ms=",timings[int(timings.size()*0.95)]," max_ms=",timings[-1]," total_draws=",RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME))
+	await measure("night")
 	current_scene.get_node("OceanAmbience").call("stop_environment")
 	current_scene.queue_free()
 	for unused in range(20): await process_frame

@@ -50,6 +50,7 @@ const ITEM_PROFILES := {
 	"Plastic": {"mass": 0.6, "freeboard": 0.25, "color": Color(0.3, 0.7, 1.0)},
 	"Barrel":  {"mass": 6.0, "freeboard": 0.30, "color": Color(0.70, 0.45, 0.20)},
 	"Stone":   {"mass": 4.0, "freeboard": 0.10, "color": Color(0.65, 0.65, 0.65)},
+	"Sponge":  {"mass": 0.3, "freeboard": 0.09, "color": Color(0.53,0.41,0.17)},
 	"Metal":   {"mass": 5.0, "freeboard": 0.15, "color": Color(0.80, 0.80, 0.85)},
 }
 
@@ -129,7 +130,7 @@ func _apply_profile() -> void:
 			_cache_visual_geometry()
 			_set_visual_alpha(0.0)
 			return
-	if item_name in ["Rope", "Plastic", "Metal"] and mesh_instance != null:
+	if item_name in ["Rope", "Plastic", "Metal", "Sponge"] and mesh_instance != null:
 		_model_visual = RESOURCE_VISUAL.create(item_name)
 		add_child(_model_visual)
 		mesh_instance.visible = false

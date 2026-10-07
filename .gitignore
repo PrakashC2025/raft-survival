@@ -12,6 +12,7 @@ export_presets.cfg
 # Godot cache and import metadata
 *.import
 !textures/construction/timber_photographic_atlas.png.import
+!textures/island/*.jpg.import
 *.meta
 
 # User data and saves

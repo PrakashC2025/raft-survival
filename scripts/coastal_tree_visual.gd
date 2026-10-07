@@ -54,9 +54,9 @@ static func _build(kind: int) -> Array:
 			var start := Vector3(0.06,stem_height-1.3+tier*0.42,0)
 			var end := start+Vector3(cos(angle),0.35,sin(angle))*(1.0+tier*0.22)
 			_branch(bark,start,end,0.045,kind)
-			for spray in range(4):
-				var center := start.lerp(end,0.55+float(spray)*0.15)
-				_ribbon(leaves,center,angle+float(spray%2)*0.9,0.85,0.68,1)
+			for spray in range(6):
+				var center := start.lerp(end,0.30+float(spray)*0.135)
+				_ribbon(leaves,center,angle+sin(float(spray)*1.7)*0.8,0.58,0.40,1)
 	bark.generate_normals()
 	leaves.generate_normals()
 	bark.index()

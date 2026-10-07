@@ -80,6 +80,7 @@ func interact_survival(player: Node) -> void:
 		player.call("_hud_toast", "COLLECTOR EMPTY · LEAVE IT OUT IN RAIN")
 	elif Inventory.add("Water", 1) == 0:
 		water -= 1
+		player.call("play_action","grab",0.65,global_position)
 		_update_surface()
 		player.call("_hud_toast", "FRESH WATER COLLECTED · %d/%d STORED" % [water,CAPACITY])
 		player.call("_queue_save")

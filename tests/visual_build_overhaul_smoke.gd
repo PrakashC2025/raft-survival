@@ -126,7 +126,7 @@ func _run() -> void:
 	fixture("Wall",Vector3(1,1.4,2),PI/2)
 	var window := fixture("Window",Vector3(5,1.4,2),PI/2)
 	await frames()
-	check(window.find_child("Glass",true,false) == null and window.find_child("JoinedWoodenShutter",true,false) != null,"Window uses a joined wooden shutter and contains no glass")
+	check(window.find_child("Glass",true,false) == null and window.find_child("Hinge",true,false) == null,"Window is an unobstructed timber opening without glass or a shutter")
 	var door := fixture("Door",Vector3(30,1.4,30))
 	check(door.get_node("LeafPivot/Leaf").mesh is ArrayMesh,"Door leaf uses real rounded timber geometry")
 	door.call("toggle")
@@ -155,9 +155,8 @@ func _run() -> void:
 	await frames()
 	check(built.get_child_count() == pieces_before+2 and inv.call("total","Wood") == saved_wood-16 and inv.call("total","Rope") == ropes_before-2,"Room roof places two tiles with exact transactional cost")
 	check(ROOF.plan(raft,raft.to_global(Vector3(2,0.15,2))).get("occupied",false),"Existing roofs cannot be charged or duplicated")
-	window.call("toggle")
-	await create_timer(0.55).timeout
-	check(window.is_open and absf(window.get_node("Hinge").rotation.y) > 1.4,"Window sash and its collider swing open")
+	window.call("restore_survival_state",{"open":false})
+	check(window.find_child("SashCollider",true,false)==null,"Legacy closed windows load without a blocking shutter")
 	player.call("select_piece_for_build",16)
 	var half_support: Node3D = player._grid_occupancy[Vector2i(6,6)]
 	aim_at(Vector3(12,0.15,12.99),half_support)
@@ -198,7 +197,7 @@ func _run() -> void:
 	await frames(4)
 	check(built.get_child_count() == snapshot.size(),"70-plus mixed structures restore while invalid records are skipped")
 	var restored_window := built.find_child("Window_*",false,false)
-	check(restored_window != null and restored_window.is_open,"Restored window retains its open hinge")
+	check(restored_window != null and restored_window.find_child("Hinge",true,false)==null,"Restored window remains an open frame")
 	var clock := current_scene.get_node("Sky3D/TimeOfDay")
 	clock.current_time = 12
 	var generator := fixture("WindGenerator",Vector3(2,0.8,2))

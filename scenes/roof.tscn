@@ -84,7 +84,7 @@ accepts = Array[String](["Wall", "Roof"])
 position = Vector3(0, 0.075, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 3
-accepts = Array[String](["Roof", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "CargoCrate"])
+accepts = Array[String](["Roof", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "CargoCrate", "SandFilter"])
 
 [node name="Socket_North" type="Marker3D" parent="BuildSockets"]
 position = Vector3(0, 0, 1)

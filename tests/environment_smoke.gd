@@ -138,7 +138,7 @@ func _run() -> void:
 	var performance := get_first_node_in_group("mobile_performance")
 	performance.set("_mobile", true)
 	root.get_node("GameSettings").call("update_setting", "quality", 1)
-	var material := ((ocean as MeshInstance3D).mesh as PlaneMesh).material as ShaderMaterial
+	var material := (ocean as MeshInstance3D).get_active_material(0) as ShaderMaterial
 	check(float(material.get_shader_parameter("surface_detail")) < 0.6, "Battery Saver skips the second water-detail layer")
 	check(root.msaa_3d == Viewport.MSAA_DISABLED, "Battery Saver avoids extra anti-aliasing samples")
 	check(field.multimesh.visible_instance_count <= 800 and field.visibility_range_end == 55.0,

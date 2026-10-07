@@ -54,6 +54,14 @@ func _plant() -> void:
 		var point: Vector2 = POINTS[index]
 		var from := island.to_global(Vector3(point.x,16,point.y))
 		var hit := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from,from+Vector3.DOWN*40,1))
+		if hit.is_empty() or Vector3(hit.position).y < 0.42:
+			for step in range(1,7):
+				var candidate := island.to_global(Vector3(point.x,0,point.y) * (1.0 - float(step) * 0.10))
+				var dry_from := Vector3(candidate.x,26,candidate.z)
+				var dry_hit := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(dry_from,dry_from+Vector3.DOWN*54,1))
+				if not dry_hit.is_empty() and Vector3(dry_hit.position).y >= 0.42:
+					hit = dry_hit
+					break
 		if hit.is_empty(): continue
 		var tree: Node3D
 		if index < 4:

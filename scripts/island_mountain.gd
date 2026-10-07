@@ -9,26 +9,64 @@ extends Node3D
 
 const MOUNTAIN_SHADER: Shader = preload("res://shaders/island_mountain.gdshader")
 const RIDGE: PackedScene = preload("res://models/coastal_ridge.glb")
+static var _rock_material: ShaderMaterial
+static var _ridge_mesh: Mesh
+static var _scaled_meshes: Dictionary = {}
+static var _shapes: Dictionary = {}
 
 
 func _ready() -> void:
 	add_to_group("island_visual_detail")
-	var model := RIDGE.instantiate() as Node3D
-	var visual := model.find_child("CraggyRockMesh", true, false) as MeshInstance3D
-	var mesh := visual.mesh
-	visual.get_parent().remove_child(visual)
-	model.free()
-	var rock_material := ShaderMaterial.new()
-	rock_material.shader = MOUNTAIN_SHADER
-	visual.material_override = rock_material
-	visual.add_to_group("no_collision")
-	add_child(visual)
+	if _ridge_mesh == null:
+		var model := RIDGE.instantiate()
+		_ridge_mesh = (model.find_child("CraggyRockMesh", true, false) as MeshInstance3D).mesh
+		model.free()
 	var body := StaticBody3D.new()
 	body.name = "MountainCollision"
-	var collision := CollisionShape3D.new()
-	collision.shape = mesh.create_trimesh_shape()
-	body.add_child(collision)
+	body.add_to_group("island_ground")
 	add_child(body)
+	# Three solid, cached headlands retain the existing beach and resource IDs.
+	var size := _ridge_mesh.get_aabb().size
+	var dimensions := Vector3(base_radius * 2.0 / size.x, peak_height / size.y, base_radius * 1.65 / size.z)
+	for index in range(3):
+		var scale_factor: float = [1.0, 0.64, 0.72][index]
+		var scale_value := dimensions * scale_factor
+		var key := str(scale_value)
+		if not _scaled_meshes.has(key):
+			var arrays := _ridge_mesh.surface_get_arrays(0).duplicate(true)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+			for vertex in range(vertices.size()):
+				vertices[vertex] *= scale_value
+				normals[vertex] = (normals[vertex] / scale_value).normalized()
+			arrays[Mesh.ARRAY_VERTEX] = vertices
+			arrays[Mesh.ARRAY_NORMAL] = normals
+			var scaled := ArrayMesh.new()
+			scaled.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			_scaled_meshes[key] = scaled
+			_shapes[key] = scaled.create_trimesh_shape()
+		var visual := MeshInstance3D.new()
+		visual.name = "CraggyRockMesh" if index == 0 else "RockHeadland%d" % index
+		visual.mesh = _scaled_meshes[key]
+		visual.material_override = rock_material()
+		visual.position = [Vector3.ZERO, Vector3(-base_radius * 1.1, -0.4, 1.3), Vector3(base_radius * 1.2, -0.65, 2.0)][index]
+		visual.rotation.y = [0.0, -0.7, 0.55][index]
+		visual.visibility_range_end = 900
+		visual.add_to_group("no_collision")
+		add_child(visual)
+		var collision := CollisionShape3D.new()
+		collision.shape = _shapes[key]
+		collision.transform = visual.transform
+		body.add_child(collision)
+
+static func rock_material() -> ShaderMaterial:
+	if _rock_material == null:
+		_rock_material = ShaderMaterial.new()
+		_rock_material.shader = MOUNTAIN_SHADER
+		_rock_material.set_shader_parameter("rock_albedo", preload("res://textures/island/rock_diff.jpg"))
+		_rock_material.set_shader_parameter("rock_normal", preload("res://textures/island/rock_nor_gl.jpg"))
+		_rock_material.set_shader_parameter("rock_arm", preload("res://textures/island/rock_arm.jpg"))
+	return _rock_material
 
 
 func _build_mountain() -> void:

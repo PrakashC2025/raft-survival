@@ -91,7 +91,10 @@ var _env: Environment = null
 var _ocean: Node = null
 
 var _particles: GPUParticles3D = null
-var _rain_mat: StandardMaterial3D = null
+var _rain_mat: ShaderMaterial = null
+var _mask_boxes := PackedVector4Array()
+var _mask_levels := PackedVector4Array()
+var _mask_raft: Node3D
 var _rain_process_mat: ParticleProcessMaterial = null
 var _audio: AudioStreamPlayer = null
 var _thunder_audio: AudioStreamPlayer = null
@@ -205,15 +208,8 @@ func _build_particles() -> void:
 
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.018, clampf(fall_speed * 0.045, 0.35, 0.9))
-	_rain_mat = StandardMaterial3D.new()
-	_rain_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_rain_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_rain_mat.albedo_color = Color(0.75, 0.82, 0.9, 0.0)
-	_rain_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
-	# Soft particles: drops fade out where they meet existing geometry (water
-	# surface, roof slabs, decks) instead of visibly slicing through them.
-	_rain_mat.proximity_fade_enabled = true
-	_rain_mat.proximity_fade_distance = 0.25
+	_rain_mat = ShaderMaterial.new()
+	_rain_mat.shader = preload("res://shaders/rain_sheltered.gdshader")
 	quad.material = _rain_mat
 	_particles.draw_pass_1 = quad
 
@@ -373,6 +369,8 @@ func _cache_environment_originals() -> void:
 func _process(delta: float) -> void:
 	_follow_player()
 	_update_cover_state(delta)
+	if is_instance_valid(_mask_raft):
+		_rain_mat.set_shader_parameter("world_to_raft",_mask_raft.global_transform.affine_inverse())
 	_update_submerged_state()
 	_update_intensity(delta)
 	_process_splashes(delta)
@@ -403,6 +401,7 @@ func _update_cover_state(delta: float) -> void:
 	if _cover_timer > 0.0:
 		return
 	_cover_timer = _cover_check_interval
+	_refresh_shelter_masks()
 	if not _is_raining:
 		# No rain: skip the raycasts entirely, and make sure the emitter is
 		# back in full-box mode for the next downpour.
@@ -493,6 +492,7 @@ func _measure_cover() -> bool:
 func _apply_cover_mode() -> void:
 	if _rain_process_mat == null or _particles == null:
 		return
+	_particles.restart()
 	_last_ring_radius = _cover_ring_radius if _covered else -1.0
 	if _covered:
 		# Covered: emit ONLY in a ring outside the covered footprint, raised
@@ -502,8 +502,8 @@ func _apply_cover_mode() -> void:
 		_rain_process_mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
 		_rain_process_mat.emission_ring_axis = Vector3.UP
 		_rain_process_mat.emission_ring_height = 0.4
-		_rain_process_mat.emission_ring_radius = _cover_ring_radius
-		_rain_process_mat.emission_ring_inner_radius = _cover_ring_radius + 2.8
+		_rain_process_mat.emission_ring_radius = _cover_ring_radius + 2.8
+		_rain_process_mat.emission_ring_inner_radius = _cover_ring_radius
 		var ring_particle_amount: int = mini(particle_amount + 500, particle_amount * 2)
 		if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
 			ring_particle_amount = particle_amount
@@ -560,10 +560,11 @@ func _update_intensity(delta: float) -> void:
 		_intensity = move_toward(_intensity, _target_intensity, delta / fade_time)
 
 	if _rain_mat != null:
-		_rain_mat.albedo_color.a = clampf(_intensity * 0.55, 0.0, 0.55)
+		_rain_mat.set_shader_parameter("intensity",_intensity)
 
 	if rain_sound != null:
-		_audio.volume_db = linear_to_db(maxf(db_to_linear(rain_volume_db) * _intensity, 0.0001))
+		var shelter_db := -8.0 if _covered else 0.0
+		_audio.volume_db = move_toward(_audio.volume_db, linear_to_db(maxf(db_to_linear(rain_volume_db+shelter_db) * _intensity, 0.0001)),delta*24.0)
 
 	if _sky != null and _orig_fog_density >= 0.0:
 		_sky.set("fog_density", lerpf(_orig_fog_density, _orig_fog_density + 0.01, _intensity))
@@ -690,3 +691,52 @@ func _unhandled_input(event: InputEvent) -> void:
 			stop_rain()
 		else:
 			start_rain(120.0)
+
+func _refresh_shelter_masks() -> void:
+	_mask_boxes.clear()
+	_mask_levels.clear()
+	_mask_raft = get_tree().get_first_node_in_group("raft") as Node3D
+	if _mask_raft == null or _rain_mat == null: return
+	var pieces := _mask_raft.get_node_or_null("BuiltPieces")
+	if pieces == null: return
+	var camera_local := _mask_raft.to_local(_camera.global_position) if is_instance_valid(_camera) else Vector3.ZERO
+	var candidates: Array[Dictionary] = []
+	for piece in pieces.get_children():
+		if not piece is Node3D or piece.is_queued_for_deletion(): continue
+		var roof: bool = piece.name.begins_with("Roof")
+		var deck: bool = piece.name.begins_with("Foundation") and piece.position.y > 0.3
+		var stair: bool = piece.name.begins_with("Stairs")
+		if not roof and not deck and not stair: continue
+		for col: CollisionShape3D in piece.find_children("*","CollisionShape3D",true,false):
+			if col.disabled or not col.shape is BoxShape3D: continue
+			if stair and col.name != "CollisionLanding": continue
+			var xf: Transform3D = _mask_raft.global_transform.affine_inverse()*col.global_transform
+			var half: Vector3 = col.shape.size*xf.basis.get_scale()*0.5
+			var distance := Vector2(xf.origin.x-camera_local.x,xf.origin.z-camera_local.z).length_squared()
+			if distance > 26.0*26.0: continue
+			var yaw := xf.basis.get_euler().y
+			candidates.append({"distance":distance,"box":Vector4(xf.origin.x,xf.origin.z,half.x+0.025,half.z+0.025),"level":Vector4(xf.origin.y+half.y,-30.0,sin(yaw),cos(yaw))})
+	candidates.sort_custom(func(a: Dictionary,b: Dictionary)->bool: return a.distance<b.distance)
+	for index in mini(candidates.size(),64):
+		_mask_boxes.append(candidates[index].box)
+		_mask_levels.append(candidates[index].level)
+	_rain_mat.set_shader_parameter("cover_count",_mask_boxes.size())
+	# Godot uniform arrays keep their fixed shader length.
+	var boxes := _mask_boxes.duplicate(); boxes.resize(64)
+	var levels := _mask_levels.duplicate(); levels.resize(64)
+	_rain_mat.set_shader_parameter("cover_boxes",boxes)
+	_rain_mat.set_shader_parameter("cover_levels",levels)
+	_rain_mat.set_shader_parameter("world_to_raft",_mask_raft.global_transform.affine_inverse())
+
+func rain_visible_at(world_point: Vector3) -> bool:
+	# Mirrors the visual occluder for focused shelter checks.
+	if not is_instance_valid(_mask_raft): return true
+	var p := _mask_raft.to_local(world_point)
+	for index in _mask_boxes.size():
+		var b := _mask_boxes[index]
+		var l := _mask_levels[index]
+		var dx := p.x-b.x
+		var dz := p.z-b.y
+		var local := Vector2(dx*l.w-dz*l.z,dx*l.z+dz*l.w)
+		if p.y<l.x and p.y>l.y and absf(local.x)<b.z and absf(local.y)<b.w: return false
+	return true

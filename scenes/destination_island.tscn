@@ -7,6 +7,7 @@
 [ext_resource type="Script" path="res://scripts/island_beacon.gd" id="5_beacon"]
 [ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_tall.glb" id="6_palm_tall"]
 [ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_short.glb" id="7_palm_short"]
+[ext_resource type="Script" path="res://scripts/island_mountain.gd" id="8_mountain"]
 
 [node name="DestinationIsland" type="Node3D"]
 script = ExtResource("2_destination")
@@ -19,6 +20,12 @@ pickup_count = 6
 [node name="IslandBeacon" type="Node3D" parent="."]
 position = Vector3(0, 3.2, 0)
 script = ExtResource("5_beacon")
+
+[node name="IslandMountain" type="Node3D" parent="."]
+position = Vector3(0, 1.4, -3.8)
+script = ExtResource("8_mountain")
+base_radius = 4.5
+peak_height = 8.0
 
 [node name="PalmTreeOne" parent="." instance=ExtResource("6_palm_tall")]
 transform = Transform3D(0.965926, 0, 0.258819, 0, 1, 0, -0.258819, 0, 0.965926, -3.8, 1.8, -3.2)

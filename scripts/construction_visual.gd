@@ -7,6 +7,13 @@ const WOOD_SHADER := preload("res://shaders/wood_planks.gdshader")
 const ROPE_SHADER := preload("res://shaders/rope_fiber.gdshader")
 const ATLAS := preload("res://textures/construction/timber_photographic_atlas.png")
 static var _meshes: Dictionary = {}
+static var _hemp: ShaderMaterial
+
+static func _rope_material() -> ShaderMaterial:
+	if _hemp == null:
+		_hemp = ShaderMaterial.new()
+		_hemp.shader = ROPE_SHADER
+	return _hemp
 
 static func _wood(strip: float) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
@@ -117,11 +124,7 @@ static func rope_loop(half_size: Vector2, axis: int) -> ArrayMesh:
 	if _meshes.has(key): return _meshes[key]
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var mat := ShaderMaterial.new()
-	mat.shader = ROPE_SHADER
-	mat.set_shader_parameter("photographic_hemp",true)
-	mat.set_shader_parameter("hemp_atlas",ATLAS)
-	surface.set_material(mat)
+	surface.set_material(_rope_material())
 	# Constant-thickness hemp follows a rounded rectangular loop around the
 	# entire joined surface, rather than four loose decorative corner rings.
 	var points: Array[Vector3] = []
@@ -133,23 +136,59 @@ static func rope_loop(half_size: Vector2, axis: int) -> ArrayMesh:
 			var theta := angle + PI / 2 * segment / 4
 			var point := center + Vector2(cos(theta),sin(theta))*corner_radius
 			points.append(_axis_point(axis,0,point.x,point.y))
-	for index in points.size():
-		var next := (index+1)%points.size()
-		var tangent := (points[next]-points[index]).normalized()
-		var cross_a := _axis_point(axis,1,0,0)
-		var cross_b := tangent.cross(cross_a).normalized()
-		for side in range(6):
-			var n0 := cross_a*cos(TAU*side/6)+cross_b*sin(TAU*side/6)
-			var n1 := cross_a*cos(TAU*(side+1)/6)+cross_b*sin(TAU*(side+1)/6)
-			var a := points[index]+n0*0.025
-			var b := points[next]+n0*0.025
-			var c := points[next]+n1*0.025
-			var d := points[index]+n1*0.025
-			_face(surface,[a,b,c],[n0,n0,n1],[Vector2(index,side),Vector2(index+1,side),Vector2(index+1,side+1)])
-			_face(surface,[a,c,d],[n0,n1,n1],[Vector2(index,side),Vector2(index+1,side+1),Vector2(index,side+1)])
+	points.append(points[0])
+	_add_braided_rope(surface, points, _axis_point(axis,1,0,0))
 	surface.generate_tangents()
 	var mesh := surface.commit()
 	_meshes[key] = mesh
+	return mesh
+
+static func _add_braided_rope(surface: SurfaceTool, path: Array[Vector3], across: Vector3) -> void:
+	# Three real helical strands, with metre-based UVs. Cached and instanced.
+	var distance := 0.0
+	for edge in range(path.size()-1):
+		var length := path[edge].distance_to(path[edge+1])
+		var segments := maxi(1,ceili(length/0.075))
+		var tangent := (path[edge+1]-path[edge]).normalized()
+		var other := tangent.cross(across).normalized()
+		for segment in segments:
+			var a := float(segment)/segments
+			var b := float(segment+1)/segments
+			var da := distance+length*a
+			var db := distance+length*b
+			for strand in 3:
+				var phase := TAU*float(strand)/3.0
+				var ca := path[edge].lerp(path[edge+1],a)+(across*cos(da*TAU/0.24+phase)+other*sin(da*TAU/0.24+phase))*0.014
+				var cb := path[edge].lerp(path[edge+1],b)+(across*cos(db*TAU/0.24+phase)+other*sin(db*TAU/0.24+phase))*0.014
+				for side in 4:
+					var n0 := across*cos(TAU*side/4.0)+other*sin(TAU*side/4.0)
+					var n1 := across*cos(TAU*(side+1)/4.0)+other*sin(TAU*(side+1)/4.0)
+					var p0 := ca+n0*0.013
+					var p1 := cb+n0*0.013
+					var p2 := cb+n1*0.013
+					var p3 := ca+n1*0.013
+					var uv0 := Vector2(da,float(side)/4.0)
+					var uv1 := Vector2(db,float(side)/4.0)
+					var uv2 := Vector2(db,float(side+1)/4.0)
+					var uv3 := Vector2(da,float(side+1)/4.0)
+					_face(surface,[p0,p1,p2],[n0,n0,n1],[uv0,uv1,uv2])
+					_face(surface,[p0,p2,p3],[n0,n1,n1],[uv0,uv2,uv3])
+		distance += length
+
+static func rope_knot() -> ArrayMesh:
+	if _meshes.has("hemp_knot"): return _meshes["hemp_knot"]
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	surface.set_material(_rope_material())
+	var path: Array[Vector3] = []
+	for index in range(33):
+		var t := float(index)/32.0*TAU
+		path.append(Vector3(sin(t)*0.085, sin(t*2.0)*0.022, sin(t*2.0)*0.045))
+	_add_braided_rope(surface,path,Vector3.UP)
+	_add_braided_rope(surface,[Vector3(-0.04,0,-0.02),Vector3(-0.11,0.006,-0.10),Vector3(-0.17,-0.01,-0.12)],Vector3.UP)
+	surface.generate_tangents()
+	var mesh := surface.commit()
+	_meshes["hemp_knot"] = mesh
 	return mesh
 
 func batch(mesh: Mesh, transforms: Array[Transform3D], label: String, distance: float = 90.0) -> void:
@@ -196,12 +235,4 @@ func _ready() -> void:
 			for z in [-0.82,0.82]: knots.append(Transform3D(Basis.IDENTITY,Vector3(x+0.025,0.18 if kind == "Foundation" else 0.11,z)))
 		batch(rounded_timber(Vector3(0.12,0.12,2),2),rails,"UnderDeckBearers")
 		batch(rope_loop(Vector2(0.16 if kind == "Foundation" else 0.09,1.01),0),bindings,"HempBindings",45.0)
-	if not _meshes.has("hemp_knot"):
-		var knot := TorusMesh.new()
-		knot.inner_radius = 0.018
-		knot.outer_radius = 0.045
-		knot.rings = 16
-		knot.ring_segments = 8
-		knot.material = rope_loop(Vector2(0.16,1.01),0).surface_get_material(0)
-		_meshes["hemp_knot"] = knot
-	batch(_meshes["hemp_knot"],knots,"BindingKnots",28.0)
+	batch(rope_knot(),knots,"BindingKnots",28.0)

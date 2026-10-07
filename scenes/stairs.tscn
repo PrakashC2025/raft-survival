@@ -10,7 +10,7 @@
 size = Vector3(2, 0.22, 0.25)
 
 [sub_resource type="ConvexPolygonShape3D" id="StairRamp"]
-points = PackedVector3Array(-1, -0.2, 0, 1, -0.2, 0, -1, -0.2, 3, 1, -0.2, 3, -1, -0.1, 0, 1, -0.1, 0, -1, 2.64, 3, 1, 2.64, 3)
+points = PackedVector3Array(-1, -0.2, 0, 1, -0.2, 0, -1, -0.2, 3, 1, -0.2, 3, -1, -0.1, 0, 1, -0.1, 0, -1, 2.55, 3, 1, 2.55, 3)
 
 [sub_resource type="ShaderMaterial" id="mat_stairs"]
 shader = ExtResource("2_wood")
@@ -105,23 +105,23 @@ mesh = SubResource("BoxMesh_step")
 shape = SubResource("StairRamp")
 
 [node name="Landing" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.55, 3.5)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.46, 3.5)
 mesh = SubResource("BoxMesh_landing")
 
 [node name="CollisionLanding" type="CollisionShape3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.55, 3.5)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.46, 3.5)
 shape = SubResource("BoxShape3D_landing")
 
 [node name="BuildSockets" type="Node3D" parent="."]
 
 [node name="Socket_Base" type="Marker3D" parent="BuildSockets"]
-position = Vector3(0, -0.1, 0.6)
+position = Vector3(0, -0.1, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 0
 accepts = Array[String](["Foundation", "Stairs", "Roof"])
 
 [node name="Socket_Top" type="Marker3D" parent="BuildSockets"]
-position = Vector3(0, 2.54, 2.8)
+position = Vector3(0, 2.55, 4)
 script = ExtResource("1_buildsocket")
 socket_type = 0
 accepts = Array[String](["Foundation", "Stairs"])

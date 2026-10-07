@@ -1,14 +1,14 @@
 extends StaticBody3D
 class_name Planter
 
-## PlanterPot / PlanterBox / TreePot — one script, three .tscn variants.
+## PlanterPot / PlanterBox / TreePot â€” one script, three .tscn variants.
 ## The CollisionShape3D and BuildSockets/Socket_Base live in each .tscn
 ## (like foundation.tscn / wall.tscn) so the existing build system's
 ## socket + overlap checks work unmodified. This script only builds the
 ## decorative mesh + soil + the slot the plant grows in.
 ##
 ## IMPORTANT: keep `box_size` below equal to the CollisionShape3D's
-## BoxShape3D size set in the .tscn file — they are not auto-synced.
+## BoxShape3D size set in the .tscn file â€” they are not auto-synced.
 
 enum PlanterCategory { POT, BOX, TREE_POT }
 
@@ -44,11 +44,14 @@ func _process(delta: float) -> void:
 	var elapsed := _moisture_tick
 	_moisture_tick = 0.0
 	moisture = maxf(0.0, moisture - elapsed * 0.002)
+	if _soil != null:
+		(_soil.material_override as ShaderMaterial).set_shader_parameter("moisture",moisture)
 	var rain := get_tree().get_first_node_in_group("rain_system")
 	if rain != null and bool(rain.get("_is_raining")):
 		var query := PhysicsRayQueryParameters3D.create(global_position + Vector3.UP * (box_size.y + 0.1), global_position + Vector3.UP * 8.0, 1, [get_rid()])
 		if get_world_3d().direct_space_state.intersect_ray(query).is_empty():
 			moisture = minf(1.0, moisture + elapsed * 0.05)
+var _soil: MeshInstance3D
 var _plant: PlantInstance = null
 var _slot: Node3D = null
 var _sand_layer: MeshInstance3D = null
@@ -66,23 +69,11 @@ func _build_visual() -> void:
 	else:
 		_build_box_visual()
 
-	var soil := MeshInstance3D.new()
-	if planter_category == PlanterCategory.TREE_POT:
-		var cylinder_soil := CylinderMesh.new()
-		cylinder_soil.top_radius = box_size.x * 0.34
-		cylinder_soil.bottom_radius = cylinder_soil.top_radius
-		cylinder_soil.height = box_size.y * 0.06
-		cylinder_soil.radial_segments = 16
-		soil.mesh = cylinder_soil
-		soil.position = Vector3(0.0, box_size.y * 0.30, 0.0)
-	else:
-		var box_soil := BoxMesh.new()
-		box_soil.size = Vector3(box_size.x * 0.82, box_size.y * 0.2, box_size.z * 0.82)
-		soil.mesh = box_soil
-		soil.position = Vector3(0.0, box_size.y * 0.4, 0.0)
-	var soil_material := OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.SOIL, soil_color, 0.96)
-	soil.material_override = soil_material
-	add_child(soil)
+	var round_bed := planter_category == PlanterCategory.TREE_POT
+	var soil_size := Vector2(box_size.x,box_size.z)*(0.66 if round_bed else 0.82)
+	_soil=preload("res://scripts/soil_visual.gd").create(soil_size,round_bed,soil_color)
+	_soil.position.y=box_size.y*(0.33 if round_bed else 0.49)
+	add_child(_soil)
 
 	_slot = Node3D.new()
 	_slot.name = "PlantSlot"
@@ -92,7 +83,6 @@ func _build_visual() -> void:
 
 
 func _build_box_visual() -> void:
-	var wood_material := OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.WOOD, wood_color.darkened(0.18), 0.88)
 	var thickness := minf(0.045, box_size.x * 0.1)
 	var sizes := [Vector3(box_size.x, thickness, box_size.z), Vector3(thickness, box_size.y, box_size.z), Vector3(thickness, box_size.y, box_size.z), Vector3(box_size.x, box_size.y, thickness), Vector3(box_size.x, box_size.y, thickness)]
 	var centers := [Vector3(0, -box_size.y * 0.5 + thickness * 0.5, 0), Vector3(-box_size.x * 0.5 + thickness * 0.5, 0, 0), Vector3(box_size.x * 0.5 - thickness * 0.5, 0, 0), Vector3(0, 0, -box_size.z * 0.5 + thickness * 0.5), Vector3(0, 0, box_size.z * 0.5 - thickness * 0.5)]
@@ -100,32 +90,29 @@ func _build_box_visual() -> void:
 		var mesh_instance := MeshInstance3D.new()
 		var wall := BoxMesh.new()
 		wall.size = sizes[index]
-		mesh_instance.mesh = wall
-		mesh_instance.material_override = wood_material
+		mesh_instance.mesh = preload("res://scripts/construction_visual.gd").box(wall.size,wood_color)
 		mesh_instance.position = centers[index]
 		add_child(mesh_instance)
 
 
 func _build_tree_pot_visual() -> void:
-	var pot := TREE_POT_SCENE.instantiate() as Node3D
-	if pot == null:
-		_build_box_visual()
-		return
-	pot.name = "TreePotModel"
-	OBJECT_MATERIALS.apply_model(pot, OBJECT_MATERIALS.Kind.STONE)
-	add_child(pot)
-	var bounds := _node_local_aabb(pot)
-	if bounds.size.x <= 0.001 or bounds.size.y <= 0.001 or bounds.size.z <= 0.001:
-		pot.queue_free()
-		_build_box_visual()
-		return
-	# Preserve the pot's proportions; only fit its footprint to the collision
-	# box. Stretching the shallow CC0 model vertically made it look like a
-	# distorted bucket. The soil disk sits just below its natural rim instead.
-	var target_xz := Vector2(box_size.x * 0.92, box_size.z * 0.92)
-	var uniform_scale := minf(target_xz.x / bounds.size.x, target_xz.y / bounds.size.z)
-	pot.scale = Vector3.ONE * uniform_scale
-	pot.position = -bounds.get_center() * uniform_scale
+	for index in 20:
+		var angle := TAU*index/20.0
+		var stave := MeshInstance3D.new()
+		var shape := BoxMesh.new()
+		shape.size=Vector3(box_size.x*0.128,box_size.y*0.9,0.045)
+		stave.mesh=preload("res://scripts/construction_visual.gd").rounded_timber(shape.size,1.0)
+		stave.position=Vector3(sin(angle)*box_size.x*0.38,0,cos(angle)*box_size.z*0.38)
+		stave.rotation.y=angle
+		add_child(stave)
+	for height in [-0.30,0.26]:
+		var band := MeshInstance3D.new()
+		var ring := TorusMesh.new()
+		ring.inner_radius=box_size.x*0.38;ring.outer_radius=ring.inner_radius+0.018
+		ring.rings=24;ring.ring_segments=6
+		band.mesh=ring;band.position.y=box_size.y*height
+		band.material_override=preload("res://scripts/construction_visual.gd")._rope_material()
+		add_child(band)
 
 
 func _node_local_aabb(root: Node3D) -> AABB:
@@ -250,7 +237,7 @@ func has_plant() -> bool:
 
 
 ## Called by PlantInstance once a root crop is dug up or a tree is chopped
-## down — the slot becomes free again.
+## down â€” the slot becomes free again.
 func clear_plant() -> void:
 	_plant = null
 	planted_id = ""

@@ -24,6 +24,9 @@ func _enter_tree() -> void:
 
 
 func _ready() -> void:
+	var landscape := preload("res://scripts/island_landscape.gd").new()
+	landscape.name = "IslandLandscape"
+	add_child(landscape)
 	add_to_group("island")
 	set_meta("map_label", map_label)
 	var grove := preload("res://scripts/island_grove.gd").new() as Node3D

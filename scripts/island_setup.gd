@@ -16,6 +16,8 @@ extends Node3D
 
 const TERRAIN_SHADER_PATH := "res://shaders/island_terrain.gdshader"
 const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
+const OWNER_PALM_SOURCE := "res://3d models/coconut_palm (1).glb"
+# models/coconut_palm.glb is an identical prepared copy of OWNER_PALM_SOURCE.
 const DEFAULT_PALM: PackedScene = preload("res://models/coconut_palm.glb")
 static var _collision_shapes: Dictionary = {}
 ## Footprint the imported beach scan is normalised to (metres, widest X/Z axis).
@@ -233,9 +235,11 @@ func _is_collision_skipped(mesh_inst: MeshInstance3D, island: Node3D) -> bool:
 ## fallback signal.
 func _is_sketchfab_island(island: Node3D) -> bool:
 	for node in island.find_children("*", "Node3D", true, false):
+		if _is_gameplay_descendant(node,island): continue
 		if node.name.begins_with("Sketchfab"):
 			return true
 	for candidate in island.find_children("*", "MeshInstance3D", true, false):
+		if _is_gameplay_descendant(candidate,island): continue
 		var mesh_instance := candidate as MeshInstance3D
 		if mesh_instance != null and mesh_instance.mesh != null:
 			var size := mesh_instance.mesh.get_aabb().size
@@ -248,7 +252,7 @@ func _is_gameplay_node(node: Node) -> bool:
 	var n := node.name
 	return n.begins_with("Palm") or n.begins_with("IslandGrass") \
 			or n.begins_with("IslandBeacon") or n.begins_with("IslandMountain") \
-			or n.begins_with("IslandBirds") or n == "CoastalGrove"
+			or n.begins_with("IslandBirds") or n == "CoastalGrove" or n == "IslandLandscape"
 
 func _is_gameplay_descendant(node: Node, island: Node3D) -> bool:
 	var current := node
@@ -315,7 +319,23 @@ func _apply_terrain_materials() -> void:
 		return
 	_island_node = island
 	if _is_sketchfab_island(island):
-		# The scan carries its own textured sand material — keep it.
+		# Retain each original scan albedo; add a gradual damp shore and fine PBR detail.
+		for candidate in island.find_children("*", "MeshInstance3D", true, false):
+			var mesh_instance := candidate as MeshInstance3D
+			if mesh_instance.mesh == null or _is_gameplay_descendant(mesh_instance, island):
+				continue
+			for surface in range(mesh_instance.mesh.get_surface_count()):
+				var original := mesh_instance.get_active_material(surface) as BaseMaterial3D
+				if original == null or original.albedo_texture == null:
+					continue
+				var material := ShaderMaterial.new()
+				material.shader = load(TERRAIN_SHADER_PATH)
+				material.set_shader_parameter("base_color", original.albedo_color)
+				material.set_shader_parameter("use_scan_texture", true)
+				material.set_shader_parameter("scan_albedo", original.albedo_texture)
+				_prepare_sand_material(material)
+				mesh_instance.set_surface_override_material(surface, material)
+				_terrain_mats.append(material)
 		return
 	if not ResourceLoader.exists(TERRAIN_SHADER_PATH):
 		push_warning("IslandSetup: %s missing — island keeps its glb materials" % TERRAIN_SHADER_PATH)
@@ -339,6 +359,8 @@ func _apply_terrain_materials() -> void:
 	sand_mat.set_shader_parameter("detail_scale", 26.0)
 	sand_mat.set_shader_parameter("detail_strength", 0.12)
 	_terrain_mats = [grass_mat, sand_mat]
+	for material in _terrain_mats:
+		_prepare_sand_material(material)
 	for mi in island.find_children("*", "MeshInstance3D", true, false):
 		var mesh_inst := mi as MeshInstance3D
 		if mesh_inst.mesh == null or _is_collision_skipped(mesh_inst, island):
@@ -364,17 +386,27 @@ func _apply_terrain_materials() -> void:
 				# Unnamed surfaces: first = mound (grass), others = sand ring.
 				mat = grass_mat if s == 0 else sand_mat
 			else:
-				apply_here = false  # unknown named surface: keep its glb material
+				# This original GLB has exporter-assigned surface names. Match its
+				# terrain surfaces by index rather than leaving white placeholders.
+				mat = grass_mat if s == 0 else sand_mat
 			if apply_here:
 				mesh_inst.set_surface_override_material(s, mat)
 				touched = true
 		if touched:
 			print("[IslandSetup] terrain material applied to ", mesh_inst.name)
 
+func _prepare_sand_material(material: ShaderMaterial) -> void:
+	material.set_shader_parameter("sand_albedo", preload("res://textures/island/sand_diff.jpg"))
+	material.set_shader_parameter("sand_normal", preload("res://textures/island/sand_nor_gl.jpg"))
+	material.set_shader_parameter("sand_arm", preload("res://textures/island/sand_arm.jpg"))
+	material.set_shader_parameter("wetness_fade", 0.65)
+	material.set_shader_parameter("detail_strength", 0.07)
+
 ## True only for the imported terrain mesh (named Island_Terrain in the glb).
 ## Anything under a Palm* node or the IslandGrass field is excluded so their
 ## own materials are never overridden.
 func _is_terrain_mesh(mesh_inst: MeshInstance3D, island: Node3D) -> bool:
+	if _is_gameplay_descendant(mesh_inst,island): return false
 	if mesh_inst.name.findn("Terrain") >= 0:
 		return true
 	var n: Node = mesh_inst
@@ -419,6 +451,18 @@ func _snap_palm_trees() -> void:
 		var to: Vector3 = palm.global_position + Vector3.DOWN * 16.0
 		var q := PhysicsRayQueryParameters3D.create(from, to, 1, exclude)
 		var hit: Dictionary = space.intersect_ray(q)
+		# Authored beach-edge palms can end up below the live sea after scan
+		# normalization. Search inland rather than raising a floating trunk.
+		if hit.is_empty() or Vector3(hit.position).y < 0.42:
+			var local_position := island.to_local(palm.global_position)
+			for step in range(1,9):
+				var candidate := island.to_global(Vector3(local_position.x,0,local_position.z) * (1.0 - float(step) * 0.085))
+				q.from = Vector3(candidate.x,26,candidate.z)
+				q.to = Vector3(candidate.x,-28,candidate.z)
+				var dry_hit := space.intersect_ray(q)
+				if not dry_hit.is_empty() and Vector3(dry_hit.position).y >= 0.42 and Vector3(dry_hit.normal).y > 0.60:
+					hit = dry_hit
+					break
 		if hit.is_empty():
 			push_warning("IslandSetup: no ground found under %s" % palm.name)
 			continue

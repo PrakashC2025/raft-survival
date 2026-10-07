@@ -1,0 +1,18 @@
+{
+  "tomato": {
+    "source": "Owner supplied tomato_plant.py.blend1 inspected embedded generator",
+    "budget": {
+      "triangles": 13235,
+      "surfaces": 6
+    }
+  },
+  "potato": {
+    "source": "Original procedural geometry from owner visual reference",
+    "budget": {
+      "triangles": 14713,
+      "surfaces": 6
+    }
+  },
+  "materials": "Owner leaf colour and veins baked to embedded 512px colour/normal maps",
+  "excluded": "Source presentation pot, soil, ground, cameras, lights"
+}

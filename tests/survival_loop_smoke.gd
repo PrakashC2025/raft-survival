@@ -40,7 +40,7 @@ func _run() -> void:
 	player.set_process(false)
 	player.set_physics_process(false)
 	check(int(inv.call("total", "Carrot Seed")) == 4 and int(inv.call("total", "Tomato Seed")) == 4, "New Game grants the new crop seeds")
-	check(player.BUILD_RECIPE_NAMES.size() == 18 and player.BUILD_RECIPE_NAMES[3] == "Stairs" and player.BUILD_RECIPE_NAMES[16] == "HalfWall", "New structures preserve legacy build indexes")
+	check(player.BUILD_RECIPE_NAMES.size() == 20 and player.BUILD_RECIPE_NAMES[3] == "Stairs" and player.BUILD_RECIPE_NAMES[16] == "HalfWall" and player.BUILD_RECIPE_NAMES[18] == "WallTorch" and player.BUILD_RECIPE_NAMES[19] == "SandFilter", "New structures preserve legacy build indexes")
 	var hud := player.get_node("CanvasLayer/SurvivalHUD")
 	hud.set("_craft_open", true)
 	hud.call("_compute_layout")

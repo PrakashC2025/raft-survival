@@ -26,6 +26,7 @@ var _state: int = State.IDLE
 @export var quick_cast_distance: float = 20.0
 @export var charge_speed: float = 50.0
 @export var throw_speed: float = 42.0
+@export var hook_gravity: float = 12.0
 @export var reel_speed: float = 18.0
 @export var return_speed: float = 45.0
 @export var debris_hook_radius: float = 1.8
@@ -61,6 +62,8 @@ var _throw_direction: Vector3 = Vector3.FORWARD
 var _throw_start: Vector3 = Vector3.ZERO
 var _throw_dist: float = 0.0
 var _throw_end := Vector3.ZERO
+var _flight_duration := 0.5
+var _launch_velocity := Vector3.ZERO
 var _launch_kick := 0.0
 var _hook_world_pos: Vector3 = Vector3.ZERO
 var _hook_travelled: float = 0.0
@@ -297,24 +300,35 @@ func _handle_throwing(delta: float) -> void:
 	while remaining > 0.001 and _state == State.THROWING:
 		var step := minf(remaining, 0.5)
 		remaining -= step
+		var previous := _hook_world_pos
 		_hook_travelled += step
-		if _hook_travelled >= _throw_dist:
-			_hook_world_pos = _throw_end
-			_hook_travelled = _throw_dist
-			_check_debris()
-			_finish_flight()
-			return
 		_hook_world_pos = _flight_position(_hook_travelled)
+		# Sweep every short ballistic segment, preventing walls/terrain tunnelling.
+		var excluded: Array[RID] = []
+		if player is CollisionObject3D:
+			excluded.append((player as CollisionObject3D).get_rid())
+		var ray := PhysicsRayQueryParameters3D.create(previous, _hook_world_pos, 1, excluded)
+		var solid := get_world_3d().direct_space_state.intersect_ray(ray)
+		if not solid.is_empty():
+			_hook_world_pos = solid.position + solid.normal * 0.035
+			_start_return()
+			return
 		_check_debris()
 		if not _hooked_debris.is_empty():
 			_enter_hooked()
+			return
+		var water_y := _get_ocean_y(_hook_world_pos) + 0.15
+		# Descending crossing uses the moving surface, rather than the launch-time wave.
+		if (_hook_world_pos.y <= water_y and _hook_world_pos.y < previous.y) or _hook_travelled >= _throw_dist:
+			_hook_world_pos.y = water_y
+			_finish_flight()
 			return
 
 
 func _flight_position(distance_along: float) -> Vector3:
 	var progress := clampf(distance_along / maxf(_throw_dist, 0.001), 0.0, 1.0)
-	var arc := minf(3.0, 0.5 + _throw_dist * 0.035)
-	return _throw_start.lerp(_throw_end, progress) + Vector3.UP * sin(progress * PI) * arc
+	var elapsed := progress * _flight_duration
+	return _throw_start + _launch_velocity * elapsed - Vector3.UP * (0.5 * hook_gravity * elapsed * elapsed)
 
 func _finish_flight() -> void:
 	_snap_hook_to_water()
@@ -486,7 +500,10 @@ func _throw_hook() -> void:
 	_throw_dist = minf(hand.distance_to(_throw_end), max_hook_distance)
 	_throw_direction = (_throw_end - hand).normalized()
 	_throw_end = hand + _throw_direction * _throw_dist
+	_flight_duration = maxf(0.18, _throw_dist / maxf(throw_speed, 1.0))
+	_launch_velocity = (_throw_end - _throw_start) / _flight_duration + Vector3.UP * (0.5 * hook_gravity * _flight_duration)
 	_launch_kick = 1.0
+	if player.has_method("play_action"):player.call("play_action","hook",0.35)
 	_hook_world_pos = hand
 	_hook_travelled = 0.0
 	_hooked_debris.clear()

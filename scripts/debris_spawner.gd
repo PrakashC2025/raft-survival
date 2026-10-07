@@ -31,7 +31,7 @@ const ITEM_POOL := [
 	"Stone", "Stone",
 	"Metal",
 	# Rare starter seeds wash up too — one source of new plants without crafting.
-	"Potato Seed",
+	"Sponge", "Sponge", "Potato Seed",
 	"Coconut Seed",
 	"Banana Seed",
 ]

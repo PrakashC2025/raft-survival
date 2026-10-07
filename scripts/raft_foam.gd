@@ -26,8 +26,8 @@ func _ready() -> void:
 	_mat.render_priority = 6
 	material_override = _mat
 	var ocean: Node = get_tree().get_first_node_in_group("ocean")
-	if ocean != null and ocean.mesh is PlaneMesh:
-		_ocean_mat = (ocean.mesh as PlaneMesh).material as ShaderMaterial
+	if ocean != null:
+		_ocean_mat = ocean.get_active_material(0) as ShaderMaterial
 	_sync_uniforms()
 
 func _process(_delta: float) -> void:
@@ -39,6 +39,7 @@ func _sync_uniforms() -> void:
 	# Contact line follows the raft (the ring is a child of the raft root).
 	_mat.set_shader_parameter("plane_y", global_position.y + Y_TOP)
 	if _ocean_mat != null:
+		_mat.set_shader_parameter("wave_time",_ocean_mat.get_shader_parameter("wave_time"))
 		_mat.set_shader_parameter("night_factor",
 			_ocean_mat.get_shader_parameter("night_factor"))
 		_mat.set_shader_parameter("twilight_factor",

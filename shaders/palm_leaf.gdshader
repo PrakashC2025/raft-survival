@@ -32,13 +32,13 @@ void fragment() {
 		if (tex.a < alpha_scissor_threshold) {
 			discard;
 		}
-		ALBEDO = tex.rgb;
+		ALBEDO = tex.rgb * vec3(0.78, 0.84, 0.70);
 	} else {
 		ALBEDO = mix(leaf_color, leaf_tip_color, leaf_tip * 0.42);
 		ALBEDO *= 0.94 + 0.04 * veins + 0.04 * mottling;
 	}
 	NORMAL = FRONT_FACING ? NORMAL : -NORMAL;
-	ROUGHNESS = 0.62;
-	SPECULAR = 0.32;
-	BACKLIGHT = ALBEDO * 0.28;
+	ROUGHNESS = 0.78;
+	SPECULAR = 0.22;
+	BACKLIGHT = ALBEDO * 0.22;
 }

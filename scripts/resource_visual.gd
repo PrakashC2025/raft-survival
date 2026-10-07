@@ -7,6 +7,13 @@ static func create(item: String) -> Node3D:
 	var root := Node3D.new()
 	root.name = "Salvage" + item
 	match item:
+		"Sponge":
+			var mesh := SphereMesh.new()
+			mesh.radius=0.16;mesh.height=0.23;mesh.radial_segments=16;mesh.rings=8
+			var sponge := ShaderMaterial.new()
+			sponge.shader=preload("res://shaders/sponge_surface.gdshader")
+			_part(root,mesh,sponge,Vector3.ZERO)
+			_part(root,mesh,sponge,Vector3(0.07,-0.035,0.04))
 		"Rope":
 			var rope := MATERIALS.make(MATERIALS.Kind.CLOTH, Color(0.53, 0.40, 0.23), 0.94)
 			for layer in range(3):

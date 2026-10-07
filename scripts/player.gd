@@ -54,7 +54,7 @@ const CLIMB_OUT_RANGE := 2.2
 const CLIMB_LAND_INSET := 0.45
 
 # Build
-const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "HalfWall", "CargoCrate"]
+const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "HalfWall", "CargoCrate", "WallTorch", "SandFilter"]
 const BUILD_SCENES := [
 	"res://scenes/foundation.tscn",
 	"res://scenes/wall.tscn",
@@ -74,11 +74,15 @@ const BUILD_SCENES := [
 	"res://scenes/rescue_radio.tscn",
 	"res://scenes/half_wall.tscn",
 	"res://scenes/cargo_crate.tscn",
+	"res://scenes/wall_torch.tscn",
+	"res://scenes/sand_filter.tscn",
 ]
 const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
 const HUMAN_HAND: PackedScene = preload("res://models/human_hand.glb")
 const SURVIVAL_EQUIPMENT := preload("res://scripts/survival_equipment.gd")
 var _equipment: Node
+var _action: Node
+var _pending_build: Dictionary = {}
 const SOCKET_SNAP_RADIUS: float = 2.5
 const WALL_SURFACE_SNAP_RANGE: float = 4.0  # wall ghost snaps to a surface within this 2D distance
 const WALL_STACK_AIM_TOLERANCE: float = 0.6  # aiming this close to a wall's top stacks a 2nd floor wall
@@ -233,6 +237,9 @@ func _ready() -> void:
 	_setup_audio()
 	_setup_footprint_manager()
 	_setup_survivor_materials()
+	_action=preload("res://scripts/survival_action.gd").new()
+	_action.name="SurvivalAction"
+	add_child(_action)
 	rope_system.player = self
 	rope_system.camera = camera
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -370,6 +377,8 @@ func _setup_survivor_materials() -> void:
 	var survivor := _body_visual.get_node_or_null("BeachSurvivor") as Node3D
 	if survivor == null:
 		return
+	# Imported model faces +Z; gameplay/camera forward is -Z.
+	survivor.rotation.y = PI
 	for candidate in survivor.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := candidate as MeshInstance3D
 		if mesh_instance == null or mesh_instance.mesh == null:
@@ -474,6 +483,9 @@ func _update_survivor_animation(sprinting: bool) -> void:
 
 
 ## Reusable one-shot for nearby interactions (pickup, chopping, harvest).
+func play_action(kind: String, seconds: float=0.6, at: Vector3=Vector3.ZERO) -> void:
+	if _action!=null: _action.call("play",kind,seconds,at)
+
 func play_world_sfx(sound: AudioStream, level_db: float = -7.0) -> void:
 	if sound == null or _interaction_audio == null:
 		return
@@ -831,6 +843,7 @@ func _handle_pickup() -> void:
 				if Inventory.has("Water", 1) and planter.water_soil():
 					Inventory.remove("Water", 1)
 					_queue_save()
+					play_action("water",0.9,aim_point)
 					_hud_toast("SOIL WATERED")
 				return
 			if active_item == "Sand":
@@ -849,6 +862,8 @@ func _handle_pickup() -> void:
 					seed_name = _find_fitting_seed(planter)
 				if seed_name != "" and planter.plant_seed(seed_name.trim_suffix(" Seed")):
 					Inventory.remove(seed_name, 1)
+					play_action("plant",0.75,aim_point)
+					_queue_save()
 			return
 	if aim_valid and aim_collider != null:
 		if aim_collider.is_in_group("debris") and aim_distance <= PICKUP_RANGE:
@@ -860,16 +875,19 @@ func _handle_pickup() -> void:
 		while toggler != null and not ("toggle" in toggler):
 			toggler = toggler.get_parent()
 		if toggler != null:
+			play_action("door",0.55,aim_point)
 			toggler.toggle()
 			return
 	if _is_sand_surface_hit():
 		if _sand_gather_cooldown > 0.0:
 			return
-		var overflow := Inventory.add("Sand", 1)
+		var gathered := "Soil" if aim_point.y > 1.0 else "Sand"
+		var overflow := Inventory.add(gathered, 1)
 		if overflow == 0:
 			_sand_gather_cooldown = 0.65
 			play_world_sfx(PICKUP_SOUND, -10.0)
-			_hud_toast("SAND  +1")
+			play_action("scoop",0.65,aim_point)
+			_hud_toast(gathered.to_upper()+"  +1")
 		else:
 			_hud_toast("BAG FULL")
 		return
@@ -893,6 +911,7 @@ func _handle_selected_item_use() -> void:
 		"Bandage":
 			if Stats.health < 100 and Inventory.has("Bandage", 1):
 				Inventory.remove("Bandage", 1)
+				play_action("bandage",1.2)
 				Stats.change_health(25)
 				_hud_toast("BANDAGED · +25 HEALTH")
 			return
@@ -910,6 +929,7 @@ func _handle_selected_item_use() -> void:
 		"Water":
 			if Inventory.has("Water", 1):
 				Inventory.remove("Water", 1)
+				play_action("drink",1.0)
 				Stats.drink(35.0)
 				_hud_toast("FRESH WATER  +THIRST")
 			return
@@ -918,12 +938,14 @@ func _handle_selected_item_use() -> void:
 				var nutrition := {"Cooked Fish": 40.0, "Roast Bird": 38.0, "Baked Potato": 30.0, "Carrot": 14.0, "Tomato": 18.0, "Potato": 10.0, "Cooked Meat": 45.0, "Cooked Crab": 28.0}
 				var eaten := active_item
 				Inventory.remove(eaten, 1)
+				play_action("eat",0.95)
 				Stats.eat(float(nutrition[eaten]))
 				_hud_toast(eaten.to_upper() + "  +HUNGER")
 			return
 		"Coconut":
 			if Inventory.has("Coconut", 1):
 				Inventory.remove("Coconut", 1)
+				play_action("eat",0.95)
 				Stats.eat(12.0)
 				Stats.drink(28.0)
 				_hud_toast("COCONUT  +HUNGER  +THIRST")
@@ -931,18 +953,21 @@ func _handle_selected_item_use() -> void:
 		"Banana":
 			if Inventory.has("Banana", 1):
 				Inventory.remove("Banana", 1)
+				play_action("eat",0.95)
 				Stats.eat(30.0)
 				_hud_toast("BANANA  +HUNGER")
 			return
 		"Fish":
 			if Inventory.has("Fish", 1):
 				Inventory.remove("Fish", 1)
+				play_action("eat",0.95)
 				Stats.eat(10.0)
 				_hud_toast("RAW FISH  +HUNGER")
 			return
 		"Spear":
 			var shark := _get_aimed_shark()
 			if shark != null and aim_distance <= 5.2 and shark.has_method("take_damage"):
+				play_action("strike",0.55,aim_point)
 				shark.call("take_damage", 38.0, self)
 				play_world_sfx(PICKUP_SOUND, -10.0)
 			return
@@ -959,6 +984,7 @@ func _handle_selected_item_use() -> void:
 				_hud_toast("AIM DOWN AT OPEN WATER TO CAST")
 				return
 			_fishing_time_remaining = randf_range(4.0, 6.5)
+			play_action("cast",0.8,_fishing_cast_target)
 			_equipment.call("show_cast", _fishing_cast_target)
 			_fishing_cooldown = 7.5
 			_hud_toast("LINE IN THE WATER...")
@@ -997,6 +1023,7 @@ func _install_raft_upgrade(tier: int) -> void:
 	raft_upgrade_tier = maxi(raft_upgrade_tier, tier)
 	if raft.has_method("set_upgrade_tier"):
 		raft.call("set_upgrade_tier", raft_upgrade_tier)
+	play_action("install",1.0,raft.global_position)
 	_queue_save()
 	_hud_toast("SAIL INSTALLED  •  MAP TO PLOT A COURSE" if tier == 1 else "OUTBOARD MOTOR INSTALLED  •  SPEED UPGRADED")
 
@@ -1008,7 +1035,9 @@ func _tick_fishing(delta: float) -> void:
 	if active_item != "Fishing Rod" or is_swimming:
 		_fishing_time_remaining = 0.0
 		return
+	var before := _fishing_time_remaining
 	_fishing_time_remaining = maxf(0.0, _fishing_time_remaining - delta)
+	if before>1.2 and _fishing_time_remaining<=1.2:play_action("reel",1.2,_fishing_cast_target)
 	if _fishing_time_remaining <= 0.0:
 		var overflow := Inventory.add("Fish", 1)
 		if overflow > 0:
@@ -1184,6 +1213,7 @@ func _collect_debris(debris: Node3D) -> void:
 		if overflow < pickup_amount and debris.has_method("set_pickup_amount"):
 			debris.call("set_pickup_amount", overflow)
 		return
+	play_action("grab",0.65,debris.global_position)
 	debris.set("collected", true)
 	if debris.has_method("get_pickup_id"):
 		Inventory.mark_island_pickup_collected(str(debris.call("get_pickup_id")))
@@ -1196,6 +1226,7 @@ func _collect_debris(debris: Node3D) -> void:
 func _process(delta: float) -> void:
 	_tick_save(delta)
 	_tick_fishing(delta)
+	_tick_build_action(delta)
 	_update_hud()
 	_poll_gameplay_actions()
 	# Quick-save (F5) works in every mode — snapshots slot "quick".
@@ -1274,6 +1305,7 @@ func _poll_edit_actions() -> void:
 
 
 func _poll_build_mode_actions() -> void:
+	if not _pending_build.is_empty(): return
 	if Input.is_action_just_pressed("rotate_build"):
 		_rotate_build()
 	if Input.is_action_just_pressed("rotate_build_x"):
@@ -1288,7 +1320,7 @@ func _poll_build_mode_actions() -> void:
 	# Validate on the exact placement action so a stale preview cannot be used.
 	if Input.is_action_just_pressed("place_build"):
 		_update_build_preview()
-		_try_build()
+		_begin_build_action()
 		_build_preview_timer = 0.0
 
 
@@ -1314,6 +1346,7 @@ func _toggle_build() -> void:
 		return
 	build_mode = !build_mode
 	if build_mode:
+		_hud_toast("BUILD MODE · CHOOSE A PIECE, THEN PLACE THE GREEN PREVIEW")
 		build_rotation = 0.0
 		build_rotation_x = 0.0
 		_spawn_ghost()
@@ -1534,7 +1567,7 @@ func _notification(what: int) -> void:
 ## Serialize every piece under the raft's BuiltPieces into a compact array:
 ## each entry is the piece TYPE ("Foundation", "Wall", ...) plus its 12-float
 ## raft-local Transform3D (basis 9 + origin 3). Local transforms are stable
-## because the raft only bobs on Y (its rotation is always identity).
+## through bobbing/rocking. Construction holds the raft level for exact sockets.
 func _serialize_built_pieces() -> Array:
 	var raft: Node3D = _get_raft_node()
 	if raft == null:
@@ -1561,6 +1594,8 @@ func _serialize_built_pieces() -> Array:
 				t.origin.x, t.origin.y, t.origin.z,
 			],
 		}
+		if piece.has_meta("construction_cost"):
+			entry["cost"]=piece.get_meta("construction_cost")
 		if piece is Planter:
 			entry["sand"] = (piece as Planter).has_sand()
 			entry["moisture"] = (piece as Planter).moisture
@@ -1605,6 +1640,12 @@ func _restore_built_pieces() -> void:
 			continue
 		var piece: Node3D = scene.instantiate()
 		piece.name = "%s_%d" % [pname, piece.get_instance_id()]
+		if entry.get("cost",null) is Dictionary:
+			var restored_cost := {}
+			for material in entry.cost:
+				if material in ["Wood","Rope","Plastic","Metal","Stone","Barrel","Soil","Sand","Sponge"]:
+					restored_cost[material]=clampi(int(entry.cost[material]),0,100)
+			piece.set_meta("construction_cost",restored_cost)
 		var floats: Array = entry.get("x", [])
 		if floats.size() == 12:
 			var tb := Basis(
@@ -1713,6 +1754,7 @@ func _update_hand_item() -> void:
 		var human_hand := HUMAN_HAND.instantiate() as Node3D
 		OBJECT_MATERIALS.apply_model(human_hand, OBJECT_MATERIALS.Kind.SKIN)
 		human_hand.name = "HumanHand"
+		human_hand.set_meta("first_person_hand",true)
 		human_hand.position = Vector3(0.01, -0.045, -0.02)
 		_hand_item.add_child(human_hand)
 	if active_item == "":
@@ -1787,7 +1829,7 @@ func _update_hand_item() -> void:
 			s2.radius = 0.075
 			s2.height = 0.15
 			_hand_part(s2, rock, Transform3D(Basis(Vector3.UP, 0.7), Vector3(0.08, -0.07, -0.15)))
-		"Sand":
+		"Sand", "Soil":
 			var sand_scoop := SphereMesh.new()
 			sand_scoop.radius = 0.14
 			sand_scoop.height = 0.25
@@ -1795,7 +1837,7 @@ func _update_hand_item() -> void:
 			sand_scoop.rings = 7
 			var sand_material := ShaderMaterial.new()
 			sand_material.shader = SAND_SURFACE_SHADER
-			sand_material.set_shader_parameter("sand_color", Color(0.78, 0.62, 0.40, 1.0))
+			sand_material.set_shader_parameter("sand_color", Color(0.28,0.19,0.10) if active_item=="Soil" else Color(0.78, 0.62, 0.40, 1.0))
 			sand_material.set_shader_parameter("grain_scale", 38.0)
 			_hand_part_shader(sand_scoop, sand_material,
 					Transform3D(Basis.IDENTITY.scaled(Vector3(1.25, 0.52, 0.88)), Vector3(0.0, -0.04, -0.22)))
@@ -1835,17 +1877,9 @@ func _update_hand_item() -> void:
 			_hand_part(spear_tip, _hand_mat(Color(0.7, 0.73, 0.76), 0.3, 0.72),
 					Transform3D(along_forward, Vector3(0.0, 0.0, -0.82)))
 		"Fishing Rod":
-			var rod_mat := _hand_mat(Color(0.43, 0.3, 0.16), 0.8)
-			var rod_mesh := CylinderMesh.new()
-			rod_mesh.top_radius = 0.022
-			rod_mesh.bottom_radius = 0.034
-			rod_mesh.height = 0.8
-			_hand_part(rod_mesh, rod_mat, Transform3D(along_forward, Vector3(0.0, 0.02, -0.34)))
-			var reel := CylinderMesh.new()
-			reel.top_radius = 0.075
-			reel.bottom_radius = 0.075
-			reel.height = 0.06
-			_hand_part(reel, _hand_mat(Color(0.62, 0.66, 0.67), 0.42, 0.5), Transform3D(Basis.IDENTITY, Vector3(0.06, -0.02, -0.28)))
+			var rod := preload("res://scripts/fishing_rod_visual.gd").new()
+			rod.name="FishingRod"
+			_hand_item.add_child(rod)
 		"Sail Kit":
 			var kit_pole := CylinderMesh.new()
 			kit_pole.top_radius = 0.025
@@ -1898,7 +1932,10 @@ func _update_hand_item() -> void:
 				color = Color(0.65, 0.08, 0.025)
 			_hand_part(produce, _hand_mat(color), Transform3D(Basis.IDENTITY.scaled(shape), Vector3(0.0, 0.0, -0.2)))
 		"Water":
-			_hand_item.add_child(RESOURCE_VISUAL.create("Plastic"))
+			var water_can := RESOURCE_VISUAL.create("Plastic")
+			# Its raised handle sits at the fingers; the can hangs below the palm.
+			water_can.position=Vector3(0,-0.22,-0.20)
+			_hand_item.add_child(water_can)
 		"Diving Tank":
 			_add_hand_asset("res://models/diving_tank.glb",0.38)
 		"Bandage":
@@ -1946,6 +1983,15 @@ func _add_hand_asset(path: String, target_size: float) -> void:
 	OBJECT_MATERIALS.apply_model(model, OBJECT_MATERIALS.kind_for_item(active_item))
 	_hand_item.add_child(model)
 
+
+func get_fishing_rod_tip() -> Vector3:
+	var held: Node3D=_hand_item
+	if cam_mode==CAM_TPS and _action!=null and is_instance_valid(_action.get("_held")):
+		held=_action.get("_held")
+	if is_instance_valid(held):
+		var tip := held.find_child("FishingTip",true,false) as Node3D
+		if tip!=null:return tip.global_position
+	return camera.to_global(Vector3(0.18,-0.25,-1.3))
 
 func get_rope_launch_origin() -> Vector3:
 	var launcher: Node3D = _third_person_launcher if cam_mode == CAM_TPS else _rope_launcher
@@ -1998,6 +2044,10 @@ func _update_hand_sway(_delta: float) -> void:
 		var draw_fraction: float = float(_equipment.call("get_draw_fraction"))
 		_hand_item.position += Vector3(-0.025, 0.02, 0.10) * draw_fraction
 		_hand_item.rotation.x -= draw_fraction * 0.12
+	if _action!=null:
+		var action_pose: Dictionary=_action.call("sample_pose")
+		_hand_item.position+=action_pose.view_pos
+		_hand_item.rotation+=action_pose.view_rot
 	if _rope_launcher != null and is_instance_valid(_rope_launcher):
 		_rope_launcher.get_node("LoadedHook").visible = not rope_system.is_active()
 	if _third_person_launcher != null and is_instance_valid(_third_person_launcher):
@@ -2013,11 +2063,14 @@ func _update_hand_sway(_delta: float) -> void:
 ##     range, and the E key collects those even without precise aiming).
 func interaction_caption() -> String:
 	if active_item == "Torch":
+		if aim_valid and aim_collider != null and _find_piece_name(aim_collider) == "WallTorch": return "TAKE / LIGHT"
+		if bool(_resolve_wall_torch().get("valid",false)): return "MOUNT"
 		return "PUT OUT" if get_node("SurvivalProgression").torch_fuel > 0 else "LIGHT"
 	if active_item in ["Diving Tank", "Bandage"]:
 		return "EQUIP" if active_item == "Diving Tank" else "HEAL"
 	if active_item == "Bow":
 		return "SHOOT"
+	if _is_sand_surface_hit():return "GATHER SOIL" if aim_point.y>1.0 else "GATHER SAND"
 	if aim_valid and aim_collider != null and aim_distance <= PICKUP_RANGE:
 		var target: Node = aim_collider
 		while target != null:
@@ -2417,6 +2470,7 @@ func _find_support_piece(collider: Node3D) -> Node3D:
 func _find_piece_name(node: Node3D) -> String:
 	if node == null:
 		return ""
+	if node.name.begins_with("WallTorch"): return "WallTorch"
 	# Half walls share wall attachments, but save their distinct scene.
 	if node.name.begins_with("HalfWall"): return "Wall"
 	for n in BUILD_RECIPE_NAMES:
@@ -2531,22 +2585,12 @@ func _compute_wall_transform(foundation: Node3D, aim_world: Vector3) -> Transfor
 	#   East/West  edges (socket offset along X): wall along Z → rotate 90°.
 	# The slide axis is the direction the wall runs along.
 	var edge_angle: float = 0.0
-	var edge_axis: Vector3 = Vector3(1, 0, 0)
 	if absf(socket_local.x) > absf(socket_local.z):
 		edge_angle = PI * 0.5
-		edge_axis = Vector3(0, 0, 1)
 	# Combined rotation = edge rotation + player build_rotation.
-	var total_rot: float = edge_angle + build_rotation
-	# Slide the wall along the edge to follow the crosshair. `along` is the aim
-	# projected onto the edge axis, relative to the edge socket (edge midpoint).
-	var local_aim: Vector3 = flat_xf.affine_inverse() * aim_world
-	var along: float = local_aim.dot(edge_axis) - socket_local.dot(edge_axis)
-	# Clamp to the foundation extent — small inset so the wall's own footprint
-	# samples stay on the surface when the wall is slid all the way to a corner.
-	var max_slide: float = FOUNDATION_HALF_WIDTH - 0.1
-	along = clampf(along, -max_slide, max_slide)
-	# World position of the edge socket, slid along the edge axis.
-	var target_local: Vector3 = socket_local + edge_axis * along
+	var total_rot: float = edge_angle + roundf(build_rotation / PI) * PI
+	# One complete wall per deck edge; never slide halfway into a neighbour.
+	var target_local: Vector3 = socket_local
 	var target_flat_pos: Vector3 = flat_xf * target_local
 	# Wall Socket_Base local position (bottom center of the wall).
 	var wall_base_local: Vector3 = Vector3(0, -1.25, 0)
@@ -2580,7 +2624,7 @@ func _solve_wall_edge_tile(deck: Node3D, aim_world: Vector3, edge_name: String) 
 	if absf(socket_local.x) > absf(socket_local.z):
 		edge_angle = PI * 0.5
 		edge_axis = Vector3(0, 0, 1)
-	var total_rot: float = edge_angle + build_rotation
+	var total_rot: float = edge_angle + roundf(build_rotation / PI) * PI
 	var local_aim: Vector3 = flat_xf.affine_inverse() * aim_world
 	var raw_along: float = local_aim.dot(edge_axis) - socket_local.dot(edge_axis)
 	# Slot index under the crosshair: deck cells are 2.0m, so slots repeat every
@@ -3462,7 +3506,70 @@ func _resolve_roof_plane_tile(aim_pos: Vector3, _gh: Node3D) -> Dictionary:
 	return {"valid": true, "socket": side_socket, "transform": solved_r, "support": anchor}
 
 
+func _resolve_wall_torch() -> Dictionary:
+	var invalid := {"valid":false, "socket":null}
+	if not aim_valid or aim_collider == null or not is_instance_valid(aim_collider): return invalid
+	if global_position.distance_to(aim_point) > 3.2: return invalid
+	if _find_piece_name(aim_collider) not in ["Wall","Window"]: return invalid
+	if absf(aim_normal.y) > 0.45: return invalid
+	var wall := aim_collider as Node3D
+	var local := wall.to_local(aim_point)
+	# Window openings are empty: mount only on its solid lower timber.
+	if _find_piece_name(wall) == "Window" and local.y > -0.25: return invalid
+	var side := 1.0 if wall.global_basis.z.dot(aim_normal) >= 0.0 else -1.0
+	# Offset clear of rounded timber, clamp away from corners and the ceiling.
+	local = Vector3(clampf(local.x,-0.78,0.78),clampf(local.y,-0.65,0.45),side*0.31)
+	if wall.name.begins_with("HalfWall"): local.y = clampf(local.y,-0.32,0.01)
+	var pos := wall.to_global(local)
+	var normal := wall.global_basis.z.normalized()*side
+	var up := wall.global_basis.y.normalized()
+	var orientation := Basis(up.cross(normal).normalized(),up,normal)
+	var raft := _get_raft_node()
+	if raft == null: return invalid
+	var container := raft.get_node_or_null("BuiltPieces")
+	if container != null:
+		var count := 0
+		for mounted in container.get_children():
+			if _find_piece_name(mounted as Node3D) != "WallTorch": continue
+			count += 1
+			if (mounted as Node3D).global_position.distance_to(pos) < 0.65: return invalid
+		if count >= 16: return invalid
+	var sphere := SphereShape3D.new()
+	sphere.radius = 0.075
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = sphere
+	query.transform.origin = pos+up*0.46
+	query.collision_mask = 1
+	query.exclude = [get_rid()]
+	if not get_world_3d().direct_space_state.intersect_shape(query,1).is_empty(): return invalid
+	return {"valid":true,"socket":null,"transform":Transform3D(orientation,pos),"support":wall}
+
+func mount_held_torch() -> bool:
+	if not Inventory.has("Torch",1): return false
+	var placement := _resolve_wall_torch()
+	if not bool(placement.get("valid",false)): return false
+	var raft := _get_raft_node()
+	var container := raft.get_node_or_null("BuiltPieces")
+	if container == null:
+		container = Node3D.new()
+		container.name = "BuiltPieces"
+		raft.add_child(container)
+	var torch := build_pieces[BUILD_RECIPE_NAMES.find("WallTorch")].instantiate() as Node3D
+	torch.name = "WallTorch_%d" % torch.get_instance_id()
+	torch.transform = raft.global_transform.affine_inverse() * (placement.transform as Transform3D)
+	var progress := get_node("SurvivalProgression")
+	torch.set("fuel",float(progress.get("torch_fuel")))
+	torch.set("burning",float(progress.get("torch_fuel")) > 0.0)
+	Inventory.remove("Torch",1)
+	progress.set("torch_fuel",0.0)
+	container.add_child(torch)
+	_hud_toast("TORCH MOUNTED · SELECT WOOD TO REFUEL, USE TO TAKE")
+	_queue_save()
+	return true
+
 func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
+	if piece_name == "WallTorch":
+		return _resolve_wall_torch()
 	if piece_name == "HalfWall":
 		var half := _resolve_placement("Wall", _hit_point)
 		if half.has("transform"):
@@ -3474,7 +3581,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	_diag["piece"] = piece_name
 	if not aim_point.is_finite():
 		return {"valid": false}
-	if piece_name == "Roof" and (aim_collider == null or _find_piece_name(_find_support_piece(aim_collider)) != "Roof"):
+	if piece_name == "Roof" and _get_raft_node() != null and _get_raft_node().to_local(aim_point).y < 3.2:
 		var room := _resolve_smart_roof(aim_point)
 		if not room.is_empty():
 			return room
@@ -4057,7 +4164,11 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 							_diag["error_category"] = "COLLISION_ERROR"
 							return {"valid": false, "socket": null, "transform": Transform3D(), "support": wall_foundation}
 			if _w2w_socket == null:
-				_w2w_socket = _find_best_socket(wall_foundation, piece_name, wall_aim, wall_aim_normal)
+				# Ground floor walls continue on the foundation grid. Thin front/
+				# back wall sockets otherwise put panels 20cm apart through a room.
+				var ground_raft := _get_raft_node()
+				if ground_raft == null or ground_raft.to_local(wall_foundation.global_position).y > 2.0:
+					_w2w_socket = _find_best_socket(wall_foundation, piece_name, wall_aim, wall_aim_normal)
 			if _w2w_socket != null:
 				var _wall_idx: int = BUILD_RECIPE_NAMES.find(piece_name)
 				var _w2w_temp: Node3D = _solver_template(build_pieces[_wall_idx])
@@ -4110,52 +4221,14 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				wall_foundation = _wf_fb_target
 		var _f_sn: String = _find_piece_name(wall_foundation)
 		if _f_sn == "Roof" and _is_roof_top_aim(wall_foundation, wall_aim):
-			# ROOF TOP: a roof aimed from above is a second-floor deck — walls,
-			# doors and windows snap to its edges (and center) exactly like on a
-			# Foundation, standing on the roof's TOP face. A roof seen from below
-			# (or at its side) is a ceiling and falls through to the deck-plane
-			# projection, where the footprint check keeps it invalid.
-			var _flat_roof: Transform3D = _get_flat_support_transform(wall_foundation)
-			var _roof_local_aim: Vector3 = _flat_roof.affine_inverse() * wall_aim
-			var _roof_top_y: float = _flat_roof.origin.y + 0.075
-			var _center_zone_r: float = FOUNDATION_HALF_WIDTH * 0.5
-			if absf(_roof_local_aim.x) <= _center_zone_r and absf(_roof_local_aim.z) <= _center_zone_r:
-				solved = Transform3D(
-					Basis(Vector3.UP, build_rotation),
-					Vector3(_flat_roof.origin.x, _roof_top_y + 1.25, _flat_roof.origin.z))
-				_diag["solved_pos"] = solved.origin
-				_diag["wall_foundation"] = wall_foundation.name
-				_diag["wall_edge"] = "CENTER"
-			else:
-				var roof_edge: String = _select_wall_edge(wall_foundation, wall_aim)
-				solved = _solve_wall_edge_tile(wall_foundation, wall_aim, roof_edge)
-				# Roof edge sockets sit on the slab's MID plane (roof tiling);
-				# lift the wall onto the TOP face so its bottom rests flush.
-				solved.origin.y += 0.075
-				_diag["solved_pos"] = solved.origin
-				_diag["wall_foundation"] = wall_foundation.name
-				_diag["wall_edge"] = roof_edge
+			var roof_edge: String = _select_wall_edge(wall_foundation, wall_aim)
+			solved = _solve_wall_edge_tile(wall_foundation, wall_aim, roof_edge)
+			solved.origin.y += 0.075
+			_diag["wall_edge"] = roof_edge
 		elif _f_sn == "Foundation" or _f_sn == "Raft":
-			# CENTER placement: aiming in the middle zone of a deck piece places
-			# the wall upright in the deck CENTER (Foundation.Socket_Top / raft
-			# center) instead of snapping to the nearest edge.
-			var _flat_wf: Transform3D = _get_flat_support_transform(wall_foundation)
-			var _local_aim_wf: Vector3 = _flat_wf.affine_inverse() * wall_aim
-			var _center_zone: float = FOUNDATION_HALF_WIDTH * 0.5
-			if absf(_local_aim_wf.x) <= _center_zone and absf(_local_aim_wf.z) <= _center_zone:
-				var _deck_c: float = _get_structural_deck_y()
-				solved = Transform3D(
-					Basis(Vector3.UP, build_rotation),
-					Vector3(_flat_wf.origin.x, _deck_c + 1.25, _flat_wf.origin.z))
-				_diag["solved_pos"] = solved.origin
-				_diag["wall_foundation"] = wall_foundation.name
-				_diag["wall_edge"] = "CENTER"
-			else:
-				var edge_name: String = _select_wall_edge(wall_foundation, wall_aim)
-				solved = _solve_wall_edge_tile(wall_foundation, wall_aim, edge_name)
-				_diag["solved_pos"] = solved.origin
-				_diag["wall_foundation"] = wall_foundation.name
-				_diag["wall_edge"] = edge_name
+			var edge_name: String = _select_wall_edge(wall_foundation, wall_aim)
+			solved = _solve_wall_edge_tile(wall_foundation, wall_aim, edge_name)
+			_diag["wall_edge"] = edge_name
 		else:
 			# Support is not Foundation/Raft (or none found) — project to deck
 			# height at the aim point; the footprint check decides validity.
@@ -4626,7 +4699,10 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		return {"valid": true, "socket": roof_target_socket, "transform": solved, "support": roof_support}
 
 	# ============================================================
-	# OTHER NON-FOUNDATION: Socket-based placement (Window, Door, etc.)
+	if piece_name == "Stairs":
+		return _resolve_stairs(support, effective_aim_point)
+
+	# OTHER NON-FOUNDATION: Socket-based placement
 	# ============================================================
 	# Step 4: Find target socket on the support
 	var socket: BuildSocket = null
@@ -4790,6 +4866,12 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 # BUILD SYSTEM — GHOST PREVIEW
 # ============================================================
 func _update_build_preview() -> void:
+	if not _pending_build.is_empty():
+		var raft := _get_raft_node()
+		if raft!=null and is_instance_valid(ghost):
+			_ghost_transform=raft.global_transform*_pending_build.local_transform
+			ghost.global_transform=_ghost_transform
+		return
 	_update_build_grid()
 	if ghost == null:
 		return
@@ -5163,6 +5245,57 @@ func _overlay_hud_text() -> String:
 # ============================================================
 # BUILD SYSTEM — TRY BUILD (CONFIRM)
 # ============================================================
+## Lock the visible candidate while hands assemble it, then revalidate and
+## spend once. Cancelling, leaving reach or changing selection costs nothing.
+func _begin_build_action() -> void:
+	if not _pending_build.is_empty():return
+	var name2: String=BUILD_RECIPE_NAMES[selected_piece_index]
+	if not build_valid or not Inventory.can_afford(name2):
+		_try_build()
+		return
+	var raft := _get_raft_node()
+	if raft==null:return
+	var tiles: int = _smart_roof_plan.get("transforms",[]).size() if name2=="Roof" else 1
+	if tiles>1 and not Inventory.infinite:
+		var costs := {}
+		for item in Inventory.recipe_cost(name2):costs[item]=int(Inventory.recipe_cost(name2)[item])*tiles
+		if not Inventory.has_cost(costs):
+			_hud_toast("ROOF · NEED %d WOOD + %d ROPE FOR %d TILES"%[costs.Wood,costs.Rope,tiles]);return
+	_pending_build={"time":0.0,"index":selected_piece_index,"collider":aim_collider,
+		"point":raft.to_local(aim_point),"normal":aim_normal,"distance":aim_distance,
+		"local_transform":raft.global_transform.affine_inverse()*_ghost_transform}
+	play_action("build",0.75,_ghost_transform.origin)
+	_action.get("_label").text="ASSEMBLING "+name2.to_upper()+ (" · %d TILES"%tiles if tiles>1 else "")
+
+func _tick_build_action(delta: float) -> void:
+	if _pending_build.is_empty():return
+	var hud := get_node_or_null("CanvasLayer/SurvivalHUD")
+	var cancelled := not build_mode or selected_piece_index!=int(_pending_build.index) or is_swimming
+	if hud!=null and bool(hud.call("gameplay_input_blocked")):cancelled=true
+	var raft := _get_raft_node()
+	if raft==null or not is_instance_valid(_pending_build.collider):cancelled=true
+	if cancelled:
+		_pending_build.clear();_action.call("stop");_hud_toast("BUILD CANCELLED · MATERIALS KEPT");return
+	_pending_build.time=float(_pending_build.time)+delta
+	if float(_pending_build.time)<0.75:return
+	var saved := _pending_build.duplicate();_pending_build.clear()
+	var placement: Vector3=raft.to_global(saved.point)
+	if global_position.distance_to(placement)>PICKUP_RANGE+4.0:
+		_hud_toast("BUILD CANCELLED · OUT OF REACH");return
+	var old_aim := [aim_point,aim_normal,aim_collider,aim_distance,aim_valid]
+	aim_point=placement
+	aim_normal=saved.normal
+	aim_collider=saved.collider
+	aim_distance=float(saved.distance)
+	aim_valid=true
+	_update_build_preview()
+	_try_build()
+	aim_point=old_aim[0]
+	aim_normal=old_aim[1]
+	aim_collider=old_aim[2]
+	aim_distance=old_aim[3]
+	aim_valid=old_aim[4]
+
 func _try_build() -> void:
 	if not build_valid:
 		_hud_toast("CAN'T PLACE HERE: " + str(_diag.get("invalid_reason", "AIM AT A SUPPORTED SPACE")))
@@ -5178,7 +5311,7 @@ func _try_build() -> void:
 	# checks. Requiring an optional socket here contradicts a green preview.
 	if piece_name != "Foundation" and piece_name != "Wall" \
 		and piece_name != "Door" and piece_name != "Window" and piece_name != "HalfWall" \
-		and _ghost_target_socket == null:
+		and piece_name != "Stairs" and piece_name != "WallTorch" and _ghost_target_socket == null:
 		_hud_toast("AIM AT A FREE CONNECTION POINT")
 		return
 	if not Inventory.recipe_unlocked(piece_name):
@@ -5186,8 +5319,8 @@ func _try_build() -> void:
 		return
 	if not Inventory.can_afford(piece_name):
 		var needed: PackedStringArray = []
-		for material in Inventory.RECIPES.get(piece_name, {}):
-			var missing: int = int(Inventory.RECIPES[piece_name][material]) - Inventory.total(material)
+		for material in Inventory.recipe_cost(piece_name):
+			var missing: int = int(Inventory.recipe_cost(piece_name)[material]) - Inventory.total(material)
 			if missing > 0:
 				needed.append("%d %s" % [missing, material])
 		_hud_toast("NEED " + ", ".join(needed))
@@ -5201,6 +5334,7 @@ func _try_build() -> void:
 	var piece := scene.instantiate() as Node3D
 	if piece == null:
 		return
+	var spent_cost := Inventory.recipe_cost(piece_name)
 	if not Inventory.craft(piece_name):
 		piece.free()
 		return
@@ -5209,6 +5343,7 @@ func _try_build() -> void:
 	# name-based piece detection (_find_piece_name etc.) for every piece after
 	# the first of its type.
 	piece.name = "%s_%d" % [piece_name, piece.get_instance_id()]
+	piece.set_meta("construction_cost",spent_cost)
 	# ALWAYS parent under the actual raft — NOT the socket's parent_raft.
 	# When building from a Foundation, get_parent_raft() returns the Foundation
 	# (it is in build_surface group). Parenting there causes the piece local
@@ -5311,6 +5446,8 @@ func _link_reciprocal_socket(new_piece: Node3D, parent_socket: BuildSocket) -> v
 # BUILD SYSTEM — EDIT SYSTEM
 # ============================================================
 const RECIPE_REFUND := {
+	"WallTorch": {"Wood":2,"Rope":1},
+	"SandFilter": {"Wood":6,"Sand":4,"Sponge":2,"Plastic":2},
 	"CargoCrate": {"Wood": 6, "Rope": 2, "Metal": 1},
 	"HalfWall": {"Wood": 4, "Rope": 1},
 	"Foundation": {"Wood": 5},
@@ -5620,6 +5757,8 @@ func _remove_editing() -> void:
 		if building_name.begins_with(recipe_name):
 			refund = RECIPE_REFUND[recipe_name]
 			break
+	if _editing.has_meta("construction_cost"):
+		refund=_editing.get_meta("construction_cost").duplicate()
 	if not Inventory.can_store_rewards(refund):
 		_hud_toast("BAG FULL  •  CLEAR SPACE BEFORE REMOVING")
 		return
@@ -5922,6 +6061,9 @@ static func _valid_saved_transform(values: Variant) -> bool:
 
 func _resolve_smart_roof(world_aim: Vector3) -> Dictionary:
 	var plan := SMART_ROOF.plan(_get_raft_node(), world_aim)
+	if plan.get("stair_opening",false):
+		_diag["invalid_reason"] = "KEEP STAIRWELL OPEN · ROOF BESIDE THE LANDING"
+		return {"valid":false}
 	if plan.is_empty(): return {}
 	if plan.get("occupied", false):
 		_diag["invalid_reason"] = "ROOM ALREADY ROOFED"
@@ -6075,3 +6217,58 @@ func _add_swim_animation(animator: AnimationPlayer, idle_name: String, _survivor
 	var library := AnimationLibrary.new()
 	library.add_animation("Swim",animation)
 	animator.add_animation_library("Survival",library)
+
+func _resolve_stairs(support: Node3D, _world_aim: Vector3) -> Dictionary:
+	var kind := _find_piece_name(support)
+	if kind not in ["Raft","Foundation","Roof","Stairs"]:
+		_diag["invalid_reason"] = "AIM AT A DECK OR STAIR LANDING"
+		return {"valid": false}
+	var flat := _get_flat_support_transform(support)
+	var basis := flat.basis.rotated(Vector3.UP, snappedf(build_rotation, PI/2.0))
+	var base := flat.origin
+	if kind == "Stairs":
+		# The landing ends at local Z=4, with its top at Y=2.55.
+		base = flat * Vector3(0,2.55,4.0)
+	else:
+		base += basis * Vector3(0,0,-1.0)
+		base.y += 0.075 if kind == "Roof" else 0.15
+	var solved := Transform3D(basis,base+Vector3.UP*0.1)
+	var scene: PackedScene = build_pieces[BUILD_RECIPE_NAMES.find("Stairs")]
+	var template := _solver_template(scene)
+	# Check every real collision shape, including the sloping walkable ramp.
+	# Existing decks below the ramp are support; walls and machines are not.
+	var probe_excludes := _support_ray_excludes()
+	probe_excludes.append(support.get_rid())
+	for collider: CollisionShape3D in template.find_children("*","CollisionShape3D",true,false):
+		var query := PhysicsShapeQueryParameters3D.new()
+		query.shape = collider.shape
+		query.transform = solved * collider.transform
+		query.collision_mask = 1
+		query.exclude = probe_excludes
+		query.margin = -0.025
+		for hit in get_world_3d().direct_space_state.intersect_shape(query,16):
+			var body := _find_support_piece(hit.collider)
+			if body != null and _find_piece_name(body) in ["Raft","Foundation","Roof"]:
+				var point := solved.affine_inverse()*body.global_position
+				# A deck at the foot or the upper landing may touch the stairs.
+				if point.y < 0.05 or (point.z > 2.95 and point.y >= 2.45): continue
+			_diag["invalid_reason"] = "STAIRS BLOCKED · ROTATE OR CLEAR THE LANDING"
+			return {"valid": false,"transform": solved,"support": support}
+	# Leave character clearance above the ramp, including roofs that do not
+	# intersect the stair geometry but would prevent walking up the flight.
+	var clearance := BoxShape3D.new()
+	clearance.size = Vector3(1.45,1.65,0.28)
+	for distance in [0.5,1.2,1.9,2.6]:
+		var floor_y: float = -0.1+float(distance)/3.0*2.65
+		var query := PhysicsShapeQueryParameters3D.new()
+		query.shape = clearance
+		query.transform = solved*Transform3D(Basis.IDENTITY,Vector3(0,floor_y+0.92,distance))
+		query.collision_mask = 1
+		query.exclude = probe_excludes
+		query.margin = -0.025
+		if not get_world_3d().direct_space_state.intersect_shape(query,1).is_empty():
+			_diag["invalid_reason"] = "STAIR HEADROOM BLOCKED · REMOVE ROOF ABOVE THE FLIGHT"
+			return {"valid":false,"transform":solved,"support":support}
+	_diag["final"] = "VALID"
+	_diag["stair_grid"] = true
+	return {"valid": true,"transform": solved,"support": support,"socket": null}

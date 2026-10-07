@@ -645,7 +645,7 @@ func _build_chip_text() -> String:
 		state = "READY %d TILES" % multiplier if ok else "NO SPOT"
 	if Inventory.RECIPES.has(piece_name2):
 		var parts: Array = []
-		var recipe: Dictionary = Inventory.RECIPES[piece_name2]
+		var recipe: Dictionary = Inventory.recipe_cost(piece_name2)
 		for item in recipe:
 			parts.append("%s %d" % [str(item).substr(0, 3).to_upper(), int(recipe[item])*multiplier])
 		cost = "   " + "  ".join(parts)
@@ -654,7 +654,7 @@ func _build_chip_text() -> String:
 		var total_cost := {}
 		for item in Inventory.RECIPES[piece_name2]: total_cost[item] = int(Inventory.RECIPES[piece_name2][item])*multiplier
 		afford = "OK" if Inventory.infinite or Inventory.has_cost(total_cost) else "NEED MORE"
-	var piece_label: String = {"HalfWall":"HALF WALL","CargoCrate":"CARGO CRATE"}.get(piece_name2,piece_name2.to_upper())
+	var piece_label: String = {"HalfWall":"HALF WALL","CargoCrate":"CARGO CRATE","SandFilter":"SAND FILTER"}.get(piece_name2,piece_name2.to_upper())
 	return "%s  %s%s   [%s]" % [piece_label, state, cost, afford]
 
 
@@ -874,6 +874,8 @@ func _craft_item(item_name: String) -> void:
 		_show_toast("COMPLETE YOUR MISSION TO UNLOCK " + item_name.to_upper())
 		return
 	if Inventory.craft_item(item_name):
+		var player := _get_player()
+		if player!=null:player.call("play_action","craft",0.7)
 		_show_toast("CRAFTED " + item_name.to_upper())
 	else:
 		_show_toast("NEED MATERIALS FOR " + item_name.to_upper())

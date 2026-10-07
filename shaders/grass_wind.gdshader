@@ -56,11 +56,11 @@ void fragment() {
         }
         base_albedo = mix(tex.rgb, dry_color, smoothstep(0.82, 1.0, v_dry) * 0.35);
     }
-    ALBEDO = base_albedo * mix(0.83, 1.12, v_tint);
+    ALBEDO = base_albedo * vec3(0.70, 0.78, 0.66) * mix(0.83, 1.08, v_tint);
     ALBEDO *= 0.92 + 0.08 * sin(UV.x * 3.14159);
     NORMAL = FRONT_FACING ? NORMAL : -NORMAL;
     ROUGHNESS = 0.86;
     SPECULAR = 0.22;
-    BACKLIGHT = ALBEDO * 0.45 * v_mask;
+    BACKLIGHT = ALBEDO * 0.28 * v_mask;
     AO = mix(0.68, 1.0, v_mask);
 }

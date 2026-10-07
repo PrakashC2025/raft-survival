@@ -95,12 +95,34 @@ func _run() -> void:
 	var end: Vector3 = rope.get("_throw_end")
 	var middle: Vector3 = rope.call("_flight_position", float(rope.get("_throw_dist")) * 0.5)
 	check(middle.y > start.lerp(end, 0.5).y + 1.0, "Hook travels in an arc above the water")
+	var before: Vector3=rope.call("_flight_position",float(rope.get("_throw_dist"))*0.4)
+	var after: Vector3=rope.call("_flight_position",float(rope.get("_throw_dist"))*0.6)
+	var dt: float=float(rope.get("_flight_duration"))*0.1
+	check(absf((before.y-2.0*middle.y+after.y)/(dt*dt)+float(rope.get("hook_gravity")))<0.002,"Hook flight has constant downward gravity")
 	for frame in range(200):
 		if int(rope.get("_state")) != 1:
 			break
 		rope.call("_handle_throwing", 1.0 / 60.0)
 	check(int(rope.get("_state")) == 2, "Long cast reaches water and waits for debris")
 	check(absf((rope.get("_hook_world_pos") as Vector3).y - float(rope.call("_get_ocean_y", end)) - 0.15) < 0.02, "Hook lands on the real ocean surface")
+	# Actual swept collision rather than a source-text assertion.
+	rope.call("_force_cancel");rope.call("_throw_hook")
+	var obstacle:=StaticBody3D.new()
+	var shape_node:=CollisionShape3D.new()
+	var box:=BoxShape3D.new();box.size=Vector3.ONE*0.8;shape_node.shape=box
+	obstacle.add_child(shape_node);current_scene.add_child(obstacle)
+	obstacle.global_position=rope.call("_flight_position",float(rope.get("_throw_dist"))*0.4)
+	await physics_frame
+	await physics_frame
+	for frame in range(200):
+		if int(rope.get("_state"))!=1:break
+		rope.call("_handle_throwing",1.0/60.0)
+	check(int(rope.get("_state"))==5,"A real solid obstacle makes the hook recall instead of tunnelling through")
+	obstacle.queue_free();await physics_frame
+	rope.call("_force_cancel");rope.call("_throw_hook")
+	for frame in range(200):
+		if int(rope.get("_state"))!=1:break
+		rope.call("_handle_throwing",1.0/60.0)
 	rope.call("_update_rope_visual")
 	check((rope.get("_rope_mesh") as MeshInstance3D).mesh.get_surface_count() == 1, "Long line renders with one mesh surface")
 	var catch := TestDebris.new()
@@ -179,4 +201,6 @@ func _run() -> void:
 		ambience.call("stop_environment")
 	# Let the dummy audio backend flush playback before engine shutdown.
 	await create_timer(0.1).timeout
+	current_scene.queue_free()
+	for unused in 25:await process_frame
 	quit(0 if failures == 0 else 1)

@@ -42,6 +42,9 @@ func _ready() -> void:
 	_third_torch = preload("res://scripts/torch_visual.gd").new()
 	_third_torch.position = Vector3(0.35,0.7,-0.12)
 	add_child(_third_torch)
+	preload("res://scripts/rope_hand_grip.gd").attach(_third_torch,player.get_node("Body"))
+	var grip := _third_torch.get_node_or_null("AnimatedHandGrip")
+	if grip != null: grip.set("upright",true)
 	_torch_light.hide()
 	_third_torch.hide()
 	_crackle = AudioStreamPlayer3D.new()
@@ -152,9 +155,15 @@ func restore_state(data: Dictionary) -> void:
 	oxygen = clampf(float(data.get("oxygen", 100)), 10, 100)
 	stamina = clampf(float(data.get("stamina", 100)), 10, 100)
 	wetness = clampf(float(data.get("wetness", 0)), 0, 100)
-	torch_fuel = clampf(float(data.get("torch_fuel",0)),0,180)
+	torch_fuel = clampf(float(data.get("torch_fuel",0)),0,900)
 
 func use_torch() -> void:
+	if bool(player.get("aim_valid")) and player.get("aim_collider") != null:
+		var target := player.get("aim_collider") as Node3D
+		if str(player.call("_find_piece_name",target)) == "WallTorch" and player.global_position.distance_to(target.global_position) <= 3.2:
+			target.call("interact_survival",player)
+			return
+	if bool(player.call("mount_held_torch")): return
 	if torch_fuel > 0:
 		torch_fuel = 0
 		player.call("_hud_toast","TORCH EXTINGUISHED")

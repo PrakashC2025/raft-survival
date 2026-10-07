@@ -46,6 +46,7 @@ var testing_resources_granted: bool = false
 
 # What each craftable/placeable thing costs.
 const RECIPES := {
+	"WallTorch": {"Wood": 2, "Rope": 1},
 	"HalfWall": {"Wood": 4, "Rope": 1},
 	"CargoCrate": {"Wood": 6, "Rope": 2, "Metal": 1},
 	"Foundation":      {"Wood": 5},
@@ -57,9 +58,10 @@ const RECIPES := {
 	"Bonfire":         {"Wood": 8, "Stone": 4},
 	"RainCollector":   {"Wood": 6, "Barrel": 1, "Rope": 2},
 	"Raft Extension":  {"Wood": 10, "Plastic": 2},
-	"PlanterPot":      {"Wood": 4},
-	"PlanterBox":      {"Wood": 6},
-	"TreePot":         {"Wood": 8, "Rope": 1},
+	"PlanterPot":      {"Wood": 4, "Soil": 2},
+	"PlanterBox":      {"Wood": 6, "Soil": 4},
+	"TreePot":         {"Wood": 8, "Rope": 1, "Soil": 6},
+	"SandFilter": {"Wood": 6, "Sand": 4, "Sponge": 2, "Plastic": 2},
 	"WaterPurifier": {"Metal": 4, "Stone": 3, "Plastic": 2},
 	"WindGenerator": {"Metal": 8, "Wood": 6, "Rope": 3, "Plastic": 4},
 	"ElectricLamp": {"Metal": 2, "Plastic": 2},
@@ -293,6 +295,14 @@ func mark_island_pickup_collected(pickup_id: String) -> void:
 	emit_signal("changed")
 
 
+## The filter accepts a salvaged plastic can or a metal container.
+func recipe_cost(recipe: String) -> Dictionary:
+	var cost: Dictionary = RECIPES.get(recipe,{}).duplicate()
+	if recipe=="SandFilter" and total("Plastic")<2 and total("Metal")>=2:
+		cost.erase("Plastic")
+		cost["Metal"]=2
+	return cost
+
 func can_afford(recipe: String) -> bool:
 	if not recipe_unlocked(recipe):
 		return false
@@ -300,8 +310,8 @@ func can_afford(recipe: String) -> bool:
 		return true
 	if not RECIPES.has(recipe):
 		return false
-	for item in RECIPES[recipe]:
-		if total(item) < RECIPES[recipe][item]:
+	for item in recipe_cost(recipe):
+		if total(item) < recipe_cost(recipe)[item]:
 			return false
 	return true
 
@@ -314,9 +324,7 @@ func craft(recipe: String) -> bool:
 		return false
 	if infinite:
 		return true
-	for item in RECIPES[recipe]:
-		remove(item, RECIPES[recipe][item])
-	return true
+	return try_exchange(recipe_cost(recipe),{})
 
 
 func can_afford_item(item_name: String) -> bool:

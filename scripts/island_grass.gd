@@ -165,7 +165,11 @@ func _build_field(generation: int) -> void:
 				if oc != null:
 					var above_water := pos.y - float(oc.call("get_height", pos))
 					height_ok = above_water <= max_height_above_water \
-							and above_water >= min_height_above_water
+							and above_water >= maxf(min_height_above_water, 0.48)
+				# Cluster on the inland side; broad bare sand remains at the beach.
+				var island_local := (get_parent() as Node3D).to_local(pos)
+				var patch := sin(island_local.x * 0.63 + sin(island_local.z * 0.47)) * 0.5 + 0.5
+				height_ok = height_ok and patch > 0.24 and island_local.z < scatter_radius * 0.60
 				if height_ok:
 					var sc := _rng.randf_range(0.8, 1.3)
 					var b := Basis()

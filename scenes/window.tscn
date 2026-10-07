@@ -12,107 +12,68 @@ shader_parameter/wood_texture = ExtResource("atlas")
 shader_parameter/atlas_strip = 2.0
 shader_parameter/plank_width = 8.0
 
-
-[sub_resource type="StandardMaterial3D" id="bronze"]
-albedo_color = Color(0.43,0.28,0.12,1)
-roughness = 0.4
-metallic = 0.75
-
 [sub_resource type="BoxMesh" id="mesh_Bottom"]
-size = Vector3(2, 0.5, 0.22)
+size = Vector3(2, 1.18, 0.22)
 material = SubResource("walnut")
 
 [sub_resource type="BoxShape3D" id="col_Bottom"]
-size = Vector3(2, 0.5, 0.22)
+size = Vector3(2, 1.18, 0.22)
 
 [sub_resource type="BoxMesh" id="mesh_Top"]
-size = Vector3(2, 0.26, 0.22)
+size = Vector3(2, 0.45, 0.22)
 material = SubResource("walnut")
 
 [sub_resource type="BoxShape3D" id="col_Top"]
-size = Vector3(2, 0.26, 0.22)
+size = Vector3(2, 0.45, 0.22)
 
 [sub_resource type="BoxMesh" id="mesh_Left"]
-size = Vector3(0.22, 1.74, 0.24)
+size = Vector3(0.48, 0.87, 0.24)
 material = SubResource("walnut")
 
 [sub_resource type="BoxShape3D" id="col_Left"]
-size = Vector3(0.22, 1.74, 0.24)
+size = Vector3(0.48, 0.87, 0.24)
 
 [sub_resource type="BoxMesh" id="mesh_Right"]
-size = Vector3(0.22, 1.74, 0.24)
+size = Vector3(0.48, 0.87, 0.24)
 material = SubResource("walnut")
 
 [sub_resource type="BoxShape3D" id="col_Right"]
-size = Vector3(0.22, 1.74, 0.24)
-
-
-
-
-
-
-
-[sub_resource type="BoxMesh" id="mesh_Latch"]
-size = Vector3(0.045, 0.14, 0.035)
-material = SubResource("bronze")
-
-[sub_resource type="BoxShape3D" id="sash_collider"]
-size = Vector3(1.56,1.66,0.10)
+size = Vector3(0.48, 0.87, 0.24)
 
 [node name="Window" type="StaticBody3D"]
 script = ExtResource("window_script")
 
-[node name="Hinge" type="Node3D" parent="."]
-position = Vector3(-0.78,0.12,0)
-
-[node name="Sash" type="AnimatableBody3D" parent="Hinge"]
-sync_to_physics = false
-
-[node name="SashCollider" type="CollisionShape3D" parent="Hinge/Sash"]
-position = Vector3(0.78,0,0)
-shape = SubResource("sash_collider")
-
 [node name="Bottom" type="MeshInstance3D" parent="."]
-position = Vector3(0, -1, 0)
+position = Vector3(0, -0.66, 0)
 mesh = SubResource("mesh_Bottom")
 
 [node name="ColBottom" type="CollisionShape3D" parent="."]
-position = Vector3(0, -1, 0)
+position = Vector3(0, -0.66, 0)
 shape = SubResource("col_Bottom")
 
 [node name="Top" type="MeshInstance3D" parent="."]
-position = Vector3(0, 1.12, 0)
+position = Vector3(0, 1.025, 0)
 mesh = SubResource("mesh_Top")
 
 [node name="ColTop" type="CollisionShape3D" parent="."]
-position = Vector3(0, 1.12, 0)
+position = Vector3(0, 1.025, 0)
 shape = SubResource("col_Top")
 
 [node name="Left" type="MeshInstance3D" parent="."]
-position = Vector3(-0.89, 0.12, 0)
+position = Vector3(-0.76, 0.365, 0)
 mesh = SubResource("mesh_Left")
 
 [node name="ColLeft" type="CollisionShape3D" parent="."]
-position = Vector3(-0.89, 0.12, 0)
+position = Vector3(-0.76, 0.365, 0)
 shape = SubResource("col_Left")
 
 [node name="Right" type="MeshInstance3D" parent="."]
-position = Vector3(0.89, 0.12, 0)
+position = Vector3(0.76, 0.365, 0)
 mesh = SubResource("mesh_Right")
 
 [node name="ColRight" type="CollisionShape3D" parent="."]
-position = Vector3(0.89, 0.12, 0)
+position = Vector3(0.76, 0.365, 0)
 shape = SubResource("col_Right")
-
-
-
-
-
-
-
-[node name="Latch" type="MeshInstance3D" parent="Hinge/Sash"]
-position = Vector3(1.48, -0.04, 0.08)
-mesh = SubResource("mesh_Latch")
 
 [node name="BuildSockets" type="Node3D" parent="."]
 

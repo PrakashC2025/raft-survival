@@ -1,12 +1,17 @@
 extends AnimatableBody3D
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 
-@export var float_height: float = 0.6
-@export var follow_speed: float = 4.0
+@export var float_height: float = 0.20
+@export var follow_speed: float = 3.0
 
 var ocean: Ocean = null
 var _markers: Array = []
 var _extra_sample_points: Array[Node3D] = []
+var _deck_samples := PackedVector3Array()
+var _deck_sample_timer := 0.0
+var _deck_sample_dirty := true
+var _deck_center := Vector3.ZERO
+var _deck_radius := 1.0
 var upgrade_tier := 0
 var _course_active := false
 var _course_target := Vector3.ZERO
@@ -74,65 +79,109 @@ func get_course_distance() -> float:
 
 
 # Called by player.gd after a piece is placed, passing one of the piece's
-# own corner/center markers so the raft's buoyancy averaging expands to
+# own corner/center markers so the raft's buoyancy sampling expands to
 # cover the growing structure.
 func register_sample_point(marker: Node3D) -> void:
+	_deck_sample_dirty=true
 	if marker != null and not _extra_sample_points.has(marker):
 		_extra_sample_points.append(marker)
 
 
 # Called when a piece is removed (Fix support for X / remove_build).
 func unregister_sample_point(marker: Node3D) -> void:
+	_deck_sample_dirty=true
 	_extra_sample_points.erase(marker)
 
 
 func _physics_process(delta: float) -> void:
 	var before_move := global_position
-	_advance_course(delta)
-	var horizontal_delta := Vector3(global_position.x - before_move.x, 0.0,
-			global_position.z - before_move.z)
+	var next_position := _course_position(delta)
+	var horizontal_delta := next_position-before_move
 	if horizontal_delta.length_squared() > 0.000001:
 		_carry_passenger(before_move, horizontal_delta)
 
 	var oc := _get_ocean()
 	if oc == null:
+		global_position=next_position
 		return
-	var avg_height: float = 0.0
-	var count: int = 0
-	for marker in _markers:
-		if marker != null and is_instance_valid(marker):
-			avg_height += float(oc.get_height(marker.global_position))
-			count += 1
-	# Prune invalid refs lazily while summing (freed pieces, etc.).
-	for i in range(_extra_sample_points.size() - 1, -1, -1):
-		var marker := _extra_sample_points[i]
-		if not is_instance_valid(marker):
-			_extra_sample_points.remove_at(i)
-			continue
-		avg_height += float(oc.get_height(marker.global_position))
-		count += 1
-	if count > 0:
-		avg_height /= float(count)
-	var target_y: float = avg_height + float_height
-	global_position.y = lerpf(global_position.y, target_y,
-			1.0 - exp(-follow_speed * delta))
+	_deck_sample_timer+=delta
+	if _deck_sample_dirty or _deck_sample_timer>=0.5:
+		_refresh_deck_samples()
+	var next_rotation := _swell_rotation(oc,delta,next_position)
+	var next_basis := (get_parent() as Node3D).global_basis*Basis.from_euler(next_rotation)
+	var crest := -INF
+	for at in _deck_samples:
+		var offset := next_basis*at
+		# Every tilted corner gets the same minimum clearance, including large
+		# decks. Subtract its height so the downhill edge cannot enter a wave.
+		crest=maxf(crest,oc.get_height(next_position+offset)-offset.y)
+	var time := float(oc.get("_time"))
+	var bob := sin(time*0.84)*0.012+sin(time*1.19+1.3)*0.008
+	var target_y := crest+maxf(float_height,0.20)+bob
+	var smooth_y := lerpf(global_position.y,target_y,1.0-exp(-follow_speed*delta))
+	# Safe freeboard takes precedence over smoothing on a rising crest. Lower
+	# gently after the swell; a large foundation must never follow its average.
+	next_position.y=maxf(smooth_y,crest+0.12)
+	# AnimatableBody sync_to_physics queues a transform and restores the current
+	# one until the physics tick. Separate setters overwrite the queued tilt.
+	global_transform=Transform3D(next_basis,next_position)
+
+func _swell_rotation(oc: Ocean,delta: float,next_position: Vector3) -> Vector3:
+	var player := get_tree().get_first_node_in_group("player")
+	# Existing socket solvers use a level structural plane. Keep that exact
+	# plane during construction/editing rather than saving a counter-tilt.
+	if player!=null and (bool(player.get("build_mode")) or is_instance_valid(player.get("_editing"))):
+		return Vector3(0,rotation.y,0)
+	var yaw_basis := Basis(Vector3.UP,rotation.y)
+	var center := next_position+yaw_basis*_deck_center
+	var span := clampf(_deck_radius*0.5,1.0,4.0)
+	var dx := yaw_basis.x*span
+	var dz := yaw_basis.z*span
+	var pitch := atan((oc.get_height(center-dz)-oc.get_height(center+dz))/(2.0*span))*0.45
+	var roll := atan((oc.get_height(center+dx)-oc.get_height(center-dx))/(2.0*span))*0.45
+	# Heavier expanded rafts rock less; their outer edges move at most 10 cm.
+	var limit := minf(0.028,0.10/maxf(_deck_radius,1.0))
+	var follow := 1.0-exp(-1.6*delta)
+	return Vector3(lerp_angle(rotation.x,clampf(pitch,-limit,limit),follow),rotation.y,
+		lerp_angle(rotation.z,clampf(roll,-limit,limit),follow))
+
+func _refresh_deck_samples() -> void:
+	_deck_sample_dirty=false;_deck_sample_timer=0.0
+	var origins: Array[Vector3]=[Vector3.ZERO]
+	var built := get_node_or_null("BuiltPieces")
+	if built!=null:
+		for child in built.get_children():
+			if child is Node3D and str(child.name).begins_with("Foundation") and absf(child.position.y)<0.2:
+				origins.append(child.position)
+	var unique := {}
+	for center in origins:
+		for x in [-1.0,0.0,1.0]:
+			for z in [-1.0,0.0,1.0]:
+				unique[Vector3(center.x+x,0,center.z+z)]=true
+	_deck_samples=PackedVector3Array(unique.keys())
+	var low := Vector3.ZERO
+	var high := Vector3.ZERO
+	_deck_radius=1.0
+	for at in _deck_samples:
+		low=low.min(at);high=high.max(at)
+		_deck_radius=maxf(_deck_radius,maxf(absf(at.x),absf(at.z)))
+	_deck_center=(low+high)*0.5
 
 
-func _advance_course(delta: float) -> void:
+func _course_position(delta: float) -> Vector3:
 	if not _course_active:
-		return
+		return global_position
 	var to_target := Vector2(_course_target.x - global_position.x,
 			_course_target.z - global_position.z)
 	var distance := to_target.length()
 	if distance <= _arrival_radius:
 		_course_active = false
-		return
+		return global_position
 	var travel := minf(distance - _arrival_radius, get_navigation_speed() * delta)
 	var direction := to_target / maxf(distance, 0.001)
-	global_position.x += direction.x * travel
-	global_position.z += direction.y * travel
 	if distance - travel <= _arrival_radius:
 		_course_active = false
+	return global_position+Vector3(direction.x*travel,0,direction.y*travel)
 
 
 func _carry_passenger(raft_before_move: Vector3, movement: Vector3) -> void:
