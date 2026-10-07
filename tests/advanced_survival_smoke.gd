@@ -91,8 +91,9 @@ func _run() -> void:
 	radio.call("interact_survival",player)
 	check(radio.transmissions == 1 and generator.charge == 5 and progress.level == 6,"Charged radio transmits SOS and finishes chapter sequence")
 	var lamp: Node = machines.ElectricLamp
+	current_scene.get_node("Sky3D/TimeOfDay").set("current_time",22.0)
 	lamp.call("advance",1.0)
-	check(lamp.get("_light").visible,"Powered lamp illuminates the camp")
+	check(lamp.get("_light").visible,"Automatic powered lamp illuminates the camp at night")
 	lamp.call("interact_survival",player)
 	check(not lamp.enabled and not lamp.get("_light").visible,"Turning lamp off immediately stops light")
 	pump.position.x += 20

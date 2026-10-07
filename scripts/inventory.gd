@@ -26,6 +26,9 @@ signal bag_full(amount: int)  # amount that could not be stored anywhere
 const SAVE_PATH := "user://raft_save.json"        # autosave (written on change/quit)
 const QUICK_SAVE_PATH := "user://raft_quicksave.json"  # manual quick-save slot
 const SAVE_VERSION := 1
+const SAVE_STORAGE := preload("res://scripts/save_storage.gd")
+var last_save_error := ""
+signal save_failed(message: String)
 
 var slots: Array = []          # SLOT_COUNT entries: {} (empty) or {"item": String, "count": int}
 var items := {"Wood": 0, "Rope": 0, "Plastic": 0, "Barrel": 0, "Stone": 0, "Metal": 0}
@@ -43,6 +46,8 @@ var testing_resources_granted: bool = false
 
 # What each craftable/placeable thing costs.
 const RECIPES := {
+	"HalfWall": {"Wood": 4, "Rope": 1},
+	"CargoCrate": {"Wood": 6, "Rope": 2, "Metal": 1},
 	"Foundation":      {"Wood": 5},
 	"Wall":            {"Wood": 8, "Rope": 1},
 	"Roof":            {"Wood": 8, "Rope": 1},
@@ -485,10 +490,15 @@ func _save_path_for(slot: String) -> String:
 
 
 func has_save(slot: String = "main") -> bool:
-	return FileAccess.file_exists(_save_path_for(slot))
+	return FileAccess.file_exists(_save_path_for(slot)) or FileAccess.file_exists(_save_path_for(slot) + ".bak")
+
+func has_cost(cost: Dictionary) -> bool:
+	for item in cost:
+		if total(str(item)) < int(cost[item]): return false
+	return true
 
 
-func save_game(extra: Dictionary = {}, slot: String = "main") -> void:
+func save_game(extra: Dictionary = {}, slot: String = "main") -> bool:
 	_ensure_slots()
 	var slot_data: Array = []
 	for i in range(slots.size()):
@@ -505,46 +515,31 @@ func save_game(extra: Dictionary = {}, slot: String = "main") -> void:
 	}
 	for k in extra:
 		data[str(k)] = extra[k]
-	var f := FileAccess.open(_save_path_for(slot), FileAccess.WRITE)
-	if f == null:
-		push_warning("[Inventory] Could not open save file for writing.")
-		return
-	f.store_string(JSON.stringify(data))
-	f.close()
+	var ok := SAVE_STORAGE.write(_save_path_for(slot), data)
+	last_save_error = SAVE_STORAGE.last_error
+	if not ok:
+		save_failed.emit(last_save_error)
+	return ok
 
 
 ## Reads just the meta of a slot without touching the live inventory
 ## (used by the menu to label Continue buttons, e.g. "DAY 2 · 15:30").
 func save_info(slot: String = "main") -> Dictionary:
-	var path := _save_path_for(slot)
-	if not FileAccess.file_exists(path):
-		return {}
-	var f := FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return {}
-	var parsed: Variant = JSON.parse_string(f.get_as_text())
-	f.close()
-	if not (parsed is Dictionary):
-		return {}
-	return parsed
+	return SAVE_STORAGE.read(_save_path_for(slot))
 
 
 ## Loads a slot's save into the inventory (replacing current contents) and
 ## returns the meta it carried. Returns {} when there is no save.
 func load_game(slot: String = "main") -> Dictionary:
-	loaded_meta = {}
-	testing_resources_granted = false
-	collected_island_pickups.clear()
 	if not has_save(slot):
 		return {}
-	var f := FileAccess.open(_save_path_for(slot), FileAccess.READ)
-	if f == null:
+	var data: Dictionary = SAVE_STORAGE.read(_save_path_for(slot))
+	last_save_error = SAVE_STORAGE.last_error
+	if data.is_empty():
 		return {}
-	var parsed: Variant = JSON.parse_string(f.get_as_text())
-	f.close()
-	if not (parsed is Dictionary):
-		return {}
-	var data: Dictionary = parsed
+	# Only replace the live inventory after the complete file was validated.
+	loaded_meta = {}
+	collected_island_pickups.clear()
 	testing_resources_granted = bool(data.get("testing_resources_granted", false))
 	var saved_pickups: Variant = data.get("collected_island_pickups", [])
 	if saved_pickups is Array:
@@ -560,8 +555,8 @@ func load_game(slot: String = "main") -> Dictionary:
 	var stored: Array = data.get("slots", [])
 	for i in range(mini(stored.size(), SLOT_COUNT)):
 		var entry = stored[i]
-		if entry is Array and entry.size() >= 2 and (str(entry[0]) != "") and int(entry[1]) > 0:
-			slots[i] = {"item": str(entry[0]), "count": int(entry[1])}
+		if entry is Array and entry.size() >= 2 and entry[0] is String and entry[0] != "" and (entry[1] is int or entry[1] is float) and is_finite(float(entry[1])) and float(entry[1]) > 0:
+			slots[i] = {"item": str(entry[0]), "count": clampi(int(entry[1]),1,MAX_STACK)}
 	loaded_meta = data.duplicate()
 	loaded_meta.erase("version")
 	loaded_meta.erase("slots")
@@ -586,5 +581,6 @@ func new_game_reset(clear_save_files: bool = true) -> void:
 	if not clear_save_files:
 		return
 	for slot in [SAVE_PATH, QUICK_SAVE_PATH]:
-		if FileAccess.file_exists(slot):
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(slot))
+		for suffix in ["", ".bak", ".tmp"]:
+			if FileAccess.file_exists(slot + suffix):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(slot + suffix))

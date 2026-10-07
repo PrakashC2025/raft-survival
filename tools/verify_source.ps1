@@ -1,13 +1,13 @@
 param(
     [Parameter(Mandatory=$true)][string]$GodotPath,
-    [string[]]$Tests = @('rope_smoke.gd', 'testing_resources_smoke.gd', 'mobile_smoke.gd', 'foundation_smoke.gd', 'environment_smoke.gd', 'island_marker_smoke.gd', 'menu_loading_smoke.gd', 'survival_loop_smoke.gd', 'advanced_survival_smoke.gd', 'cinematic_raft_smoke.gd', 'world_visual_smoke.gd')
+    [string[]]$Tests = @('rope_smoke.gd', 'testing_resources_smoke.gd', 'mobile_smoke.gd', 'foundation_smoke.gd', 'environment_smoke.gd', 'island_marker_smoke.gd', 'menu_loading_smoke.gd', 'survival_loop_smoke.gd', 'advanced_survival_smoke.gd', 'cinematic_raft_smoke.gd', 'world_visual_smoke.gd', 'visual_build_overhaul_smoke.gd')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $sourceRoot = Join-Path $projectRoot ('build/source-check-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sourceRoot | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'project.godot') -Destination (Join-Path $sourceRoot 'project.godot')
-foreach ($folder in @('.godot', 'addons', 'audio', 'models', '3d models', 'scenes', 'scripts', 'shaders', 'textures', 'grass', 'Depries')) {
+foreach ($folder in @('.godot', 'addons', 'audio', 'video', 'models', '3d models', 'scenes', 'scripts', 'shaders', 'textures', 'grass', 'Depries')) {
     $target = Join-Path $projectRoot $folder
     if (Test-Path -LiteralPath $target) {
         New-Item -ItemType Junction -Path (Join-Path $sourceRoot $folder) -Target $target | Out-Null

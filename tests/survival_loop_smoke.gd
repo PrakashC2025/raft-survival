@@ -40,7 +40,7 @@ func _run() -> void:
 	player.set_process(false)
 	player.set_physics_process(false)
 	check(int(inv.call("total", "Carrot Seed")) == 4 and int(inv.call("total", "Tomato Seed")) == 4, "New Game grants the new crop seeds")
-	check(player.BUILD_RECIPE_NAMES.size() == 16 and player.BUILD_RECIPE_NAMES[3] == "Stairs", "New structures preserve legacy build indexes")
+	check(player.BUILD_RECIPE_NAMES.size() == 18 and player.BUILD_RECIPE_NAMES[3] == "Stairs" and player.BUILD_RECIPE_NAMES[16] == "HalfWall", "New structures preserve legacy build indexes")
 	var hud := player.get_node("CanvasLayer/SurvivalHUD")
 	hud.set("_craft_open", true)
 	hud.call("_compute_layout")
@@ -166,7 +166,7 @@ func _run() -> void:
 	paused = false
 	await frames(3)
 	check(float(time_of_day.get("current_time")) - clock_before < 0.01, "Resuming does not skip the paused minutes")
-	check(is_equal_approx(float(time_of_day.get("minutes_per_day")), 18.0), "Default day lasts eighteen active minutes")
+	check(is_equal_approx(float(time_of_day.get("minutes_per_day")), 24.0), "Default day lasts twenty-four active minutes")
 	var pot := (load("res://scenes/planter_pot.tscn") as PackedScene).instantiate()
 	current_scene.add_child(pot)
 	pot.position = Vector3(1008, 4.3, 1005)
@@ -342,5 +342,8 @@ func _run() -> void:
 	slots[0] = {"item": "Fish", "count": 1}
 	inv.call("_recompute")
 	check(inv.call("try_exchange", {"Fish": 1}, {"Cooked Fish": 1}) and int(inv.call("total", "Cooked Fish")) == 1, "Cooking can reuse the slot freed by its final ingredient")
+	current_scene.get_node("OceanAmbience").call("stop_environment")
+	current_scene.queue_free()
+	await frames(20)
 	print("SURVIVAL LOOP SMOKE: %d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)

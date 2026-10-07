@@ -54,7 +54,7 @@ const CLIMB_OUT_RANGE := 2.2
 const CLIMB_LAND_INSET := 0.45
 
 # Build
-const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio"]
+const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "HalfWall", "CargoCrate"]
 const BUILD_SCENES := [
 	"res://scenes/foundation.tscn",
 	"res://scenes/wall.tscn",
@@ -72,6 +72,8 @@ const BUILD_SCENES := [
 	"res://scenes/electric_lamp.tscn",
 	"res://scenes/electric_purifier.tscn",
 	"res://scenes/rescue_radio.tscn",
+	"res://scenes/half_wall.tscn",
+	"res://scenes/cargo_crate.tscn",
 ]
 const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
 const HUMAN_HAND: PackedScene = preload("res://models/human_hand.glb")
@@ -112,7 +114,7 @@ var cam_mode := CAM_FPS
 const CAM_FPS := 0
 const CAM_TPS := 1
 const CAM_MODE_COUNT := 2
-const TPS_DIST := 3.0        # third person camera distance behind the player
+const TPS_DIST := 5.0        # wider elevated survival-game composition
 
 var ocean: Ocean = null
 
@@ -389,7 +391,13 @@ func _setup_survivor_materials() -> void:
 			material.metallic = 0.0
 			material.roughness = 0.85
 			mesh_instance.set_surface_override_material(surface, material)
-	OBJECT_MATERIALS.apply_model(survivor, OBJECT_MATERIALS.Kind.SKIN)
+	var cloth := ShaderMaterial.new()
+	cloth.shader = preload("res://shaders/survivalist.gdshader")
+	cloth.set_shader_parameter("weave", preload("res://textures/construction/survivalist_weave.png"))
+	for mesh_node in survivor.find_children("*", "MeshInstance3D", true, false):
+		var instance := mesh_node as MeshInstance3D
+		for surface in instance.mesh.get_surface_count():
+			instance.set_surface_override_material(surface, cloth)
 	_setup_survivor_animations(survivor)
 
 
@@ -417,6 +425,7 @@ func _setup_survivor_animations(survivor: Node3D) -> void:
 		if idle_clip.is_empty() or walk_clip.is_empty() or run_clip.is_empty():
 			continue
 		_survivor_animator = animator
+		_add_swim_animation(animator, idle_clip, survivor)
 		for clip_name in [idle_clip, walk_clip, run_clip]:
 			var animation := animator.get_animation(clip_name)
 			if animation != null:
@@ -449,6 +458,8 @@ func _update_survivor_animation(sprinting: bool) -> void:
 	var real_velocity := get_real_velocity()
 	var horizontal_speed := Vector2(real_velocity.x, real_velocity.z).length()
 	var animation_name := "Idle"
+	if is_swimming:
+		animation_name = "Swim"
 	if is_on_floor() and not is_swimming and horizontal_speed >= 0.65:
 		animation_name = "Run" if sprinting else "Walk"
 		var stride_m := SURVIVOR_RUN_STRIDE_M if sprinting else SURVIVOR_WALK_STRIDE_M
@@ -615,6 +626,8 @@ func _apply_camera_mode(_initial: bool = false) -> void:
 		_third_person_launcher.visible = cam_mode == CAM_TPS and active_item == "Rope"
 	if spring_arm != null:
 		spring_arm.spring_length = TPS_DIST if cam_mode == CAM_TPS else 0.0
+	if cam_mode == CAM_TPS and cam_pivot != null and cam_pivot.rotation.x > -0.12:
+		cam_pivot.rotation.x = -0.26
 	# In TPS the eye camera looks back at the player, so restrict how far the
 	# view can pitch (the aim ray still uses the camera transform).
 
@@ -1305,6 +1318,8 @@ func _toggle_build() -> void:
 		build_rotation_x = 0.0
 		_spawn_ghost()
 	elif ghost:
+		if is_instance_valid(_build_grid): _build_grid.visible = false
+		if is_instance_valid(_room_preview): _room_preview.visible = false
 		ghost.queue_free()
 		ghost = null
 		if _debug_markers_root != null and is_instance_valid(_debug_markers_root):
@@ -1447,7 +1462,7 @@ func _queue_save() -> void:
 
 ## Build the state meta (selected slot + time of day + the built structure)
 ## and write it to the given slot ("main" autosave or "quick" quick-save).
-func _write_save(slot: String) -> void:
+func _write_save(slot: String) -> bool:
 	var meta := {"active_slot": active_slot_index, "rope_gun_selected": rope_gun_selected}
 	meta["island_layout"] = preload("res://scripts/island_layout.gd").version(Inventory.loaded_meta)
 	meta["island_groves"] = Inventory.loaded_meta.get("island_groves",{}).duplicate(true)
@@ -1483,7 +1498,10 @@ func _write_save(slot: String) -> void:
 	# The built structure lives under the raft's BuiltPieces — without this the
 	# save file holds only inventory and Continue returns an empty raft.
 	meta["built"] = _serialize_built_pieces()
-	Inventory.save_game(meta, slot)
+	if not Inventory.save_game(meta, slot):
+		_hud_toast(Inventory.last_save_error)
+		return false
+	return true
 
 
 func _flush_save() -> void:
@@ -1492,9 +1510,10 @@ func _flush_save() -> void:
 
 ## Manual quick-save (desktop F5 / mobile SAVE chip in the bag panel).
 ## Writes a second snapshot slot that the main menu offers under "QUICK SAVE".
-func quick_save() -> void:
-	_write_save("quick")
+func quick_save() -> bool:
+	if not _write_save("quick"): return false
 	_hud_toast("QUICK-SAVED")
+	return true
 
 
 func _hud_toast(text: String) -> void:
@@ -1528,6 +1547,7 @@ func _serialize_built_pieces() -> Array:
 		if not (piece is Node3D) or not is_instance_valid(piece):
 			continue
 		var pname: String = _find_piece_name(piece as Node3D)
+		if piece.name.begins_with("HalfWall"): pname = "HalfWall"
 		if pname == "" or pname == "Raft":
 			continue
 		var t := (piece as Node3D).transform
@@ -1579,6 +1599,9 @@ func _restore_built_pieces() -> void:
 			continue
 		var scene: PackedScene = build_pieces[idx]
 		if scene == null:
+			continue
+		var saved_transform: Variant = entry.get("x", [])
+		if not _valid_saved_transform(saved_transform):
 			continue
 		var piece: Node3D = scene.instantiate()
 		piece.name = "%s_%d" % [pname, piece.get_instance_id()]
@@ -1956,6 +1979,7 @@ func _hand_part_shader(mesh: Mesh, mat: ShaderMaterial, xform: Transform3D) -> v
 
 ## Subtle idle + walk sway for the held item (mobile juice, no camera shake).
 func _update_hand_sway(_delta: float) -> void:
+	_update_head_bob(_delta)
 	if _hand_item == null or not is_instance_valid(_hand_item):
 		return
 	if _hand_item.get_child_count() == 0:
@@ -2393,6 +2417,8 @@ func _find_support_piece(collider: Node3D) -> Node3D:
 func _find_piece_name(node: Node3D) -> String:
 	if node == null:
 		return ""
+	# Half walls share wall attachments, but save their distinct scene.
+	if node.name.begins_with("HalfWall"): return "Wall"
 	for n in BUILD_RECIPE_NAMES:
 		if node.name.begins_with(n):
 			return n
@@ -2778,7 +2804,7 @@ var _ghost_support: Node3D = null
 func _get_validation_shape(piece_scene: PackedScene) -> Shape3D:
 	if _shape_cache.has(piece_scene):
 		return _shape_cache[piece_scene]
-	var temp: Node3D = piece_scene.instantiate()
+	var temp: Node3D = _solver_template(piece_scene)
 	var col := temp.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	var shape: Shape3D
 	if col != null and col.shape != null:
@@ -2792,7 +2818,10 @@ func _get_validation_shape(piece_scene: PackedScene) -> Shape3D:
 			var bs := BoxShape3D.new()
 			bs.size = Vector3(1, 1, 1)
 			shape = bs
-	temp.queue_free()
+	if piece_scene.resource_path.ends_with("window.tscn"):
+		var window_box := BoxShape3D.new()
+		window_box.size = Vector3(2.0, 2.5, 0.2)
+		shape = window_box
 	_shape_cache[piece_scene] = shape
 	return shape
 
@@ -3386,14 +3415,14 @@ func _resolve_roof_plane_tile(aim_pos: Vector3, _gh: Node3D) -> Dictionary:
 	if side_socket == null:
 		return {}
 	var new_piece_idx_r: int = BUILD_RECIPE_NAMES.find("Roof")
-	var temp_r: Node3D = build_pieces[new_piece_idx_r].instantiate()
+	var temp_r: Node3D = _solver_template(build_pieces[new_piece_idx_r])
 	var recip_r: BuildSocket = _find_reciprocal_socket(side_socket, temp_r, "Roof")
 	var solved_r := Transform3D()
 	if recip_r != null:
 		solved_r = _solve_socket_transform(side_socket, recip_r.position, anchor)
 	else:
 		solved_r = Transform3D(Basis(Vector3.UP, anchor.global_rotation.y), new_center)
-	temp_r.queue_free()
+	# temp_r belongs to the reusable solver cache.
 	_diag["solved_pos"] = solved_r.origin
 	_diag["wall_foundation"] = anchor.name
 	_diag["target_socket_name"] = side_socket.name
@@ -3434,8 +3463,22 @@ func _resolve_roof_plane_tile(aim_pos: Vector3, _gh: Node3D) -> Dictionary:
 
 
 func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
+	if piece_name == "HalfWall":
+		var half := _resolve_placement("Wall", _hit_point)
+		if half.has("transform"):
+			var half_transform: Transform3D = half.transform
+			half_transform.origin.y -= 0.625
+			half.transform = half_transform
+		return half
 	_diag = {}
 	_diag["piece"] = piece_name
+	if not aim_point.is_finite():
+		return {"valid": false}
+	if piece_name == "Roof" and (aim_collider == null or _find_piece_name(_find_support_piece(aim_collider)) != "Roof"):
+		var room := _resolve_smart_roof(aim_point)
+		if not room.is_empty():
+			return room
+
 
 	# Shared variables declared before branches to avoid CONFUSABLE_LOCAL_DECLARATION
 	var solved: Transform3D = Transform3D()
@@ -3676,7 +3719,12 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 					_diag["error_category"] = "SIZE_ERROR"
 					return {"valid": false}
 			# Also verify mesh AABB matches canonical tile
-			var stack_check: Array[Node] = ghost.get_children()
+			# The original structural mesh defines grid dimensions. Decorative
+			# beveled boards may be thinner and must not change physical validity.
+			var proxy_mesh := ghost.get_node_or_null("MeshInstance3D")
+			var stack_check: Array[Node] = []
+			if proxy_mesh != null: stack_check.append(proxy_mesh)
+			else: stack_check.assign(ghost.get_children())
 			while not stack_check.is_empty():
 				var cn: Node = stack_check.pop_back()
 				if cn is MeshInstance3D:
@@ -3707,9 +3755,9 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			return {"valid": false}
 
 		# Step 4g: Verify socket connection
-		var found_piece_temp: Node3D = found_scene.instantiate()
+		var found_piece_temp: Node3D = _solver_template(found_scene)
 		var socket_err: float = _verify_foundation_connection(support, best_cell, found_solved, found_piece_temp)
-		found_piece_temp.queue_free()
+		# found_piece_temp belongs to the reusable solver cache.
 		_diag["socket_position_valid"] = socket_err <= 0.1
 
 		# Step 4h: Overlap check
@@ -4012,7 +4060,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				_w2w_socket = _find_best_socket(wall_foundation, piece_name, wall_aim, wall_aim_normal)
 			if _w2w_socket != null:
 				var _wall_idx: int = BUILD_RECIPE_NAMES.find(piece_name)
-				var _w2w_temp: Node3D = build_pieces[_wall_idx].instantiate()
+				var _w2w_temp: Node3D = _solver_template(build_pieces[_wall_idx])
 				var new_socket: BuildSocket = _find_reciprocal_socket(_w2w_socket, _w2w_temp, _wsn)
 				if new_socket != null:
 					solved = _solve_socket_transform(_w2w_socket, new_socket.position, wall_foundation)
@@ -4034,7 +4082,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 										_best_wf_d = _wf_dist
 										_extra_skip_wf.append(_wf_child)
 					var wall_overlap := _check_overlap(wall_shape, solved, wall_foundation, _extra_skip_wf)
-					_w2w_temp.queue_free()
+					# _w2w_temp belongs to the reusable solver cache.
 					if wall_overlap.size() > 0:
 						_diag["invalid_reason"] = "OVERLAPPING WALL"
 						_diag["error_category"] = "COLLISION_ERROR"
@@ -4042,7 +4090,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 					_diag["final"] = "VALID"
 					return {"valid": true, "socket": _w2w_socket, "transform": solved, "support": wall_foundation}
 				else:
-					_w2w_temp.queue_free()
+					pass
+					# _w2w_temp belongs to the reusable solver cache.
 			# Socket-based failed — find nearest Foundation for edge-snapping
 			var _wf_fb_target: Node3D = null
 			if wall_foundation != null:
@@ -4225,10 +4274,10 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				_diag["error_category"] = "COLLISION_ERROR"
 				return {"valid": false, "socket": null, "transform": Transform3D(), "support": support}
 			var rr_idx: int = BUILD_RECIPE_NAMES.find("Roof")
-			var rr_temp: Node3D = build_pieces[rr_idx].instantiate()
+			var rr_temp: Node3D = _solver_template(build_pieces[rr_idx])
 			var rr_new_socket: BuildSocket = _find_reciprocal_socket(rr_socket, rr_temp, "Roof")
 			if rr_new_socket == null:
-				rr_temp.queue_free()
+				# rr_temp belongs to the reusable solver cache.
 				_diag["invalid_reason"] = "MISSING ROOF SOCKET"
 				_diag["error_category"] = "TRANSFORM_ERROR"
 				return {"valid": false, "socket": rr_socket, "transform": Transform3D(), "support": support}
@@ -4238,7 +4287,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			_diag["target_socket_name"] = rr_socket.name
 			var rr_shape: Shape3D = _get_validation_shape(build_pieces[rr_idx])
 			var rr_overlap := _check_overlap(rr_shape, solved, support)
-			rr_temp.queue_free()
+			# rr_temp belongs to the reusable solver cache.
 			# Allow contact with walls/foundations (build surface). Roofs tile
 			# flush edge-to-edge exactly like walls (2m grid, 2m roof), so a
 			# neighbour roof that only touches the footprint is VALID — only a
@@ -4435,7 +4484,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			_diag["invalid_reason"] = "INVALID BUILD SCENE"
 			return {"valid": false}
 		var roof_scene: PackedScene = build_pieces[new_piece_idx]
-		var roof_temp: Node3D = roof_scene.instantiate()
+		var roof_temp: Node3D = _solver_template(roof_scene)
 		var roof_base_socket: BuildSocket = null
 		for s in _get_all_sockets(roof_temp):
 			if s.name == "Socket_Base" and s.is_compatible(_find_piece_name(roof_support)):
@@ -4449,7 +4498,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 					break
 		if roof_base_socket == null:
 			_diag["invalid_reason"] = "MISSING ROOF SOCKET"
-			roof_temp.queue_free()
+			# roof_temp belongs to the reusable solver cache.
 			return {"valid": false}
 
 		_diag["new_socket_name"] = roof_base_socket.name
@@ -4513,7 +4562,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				_diag["invalid_reason"] = "ROOF HEIGHT MISMATCH: %.3fm" % flush_err
 				_diag["error_category"] = "TRANSFORM_ERROR"
 				_validate_roof_footprint(solved)
-				roof_temp.queue_free()
+				# roof_temp belongs to the reusable solver cache.
 				return {"valid": false}
 		else:
 			# Verify socket alignment from the SOLVED transform — the live ghost's
@@ -4525,7 +4574,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				_diag["error_category"] = "TRANSFORM_ERROR"
 				# Footprint sampling for the build overlay (samples the intended spot)
 				_validate_roof_footprint(solved)
-				roof_temp.queue_free()
+				# roof_temp belongs to the reusable solver cache.
 				return {"valid": false}
 
 		# Overlap check: the roof may TOUCH any build piece (the wall ring it
@@ -4566,10 +4615,10 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			_diag["invalid_reason"] = "OVERLAP: " + str(_diag.get("overlap_object", "?"))
 			_diag["error_category"] = "COLLISION_ERROR"
 			_validate_roof_footprint(solved)
-			roof_temp.queue_free()
+			# roof_temp belongs to the reusable solver cache.
 			return {"valid": false}
 
-		roof_temp.queue_free()
+		# roof_temp belongs to the reusable solver cache.
 		# Footprint sampling for the build overlay (visual only — the roof's
 		# validity is determined by the socket/overlap checks above).
 		_validate_roof_footprint(solved)
@@ -4607,7 +4656,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		_diag["invalid_reason"] = "INVALID BUILD SCENE"
 		return {"valid": false}
 	var new_piece_scene: PackedScene = build_pieces[new_piece_idx]
-	var new_piece_temp: Node3D = new_piece_scene.instantiate()
+	var new_piece_temp: Node3D = _solver_template(new_piece_scene)
 	var support_piece_name: String = _find_piece_name(support)
 	var effective_support_name: String = support_piece_name
 	if support_piece_name == "Raft":
@@ -4619,7 +4668,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			new_piece_socket = all_sockets[0]
 	if new_piece_socket == null:
 		_diag["invalid_reason"] = "MISSING SOCKET"
-		new_piece_temp.queue_free()
+		# new_piece_temp belongs to the reusable solver cache.
 		return {"valid": false}
 	_diag["new_socket_name"] = new_piece_socket.name
 
@@ -4649,7 +4698,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				if socket_err > 0.05:
 					_diag["invalid_reason"] = "SOCKET MISMATCH: " + str(snappedf(socket_err, 0.001)) + "m"
 					_diag["error_category"] = "TRANSFORM_ERROR"
-					new_piece_temp.queue_free()
+					# new_piece_temp belongs to the reusable solver cache.
 					return {"valid": false}
 				break
 
@@ -4663,7 +4712,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		else:
 			_diag["invalid_reason"] = "GAP: " + str(snappedf(gap, 0.001)) + "m"
 		_diag["error_category"] = "GEOMETRY_ERROR"
-		new_piece_temp.queue_free()
+		# new_piece_temp belongs to the reusable solver cache.
 		return {"valid": false}
 
 	# Step 9: Overlap check
@@ -4696,10 +4745,10 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			_diag["overlap_object"] = "?"
 		_diag["invalid_reason"] = "OVERLAP: " + str(_diag.get("overlap_object", "?"))
 		_diag["error_category"] = "COLLISION_ERROR"
-		new_piece_temp.queue_free()
+		# new_piece_temp belongs to the reusable solver cache.
 		return {"valid": false}
 
-	new_piece_temp.queue_free()
+	# new_piece_temp belongs to the reusable solver cache.
 
 	# All checks passed
 	_diag["final"] = "VALID"
@@ -4741,11 +4790,14 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 # BUILD SYSTEM — GHOST PREVIEW
 # ============================================================
 func _update_build_preview() -> void:
+	_update_build_grid()
 	if ghost == null:
 		return
 	var piece_name: String = BUILD_RECIPE_NAMES[selected_piece_index]
 	_ensure_ghost_materials()
 	var resolved := _resolve_placement(piece_name, aim_point)
+	_smart_roof_plan = resolved.get("roof_plan", {})
+	_update_room_preview()
 	var is_valid: bool = bool(resolved.get("valid", false)) and Inventory.recipe_unlocked(piece_name)
 	if not Inventory.recipe_unlocked(piece_name):
 		_diag["invalid_reason"] = "COMPLETE MISSION TO UNLOCK"
@@ -4842,7 +4894,7 @@ func _update_build_preview() -> void:
 						if s is BuildSocket and s.name == "Socket_Top" \
 							and not s.is_occupied and s.is_compatible("Roof"):
 							var roof_scene_fb: PackedScene = build_pieces[selected_piece_index]
-							var roof_temp_fb: Node3D = roof_scene_fb.instantiate()
+							var roof_temp_fb: Node3D = _solver_template(roof_scene_fb)
 							var roof_base_fb: BuildSocket = null
 							for rs in _get_all_sockets(roof_temp_fb):
 								if rs.name == "Socket_Base":
@@ -4850,7 +4902,7 @@ func _update_build_preview() -> void:
 									break
 							if roof_base_fb != null:
 								fallback_xform = _solve_socket_transform(s, roof_base_fb.position, roof_fb_wall)
-							roof_temp_fb.queue_free()
+							# roof_temp_fb belongs to the reusable solver cache.
 							break
 		ghost.global_transform = fallback_xform
 		ghost.visible = true
@@ -4884,6 +4936,8 @@ func _apply_ghost_material(valid: bool) -> void:
 		var n: Node = stack.pop_back()
 		if n is MeshInstance3D:
 			(n as MeshInstance3D).set_surface_override_material(0, mat)
+		elif n is MultiMeshInstance3D:
+			(n as MultiMeshInstance3D).material_override = mat
 		for c in n.get_children():
 			stack.append(c)
 
@@ -5114,10 +5168,16 @@ func _try_build() -> void:
 		_hud_toast("CAN'T PLACE HERE: " + str(_diag.get("invalid_reason", "AIM AT A SUPPORTED SPACE")))
 		return
 	var piece_name: String = BUILD_RECIPE_NAMES[selected_piece_index]
+	if piece_name == "Roof" and not _smart_roof_plan.is_empty():
+		_build_smart_roof()
+		return
+	if not _ghost_transform.origin.is_finite() or not _ghost_transform.basis.is_finite():
+		_hud_toast("INVALID BUILD POSITION")
+		return
 	# Foundations already passed grid occupancy, support, height and overlap
 	# checks. Requiring an optional socket here contradicts a green preview.
 	if piece_name != "Foundation" and piece_name != "Wall" \
-		and piece_name != "Door" and piece_name != "Window" \
+		and piece_name != "Door" and piece_name != "Window" and piece_name != "HalfWall" \
 		and _ghost_target_socket == null:
 		_hud_toast("AIM AT A FREE CONNECTION POINT")
 		return
@@ -5231,6 +5291,7 @@ func _try_build() -> void:
 				pname = "NULL"
 			print("  %s -> %s" % [str(key), pname])
 	_hud_toast(piece_name.to_upper() + " PLACED")
+	play_world_sfx(CONSTRUCTION_AUDIO.build_sound(piece_name))
 	_update_build_preview()
 
 func _link_reciprocal_socket(new_piece: Node3D, parent_socket: BuildSocket) -> void:
@@ -5250,6 +5311,8 @@ func _link_reciprocal_socket(new_piece: Node3D, parent_socket: BuildSocket) -> v
 # BUILD SYSTEM — EDIT SYSTEM
 # ============================================================
 const RECIPE_REFUND := {
+	"CargoCrate": {"Wood": 6, "Rope": 2, "Metal": 1},
+	"HalfWall": {"Wood": 4, "Rope": 1},
 	"Foundation": {"Wood": 5},
 	"Wall": {"Wood": 8, "Rope": 1},
 	"Roof": {"Wood": 8, "Rope": 1},
@@ -5562,7 +5625,8 @@ func _remove_editing() -> void:
 		return
 	# Unregister from grid
 	var cell: Vector2i = _world_to_grid(_editing.global_position)
-	_grid_unregister(cell)
+	if building_name.begins_with("Foundation"):
+		_grid_unregister(cell)
 	# Free support sockets that reference this piece
 	var raft: Node3D = _get_raft_node()
 	if raft != null:
@@ -5596,34 +5660,18 @@ func _set_edit_color(mat: StandardMaterial3D) -> void:
 		var n: Node = stack.pop_back()
 		if n is MeshInstance3D:
 			(n as MeshInstance3D).set_surface_override_material(0, mat)
+		elif n is MultiMeshInstance3D:
+			(n as MultiMeshInstance3D).material_override = mat
 		for c in n.get_children():
 			stack.append(c)
 
 func _apply_building_color(obj: Node3D) -> void:
-	if obj.name.begins_with("Door") or obj.name.begins_with("Window"):
-		var reset_stack: Array[Node] = obj.get_children()
-		while not reset_stack.is_empty():
-			var n: Node = reset_stack.pop_back()
-			if n is MeshInstance3D:
-				(n as MeshInstance3D).set_surface_override_material(0, null)
-			for c in n.get_children():
-				reset_stack.append(c)
-		return
-	var building_name := obj.name
-	var color := Color(0.72, 0.53, 0.30)
-	if building_name.begins_with("Wall"):
-		color = Color(0.62, 0.43, 0.22)
-	elif building_name.begins_with("Stairs"):
-		color = Color(0.55, 0.38, 0.20)
-	var stack: Array[Node] = obj.get_children()
-	while not stack.is_empty():
-		var n: Node = stack.pop_back()
-		if n is MeshInstance3D:
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = color
-			(n as MeshInstance3D).set_surface_override_material(0, mat)
-		for c in n.get_children():
-			stack.append(c)
+	for node in obj.find_children("*", "GeometryInstance3D", true, false):
+		if node is MeshInstance3D:
+			for surface in node.mesh.get_surface_count():
+				node.set_surface_override_material(surface, null)
+		elif node is MultiMeshInstance3D:
+			node.material_override = null
 
 # ============================================================
 # BUILD SYSTEM — SCENE VALIDATION
@@ -5840,3 +5888,190 @@ static func _fmt_path(path_arr: Variant) -> String:
 			return "NONE"
 		return " -> ".join(arr)
 	return "NONE"
+
+# Original shared visual/build helpers. Solver templates never enter the tree;
+# live structures keep independent interaction state and physics ownership.
+const SMART_ROOF := preload("res://scripts/smart_roof.gd")
+const CONSTRUCTION_AUDIO := preload("res://scripts/construction_audio.gd")
+var _solver_templates: Dictionary = {}
+var _smart_roof_plan: Dictionary = {}
+var _build_grid: MeshInstance3D
+var _room_preview: MultiMeshInstance3D
+var _head_bob_phase := 0.0
+var _head_bob_offset := Vector3.ZERO
+var _swim_splash: GPUParticles3D
+
+func _solver_template(scene: PackedScene) -> Node3D:
+	if not _solver_templates.has(scene):
+		_solver_templates[scene] = scene.instantiate()
+	return _solver_templates[scene]
+
+func _exit_tree() -> void:
+	for template in _solver_templates.values():
+		if is_instance_valid(template): template.free()
+	_solver_templates.clear()
+
+static func _valid_saved_transform(values: Variant) -> bool:
+	if not values is Array or values.size() != 12:
+		return false
+	for value in values:
+		if not (value is float or value is int) or not is_finite(float(value)) or absf(float(value)) > 100000.0:
+			return false
+	var basis := Basis(Vector3(values[0],values[1],values[2]), Vector3(values[3],values[4],values[5]), Vector3(values[6],values[7],values[8]))
+	return absf(basis.determinant()) > 0.01 and absf(basis.determinant()) < 100.0
+
+func _resolve_smart_roof(world_aim: Vector3) -> Dictionary:
+	var plan := SMART_ROOF.plan(_get_raft_node(), world_aim)
+	if plan.is_empty(): return {}
+	if plan.get("occupied", false):
+		_diag["invalid_reason"] = "ROOM ALREADY ROOFED"
+		return {"valid": false}
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(1.96,0.13,1.96)
+	for xform: Transform3D in plan.transforms:
+		for hit in _check_overlap(shape, xform, plan.support):
+			var body := hit.get("collider") as Node3D
+			if body != null and _find_piece_name(_find_support_piece(body)) not in ["Raft","Foundation","Wall","Door","Window"]:
+				_diag["invalid_reason"] = "CEILING SPACE BLOCKED"
+				return {"valid": false, "transform": xform}
+	_diag["final"] = "VALID"
+	_diag["room_tiles"] = plan.transforms.size()
+	return {"valid": true, "socket": null, "transform": plan.transforms[0], "support": plan.support, "roof_plan": plan}
+
+func _build_smart_roof() -> void:
+	# Revalidate immediately before spending; no stale green preview can charge
+	# resources after a wall was removed or an obstacle appeared.
+	var fresh := _resolve_smart_roof(_smart_roof_plan.transforms[0].origin)
+	if not fresh.get("valid", false) or not Inventory.recipe_unlocked("Roof"):
+		_hud_toast("ROOM SUPPORT CHANGED · AIM AGAIN")
+		return
+	var plan: Dictionary = fresh.roof_plan
+	var cost := {}
+	for item in Inventory.RECIPES.Roof:
+		cost[item] = int(Inventory.RECIPES.Roof[item]) * plan.transforms.size()
+	if not Inventory.infinite and not Inventory.has_cost(cost):
+		_hud_toast("ROOF %d TILES · NEED %d WOOD + %d ROPE" % [plan.transforms.size(),cost.Wood,cost.Rope])
+		return
+	var scene: PackedScene = build_pieces[BUILD_RECIPE_NAMES.find("Roof")]
+	var pending: Array[Node3D] = []
+	for unused in plan.transforms.size(): pending.append(scene.instantiate())
+	if not Inventory.infinite and not Inventory.try_exchange(cost, {}):
+		for piece in pending: piece.free()
+		return
+	var raft := _get_raft_node()
+	var container := raft.get_node("BuiltPieces")
+	for index in pending.size():
+		var piece := pending[index]
+		piece.name = "Roof_%d" % piece.get_instance_id()
+		var colliders := piece.find_children("*", "CollisionShape3D", true, false)
+		for col in colliders: col.disabled = true
+		piece.transform = raft.global_transform.affine_inverse() * plan.transforms[index]
+		container.add_child(piece)
+		for col in colliders: col.set_deferred("disabled", false)
+		piece.add_to_group("build_surface")
+		get_node("SurvivalProgression").call("record", "build:Roof")
+		var sample := piece.get_node_or_null("SampleMarker")
+		if sample != null and raft.has_method("register_sample_point"): raft.register_sample_point(sample)
+	_queue_save()
+	play_world_sfx(CONSTRUCTION_AUDIO.build_sound("Roof"))
+	_hud_toast("ROOF COMPLETE · %d TILES" % pending.size())
+	_update_build_preview()
+
+func _update_build_grid() -> void:
+	var raft := _get_raft_node()
+	if raft == null: return
+	if _build_grid == null:
+		_build_grid = MeshInstance3D.new()
+		var mesh := PlaneMesh.new()
+		mesh.size = Vector2(16,16)
+		var material := ShaderMaterial.new()
+		material.shader = preload("res://shaders/build_grid.gdshader")
+		mesh.material = material
+		_build_grid.mesh = mesh
+		_build_grid.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_get_build_preview_root().add_child(_build_grid)
+	var cell := _world_to_grid(aim_point)
+	_build_grid.global_transform = raft.global_transform * Transform3D(Basis.IDENTITY, Vector3(cell.x*2.0,0.158,cell.y*2.0))
+	_build_grid.visible = build_mode
+
+func _update_room_preview() -> void:
+	if _smart_roof_plan.is_empty():
+		if is_instance_valid(_room_preview): _room_preview.visible = false
+		return
+	if _room_preview == null:
+		_room_preview = MultiMeshInstance3D.new()
+		_room_preview.multimesh = MultiMesh.new()
+		_room_preview.multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(1.96,0.15,1.96)
+		_room_preview.multimesh.mesh = mesh
+		_room_preview.material_override = _ghost_valid_mat
+		_room_preview.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_get_build_preview_root().add_child(_room_preview)
+	_room_preview.multimesh.instance_count = _smart_roof_plan.transforms.size()
+	for index in _smart_roof_plan.transforms.size():
+		_room_preview.multimesh.set_instance_transform(index, _smart_roof_plan.transforms[index])
+	_room_preview.visible = build_mode
+
+func _update_head_bob(delta: float) -> void:
+	if camera == null: return
+	_update_swim_splash()
+	# Smooth amplitude up to five centimetres. A ten-radian gait rate produces
+	# natural walking bob rather than an uncomfortable ten shakes per second.
+	var speed := Vector2(velocity.x,velocity.z).length()
+	var weight := clampf(speed / WALK_SPEED,0,1) if is_on_floor() and not is_swimming and cam_mode == CAM_FPS and GameSettings.head_bob else 0.0
+	_head_bob_phase += delta*10.0
+	var target := Vector3(sin(_head_bob_phase*0.5)*0.018,sin(_head_bob_phase)*0.05,0)*weight
+	_head_bob_offset = _head_bob_offset.lerp(target,1.0-exp(-delta*12.0))
+	camera.position = _head_bob_offset
+
+func _update_swim_splash() -> void:
+	var active := is_swimming and Vector2(velocity.x,velocity.z).length() > 0.5 and GameSettings.quality != 1
+	if _swim_splash == null and active:
+		_swim_splash = GPUParticles3D.new()
+		_swim_splash.amount = 16
+		_swim_splash.lifetime = 0.45
+		_swim_splash.visibility_aabb = AABB(Vector3(-2,-2,-2),Vector3(4,4,4))
+		var process := ParticleProcessMaterial.new()
+		process.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+		process.emission_sphere_radius = 0.22
+		process.direction = Vector3.UP
+		process.spread = 60
+		process.initial_velocity_min = 0.8
+		process.initial_velocity_max = 1.6
+		process.gravity = Vector3(0,-4,0)
+		process.scale_min = 0.4
+		process.scale_max = 1.0
+		_swim_splash.process_material = process
+		var quad := QuadMesh.new()
+		quad.size = Vector2(0.028,0.06)
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.72,0.86,0.93,0.5)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		mat.roughness = 0.2
+		quad.material = mat
+		_swim_splash.draw_pass_1 = quad
+		_swim_splash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_swim_splash.position.y = -0.45
+		add_child(_swim_splash)
+	if _swim_splash != null: _swim_splash.emitting = active
+
+func _add_swim_animation(animator: AnimationPlayer, idle_name: String, _survivor: Node3D) -> void:
+	var animation := animator.get_animation(idle_name).duplicate() as Animation
+	animation.length = 1.6
+	animation.loop_mode = Animation.LOOP_LINEAR
+	for track in animation.get_track_count():
+		if animation.track_get_type(track) != Animation.TYPE_ROTATION_3D: continue
+		var path := str(animation.track_get_path(track))
+		if not (path.contains("UpperArm") or path.contains("UpperLeg") or path.contains("LowerArm")): continue
+		if animation.track_get_key_count(track) == 0: continue
+		var resting: Quaternion = animation.track_get_key_value(track,0)
+		while animation.track_get_key_count(track) > 0: animation.track_remove_key(track,0)
+		for index in range(9):
+			var phase := float(index)/8.0*TAU + (PI if path.ends_with(".R") else 0.0)
+			var amount := 0.65 if path.contains("UpperArm") else 0.22
+			animation.rotation_track_insert_key(track,index*0.2,resting*Quaternion(Vector3.RIGHT,sin(phase)*amount))
+	var library := AnimationLibrary.new()
+	library.add_animation("Swim",animation)
+	animator.add_animation_library("Survival",library)

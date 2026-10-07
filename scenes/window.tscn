@@ -1,79 +1,118 @@
-[gd_scene format=3 uid="uid://b0qdnsp1rgimm"]
+[gd_scene format=3]
 
-[ext_resource type="Script" uid="uid://b73vh4kl4v0mu" path="res://scripts/build_socket.gd" id="1_buildsocket"]
+[ext_resource type="Script" path="res://scripts/build_socket.gd" id="1_buildsocket"]
+[ext_resource type="Script" path="res://scripts/raft_window.gd" id="window_script"]
+[ext_resource type="Shader" path="res://shaders/wood_planks.gdshader" id="wood"]
+[ext_resource type="Texture2D" path="res://textures/construction/timber_photographic_atlas.png" id="atlas"]
 
-[ext_resource type="Shader" path="res://shaders/wood_planks.gdshader" id="2_wood"]
+[sub_resource type="ShaderMaterial" id="walnut"]
+shader = ExtResource("wood")
+shader_parameter/photographic_wood = true
+shader_parameter/wood_texture = ExtResource("atlas")
+shader_parameter/atlas_strip = 2.0
+shader_parameter/plank_width = 8.0
 
-[sub_resource type="BoxShape3D" id="col_window"]
-size = Vector3(2, 2.5, 0.2)
 
-[sub_resource type="ShaderMaterial" id="mat_wall"]
-shader = ExtResource("2_wood")
-shader_parameter/base_color = Color(0.62, 0.43, 0.22, 1)
-shader_parameter/seam_color = Color(0.30, 0.20, 0.11, 1)
-shader_parameter/half_x = 0.35
-shader_parameter/half_y = 0.475
-shader_parameter/half_z = 0.1
-shader_parameter/plank_width = 0.25
-shader_parameter/seam_width = 0.006
+[sub_resource type="StandardMaterial3D" id="bronze"]
+albedo_color = Color(0.43,0.28,0.12,1)
+roughness = 0.4
+metallic = 0.75
 
-[sub_resource type="BoxMesh" id="mesh_corner_tl"]
-material = SubResource("mat_wall")
-size = Vector3(0.7, 0.95, 0.2)
+[sub_resource type="BoxMesh" id="mesh_Bottom"]
+size = Vector3(2, 0.5, 0.22)
+material = SubResource("walnut")
 
-[sub_resource type="BoxMesh" id="mesh_corner_tr"]
-material = SubResource("mat_wall")
-size = Vector3(0.7, 0.95, 0.2)
+[sub_resource type="BoxShape3D" id="col_Bottom"]
+size = Vector3(2, 0.5, 0.22)
 
-[sub_resource type="BoxMesh" id="mesh_corner_bl"]
-material = SubResource("mat_wall")
-size = Vector3(0.7, 0.95, 0.2)
+[sub_resource type="BoxMesh" id="mesh_Top"]
+size = Vector3(2, 0.26, 0.22)
+material = SubResource("walnut")
 
-[sub_resource type="BoxMesh" id="mesh_corner_br"]
-material = SubResource("mat_wall")
-size = Vector3(0.7, 0.95, 0.2)
+[sub_resource type="BoxShape3D" id="col_Top"]
+size = Vector3(2, 0.26, 0.22)
 
-[sub_resource type="StandardMaterial3D" id="mat_glass"]
-transparency = 1
-albedo_color = Color(0.3, 0.7, 1.0, 0.35)
-metallic = 0.6
-roughness = 0.05
-cull_mode = 2
+[sub_resource type="BoxMesh" id="mesh_Left"]
+size = Vector3(0.22, 1.74, 0.24)
+material = SubResource("walnut")
 
-[sub_resource type="BoxMesh" id="mesh_glass_v"]
-material = SubResource("mat_glass")
-size = Vector3(0.6, 2.5, 0.02)
+[sub_resource type="BoxShape3D" id="col_Left"]
+size = Vector3(0.22, 1.74, 0.24)
 
-[sub_resource type="BoxMesh" id="mesh_glass_h"]
-material = SubResource("mat_glass")
-size = Vector3(2.0, 0.6, 0.02)
+[sub_resource type="BoxMesh" id="mesh_Right"]
+size = Vector3(0.22, 1.74, 0.24)
+material = SubResource("walnut")
 
-[node name="Window" type="StaticBody3D" unique_id=1910187336]
+[sub_resource type="BoxShape3D" id="col_Right"]
+size = Vector3(0.22, 1.74, 0.24)
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1863715467]
-shape = SubResource("col_window")
 
-[node name="CornerTL" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, 0.775, 0)
-mesh = SubResource("mesh_corner_tl")
 
-[node name="CornerTR" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, 0.775, 0)
-mesh = SubResource("mesh_corner_tr")
 
-[node name="CornerBL" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.65, -0.775, 0)
-mesh = SubResource("mesh_corner_bl")
 
-[node name="CornerBR" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.65, -0.775, 0)
-mesh = SubResource("mesh_corner_br")
 
-[node name="GlassV" type="MeshInstance3D" parent="."]
-mesh = SubResource("mesh_glass_v")
 
-[node name="GlassH" type="MeshInstance3D" parent="."]
-mesh = SubResource("mesh_glass_h")
+[sub_resource type="BoxMesh" id="mesh_Latch"]
+size = Vector3(0.045, 0.14, 0.035)
+material = SubResource("bronze")
+
+[sub_resource type="BoxShape3D" id="sash_collider"]
+size = Vector3(1.56,1.66,0.10)
+
+[node name="Window" type="StaticBody3D"]
+script = ExtResource("window_script")
+
+[node name="Hinge" type="Node3D" parent="."]
+position = Vector3(-0.78,0.12,0)
+
+[node name="Sash" type="AnimatableBody3D" parent="Hinge"]
+sync_to_physics = false
+
+[node name="SashCollider" type="CollisionShape3D" parent="Hinge/Sash"]
+position = Vector3(0.78,0,0)
+shape = SubResource("sash_collider")
+
+[node name="Bottom" type="MeshInstance3D" parent="."]
+position = Vector3(0, -1, 0)
+mesh = SubResource("mesh_Bottom")
+
+[node name="ColBottom" type="CollisionShape3D" parent="."]
+position = Vector3(0, -1, 0)
+shape = SubResource("col_Bottom")
+
+[node name="Top" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.12, 0)
+mesh = SubResource("mesh_Top")
+
+[node name="ColTop" type="CollisionShape3D" parent="."]
+position = Vector3(0, 1.12, 0)
+shape = SubResource("col_Top")
+
+[node name="Left" type="MeshInstance3D" parent="."]
+position = Vector3(-0.89, 0.12, 0)
+mesh = SubResource("mesh_Left")
+
+[node name="ColLeft" type="CollisionShape3D" parent="."]
+position = Vector3(-0.89, 0.12, 0)
+shape = SubResource("col_Left")
+
+[node name="Right" type="MeshInstance3D" parent="."]
+position = Vector3(0.89, 0.12, 0)
+mesh = SubResource("mesh_Right")
+
+[node name="ColRight" type="CollisionShape3D" parent="."]
+position = Vector3(0.89, 0.12, 0)
+shape = SubResource("col_Right")
+
+
+
+
+
+
+
+[node name="Latch" type="MeshInstance3D" parent="Hinge/Sash"]
+position = Vector3(1.48, -0.04, 0.08)
+mesh = SubResource("mesh_Latch")
 
 [node name="BuildSockets" type="Node3D" parent="."]
 

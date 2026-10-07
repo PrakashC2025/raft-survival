@@ -5,13 +5,17 @@
 [ext_resource type="Shader" path="res://shaders/wood_planks.gdshader" id="2_wood"]
 [ext_resource type="Texture2D" path="res://textures/ui/weathered_raft_wood.png" id="3_timber"]
 
+[ext_resource type="Script" path="res://scripts/construction_visual.gd" id="visual_details"]
+[ext_resource type="Texture2D" path="res://textures/construction/timber_photographic_atlas.png" id="timber_atlas"]
+
 [sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
 size = Vector3(2, 0.3, 2)
 
 [sub_resource type="ShaderMaterial" id="mat_foundation"]
 shader = ExtResource("2_wood")
 shader_parameter/photographic_wood = true
-shader_parameter/wood_texture = ExtResource("3_timber")
+shader_parameter/wood_texture = ExtResource("timber_atlas")
+shader_parameter/atlas_strip = 0.0
 shader_parameter/base_color = Color(0.72, 0.53, 0.3, 1)
 shader_parameter/seam_color = Color(0.34, 0.23, 0.13, 1)
 shader_parameter/half_x = 1.0
@@ -62,7 +66,11 @@ accepts = Array[String](["Foundation", "Wall", "Stairs"])
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15, 0)
 script = ExtResource("1_buildsocket")
 socket_type = 1
-accepts = Array[String](["Wall", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio"])
+accepts = Array[String](["Wall", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "CargoCrate"])
 
 [node name="SampleMarker" type="Marker3D" parent="." unique_id=12121212]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="TimberDetails" type="Node3D" parent="."]
+script = ExtResource("visual_details")
+kind = "Foundation"

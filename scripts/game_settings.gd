@@ -10,6 +10,8 @@ var look_speed := 1.0
 var invert_look := false
 var volume := 0.8
 var third_person := false
+var day_minutes := 24.0
+var head_bob := true
 var is_open := false
 var _previous_paused := false
 var _previous_mouse_mode := Input.MOUSE_MODE_VISIBLE
@@ -29,6 +31,8 @@ func _ready() -> void:
 		invert_look = bool(config.get_value("game", "invert_look", false))
 		volume = clampf(float(config.get_value("game", "volume", 0.8)), 0.0, 1.0)
 		third_person = bool(config.get_value("game", "third_person", false))
+		day_minutes = clampf(float(config.get_value("game", "day_minutes", 24.0)), 6.0, 96.0)
+		head_bob = bool(config.get_value("game", "head_bob", true))
 	_apply()
 
 
@@ -40,9 +44,11 @@ func update_setting(key: String, value: Variant) -> void:
 		"invert_look": invert_look = bool(value)
 		"volume": volume = clampf(float(value), 0.0, 1.0)
 		"third_person": third_person = bool(value)
+		"day_minutes": day_minutes = clampf(float(value), 6.0, 96.0)
+		"head_bob": head_bob = bool(value)
 	_apply()
 	var config := ConfigFile.new()
-	for property in ["quality", "look_speed", "invert_look", "volume", "third_person"]:
+	for property in ["quality", "look_speed", "invert_look", "volume", "third_person", "day_minutes", "head_bob"]:
 		config.set_value("game", property, get(property))
 	config.set_value("game", "fps", target_fps)
 	if config.save(SETTINGS_PATH) != OK:
@@ -99,6 +105,9 @@ func _input(event: InputEvent) -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		# The wake overlay owns input until scene preparation and its fade finish.
+		if get_tree().root.get_node_or_null("WakeHandoff") != null:
+			return
 		if is_open:
 			close()
 		else:
@@ -176,6 +185,19 @@ func _build_panel() -> void:
 	camera_options.selected = 1 if third_person else 0
 	camera_options.item_selected.connect(func(index: int): update_setting("third_person", index == 1))
 	_add_row(content, "Camera", camera_options)
+	var bob := CheckButton.new()
+	bob.text = "Walking head bob"
+	bob.button_pressed = head_bob
+	bob.toggled.connect(func(value: bool): update_setting("head_bob", value))
+	_add_row(content, "", bob)
+	var day_length := SpinBox.new()
+	day_length.min_value = 6
+	day_length.max_value = 96
+	day_length.step = 6
+	day_length.suffix = "minutes"
+	day_length.value = day_minutes
+	day_length.value_changed.connect(func(value: float): update_setting("day_minutes", value))
+	_add_row(content, "Day length", day_length)
 	var tip := Label.new()
 	tip.text = "For a slower phone, choose Battery Saver and 30 FPS.\nChanges are saved automatically."
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

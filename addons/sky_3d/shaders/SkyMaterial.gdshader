@@ -302,7 +302,8 @@ vec4 render_cumulus_clouds(vec3 ro, vec3 rd, float am, vec3 sun_pos, vec3 moon_p
 	vec3 n; float tt;
 	if (ray_sphere_intersect(500., ro, rd, tt, n)) {
 		float march_step = float(CUMULUS_STEP) * cumulus_thickness;
-		vec3 dir_step = rd / rd.y * march_step;
+		// Bound grazing rays so the horizon does not develop marching bands.
+		vec3 dir_step = rd / max(rd.y, 0.08) * march_step;
 		vec3 pos = n * cumulus_size;
 
 		vec2 mu = vec2(dot(sun_pos, rd), dot(moon_pos, rd));
@@ -427,7 +428,9 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 		vec3 cloud_tint = sun_light_color.rgb;
 		cloud_tint = mix(cloud_tint, clouds_night_color.rgb, angle_mult.w);
 		cumulus_clouds.rgb *= cloud_tint * cumulus_intensity;
-		cumulus_clouds.a = mix(0.0, cumulus_clouds.a, horizonBlend);
+		// Low cumulus remains visible near the sea horizon. The cirrus fade
+		// above erases almost all cloud volume in a normal gameplay view.
+		cumulus_clouds.a = mix(0.0, cumulus_clouds.a, horizonBlendCumulus);
 		col.rgb = mix(col.rgb, cumulus_clouds.rgb + mix(vec3(0.0), scatter, cumulus_sky_tint_fade), cumulus_clouds.a);
 	}
 

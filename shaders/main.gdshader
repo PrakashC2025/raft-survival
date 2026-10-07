@@ -186,7 +186,7 @@ void fragment() {
 	// moving chop rather than a repeating pattern. Fades out with distance so
 	// distant water smooths into atmospheric cobalt.
 	float dist = distance(world_pos, CAMERA_POSITION_WORLD);
-	float fine = 1.0 - smoothstep(18.0, 120.0, dist);
+	float fine = 1.0 - smoothstep(35.0, 170.0, dist);
 	vec2 mdir1 = vec2(0.6, 0.8);
 	vec2 mdir2 = vec2(0.9, -0.4);
 	vec2 mdir3 = vec2(-0.72, 0.55);
@@ -202,13 +202,21 @@ void fragment() {
 		+ 0.09 * 4.6 * mdir2.y * cos(dot(mdir2, p) * 4.6 + t * 1.6)
 		+ 0.05 * 7.4 * mdir3.y * cos(dot(mdir3, p) * 7.4 + t * 2.0);
 	vec3 ripple = water_noise(p * 1.7 + vec2(t * 0.24, -t * 0.18));
-	vec2 ripple_slope = ripple.yz * 0.11;
+	vec2 ripple_slope = ripple.yz * 0.16;
+	vec3 wind_chop = water_noise(p*0.42+vec2(t*0.12,-t*0.08));
+	ripple_slope += wind_chop.yz*0.34;
+	// Broader, irregular wave faces survive farther into the sea. Pixel-footprint
+	// filtering removes distant glitter aliasing without flattening nearby swells.
+	vec2 swell_uv = p*0.19+vec2(-t*0.10,t*0.07);
+	vec3 surface_swell = water_noise(swell_uv);
+	float swell_lod = 1.0-smoothstep(0.04,0.7,length(fwidth(swell_uv)));
+	ripple_slope += surface_swell.yz*0.48*swell_lod;
 	if (surface_detail > 0.6) {
 		vec3 small_ripple = water_noise(p * 4.3 + vec2(-t * 0.35, t * 0.29));
-		ripple_slope += small_ripple.yz * 0.04;
+		ripple_slope += small_ripple.yz * 0.055;
 	}
-	n = normalize(vec3(n.x - (mgx * 0.025 + ripple_slope.x) * fine,
-		n.y, n.z - (mgz * 0.025 + ripple_slope.y) * fine));
+	n = normalize(vec3(n.x - mgx*0.08*fine - ripple_slope.x*mix(0.30,1.0,fine),
+		n.y, n.z - mgz*0.08*fine - ripple_slope.y*mix(0.30,1.0,fine)));
 	ndv = max(dot(n, tocam), 0.0);
 	float micro_w = (ripple.x - 0.5) * fine * 0.20;
 
@@ -274,14 +282,16 @@ void fragment() {
 	vec3 r = reflect(-tocam, n);
 	// A mobile-friendly sky reflection, strongest at grazing angles. This is
 	// an analytic sky approximation rather than screen-space scene reflection.
-	vec3 reflected_horizon = mix(vec3(0.34, 0.56, 0.72), vec3(0.40, 0.31, 0.28), twilight_factor);
-	vec3 reflected_zenith = mix(vec3(0.06, 0.22, 0.42), vec3(0.11, 0.16, 0.30), twilight_factor);
+	vec3 reflected_horizon = mix(vec3(0.17, 0.32, 0.46), vec3(0.30, 0.23, 0.20), twilight_factor);
+	vec3 reflected_zenith = mix(vec3(0.03, 0.12, 0.24), vec3(0.07, 0.11, 0.22), twilight_factor);
 	reflected_horizon = mix(reflected_horizon, vec3(0.024, 0.05, 0.09), night_factor);
 	reflected_zenith = mix(reflected_zenith, vec3(0.009, 0.018, 0.05), night_factor);
 	vec3 reflection = mix(reflected_horizon, reflected_zenith, smoothstep(0.02, 0.85, max(r.y, 0.0)));
 	float cloud = water_noise(r.xz / max(r.y + 0.4, 0.2) * 2.2 + vec2(t * 0.012, 0.0)).x;
 	reflection += smoothstep(0.48, 0.78, cloud) * vec3(0.14, 0.15, 0.14) * (1.0 - night_factor);
-	base = mix(base, reflection, 0.08 + fres * 0.62);
+	base = mix(base, reflection, 0.08 + fres * 0.38);
+	// Dark troughs retain depth beneath brighter moving reflective facets.
+	base *= mix(0.72,1.03,smoothstep(-0.7,0.6,crest));
 	float refl_up = r.y;
 	float mir_k = smoothstep(-0.14, 0.28, refl_up);
 	mir_k *= 1.0 - near_steep * 0.7;  // weakest looking straight down
@@ -318,7 +328,7 @@ void fragment() {
 	// chop, and fade out with distance — no round dots, no far-field grid.
 	float sdot = max(dot(r, sun_n), 0.0);
 	float glitter_dist = 1.0 - smoothstep(30.0, 120.0, dist);
-	float glitter = (pow(sdot, 24.0) * 0.16 + pow(sdot, 240.0) * 1.2) * chop
+	float glitter = (pow(sdot, 24.0) * 0.22 + pow(sdot, 240.0) * 2.8) * chop
 		* mix(0.55, 1.0, glitter_dist)
 		* sparkle_strength * (1.0 - night_factor);
 	// Moon path: wider lobe + stronger so the shimmer visibly tracks the swell
@@ -336,22 +346,28 @@ void fragment() {
 	// facets near the camera. No thresholded blobs, no far-field foam — chop
 	// breaks the gate into flecks so it reads as churning foam, not circles.
 	float steep = 1.0 - n.y;
-	float cap = smoothstep(0.58, 0.90, crest) * smoothstep(0.66, 0.9, ripple.x)
+	float cap = smoothstep(0.48, 0.86, surface_swell.x) * smoothstep(0.66, 0.9, ripple.x)
 		* smoothstep(0.003, 0.04, steep) * chop;
 	cap *= 1.0 - smoothstep(12.0, 70.0, dist);
 	// Whitecaps stay blue-white at night (moonlit foam, not gray flecks).
 	vec3 foam_col = mix(water_foam_color * 0.9, vec3(0.30, 0.40, 0.52), night_factor);
 	foam_col = mix(foam_col, water_foam_color * 0.5, twilight_factor * 0.6);
-	light_add += cap * foam_col * 0.20 * (1.0 - night_factor * 0.45);
+	light_add += cap * foam_col * 0.38 * (1.0 - night_factor * 0.45);
 
 	// ---- Atmospheric haze at the very far field ----
 	float haze = smoothstep(90.0, 380.0, dist);
 	vec3 haze_col = mix(water_haze_color, water_night_color * 1.3, night_factor);
 	haze_col = mix(haze_col, reflected_horizon, twilight_factor * 0.55);
-	base = mix(base, haze_col, haze * 0.5);
+	base = mix(base, haze_col, haze * 0.24);
 
 	// Never-black floor keeps the water reading as water even in deep night.
 	vec3 col = max(base + light_add, vec3(0.012, 0.03, 0.09));
+	// Sparse plankton follows moving wave crests, fading beyond the near water.
+	vec2 plankton_cell = floor(world_pos.xz * 1.8);
+	float plankton_seed = fract(sin(dot(plankton_cell,vec2(127.1,311.7)))*43758.5453);
+	vec2 plankton_local = fract(world_pos.xz * 1.8) - vec2(0.2+plankton_seed*0.6,0.2+fract(plankton_seed*19.7)*0.6);
+	float plankton = exp(-dot(plankton_local,plankton_local)*150.0)*step(0.92,plankton_seed)*smoothstep(0.25,0.8,crest);
+	col += vec3(0.004,0.07,0.055)*plankton*night_factor*(1.0-smoothstep(12.0,40.0,dist))*surface_detail;
 	ALBEDO = col;
 	}
 }

@@ -31,7 +31,12 @@ func _run() -> void:
 	root.get_node("GameSettings").set("third_person", false)
 	change_scene_to_file("res://scenes/main.tscn")
 	await scene_changed
-	for frame in range(5):
+	# The empty-water flight fixture must not catch randomly prewarmed salvage.
+	# Deferred prewarming yields across frames even after _process is disabled.
+	var stream := current_scene.get_node("DebrisSpawner")
+	stream.set("prewarm_count",0)
+	stream.set_process(false)
+	for frame in range(20):
 		await process_frame
 	var player := get_first_node_in_group("player")
 	if player == null:

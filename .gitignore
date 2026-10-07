@@ -11,6 +11,7 @@ export_presets.cfg
 
 # Godot cache and import metadata
 *.import
+!textures/construction/timber_photographic_atlas.png.import
 *.meta
 
 # User data and saves
@@ -19,6 +20,8 @@ export_presets.cfg
 # Build artifacts
 /bin/
 /build/
+/tools/media_runtime/
+/tools/intro_source/
 
 # Platform-specific
 /Android/
@@ -42,3 +45,6 @@ models/*.glb
 !models/raw_meat.glb
 !models/cooked_meat.glb
 !models/diving_tank.glb
+
+!models/survivalist.glb
+__pycache__/

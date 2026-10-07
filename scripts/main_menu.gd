@@ -33,6 +33,7 @@ const UI_SURFACE := preload("res://scripts/ui_surface.gd")
 const SEA_BACKDROP: Shader = preload("res://shaders/menu_sea.gdshader")
 var _redraw_seconds := 0.0
 var _intro: Control
+var _story_pending := false
 ## A healthy resource request can spend a long time importing/uploading one
 ## dependency. Elapsed time is information, never proof that loading failed.
 const LONG_LOAD_NOTICE_AFTER := 30.0
@@ -162,6 +163,9 @@ func _save_sub(slot: String) -> String:
 func _process(delta: float) -> void:
 	_t += delta
 	_poll_game_load()
+	# Heavy script compilation must finish before the film's playback clock starts.
+	if _story_pending and not _warming_scripts and _busy:
+		_start_story()
 	if is_instance_valid(_intro): _intro.set("progress",_load_progress)
 	# The tap came in before the background load finished -> go now.
 	if _waiting_to_enter:
@@ -290,9 +294,8 @@ func _activate(btn_idx: int) -> void:
 	# scene can really be opened (never wipe a save for a transition that fails).
 	_selected_id = action_id
 	if action_id == "new" and DisplayServer.get_name() != "headless":
-		_intro = load("res://scripts/flooded_world_intro.gd").new() as Control
-		add_child(_intro)
-		_intro.cancelled.connect(_cancel_loading)
+		_story_pending = true
+		if not _warming_scripts: _start_story()
 	if _packed_game == null and not _load_requested:
 		_request_game_load()
 	if _busy:
@@ -300,15 +303,27 @@ func _activate(btn_idx: int) -> void:
 	queue_redraw()
 
 
-func _apply_selection() -> void:
+func _start_story() -> void:
+	_story_pending = false
+	_intro = load("res://scripts/flooded_world_intro.gd").new() as Control
+	add_child(_intro)
+	_intro.cancelled.connect(_cancel_loading)
+
+
+func _apply_selection() -> bool:
 	if _selected_id == "continue":
-		Inventory.load_game("main")
+		if Inventory.load_game("main").is_empty():
+			_error = Inventory.last_save_error
+			return false
 	elif _selected_id == "quick":
-		Inventory.load_game("quick")
+		if Inventory.load_game("quick").is_empty():
+			_error = Inventory.last_save_error
+			return false
 	elif _selected_id == "new":
 		# Keep the on-disk saves until the new world successfully starts saving.
 		Inventory.new_game_reset(false)
 	_selected_id = ""
+	return true
 
 
 func _enter_game() -> void:
@@ -331,6 +346,7 @@ func _enter_game() -> void:
 ## Cancelling the choice does not cancel or duplicate the resource request.
 ## It can finish warming in the background; no inventory/save changes occurred.
 func _cancel_loading() -> void:
+	_story_pending = false
 	if is_instance_valid(_intro): _intro.queue_free()
 	_intro = null
 	_busy = false
@@ -352,6 +368,9 @@ func _remove_cancel_button() -> void:
 
 
 func _swap_scene(packed: PackedScene) -> void:
+	if _story_pending:
+		_waiting_to_enter = true
+		return
 	if is_instance_valid(_intro) and not bool(_intro.get("complete")):
 		_waiting_to_enter = true
 		return
@@ -367,8 +386,15 @@ func _swap_scene(packed: PackedScene) -> void:
 	var handoff: CanvasLayer
 	if _selected_id == "new" and is_instance_valid(_intro):
 		handoff = load("res://scripts/wake_transition.gd").new() as CanvasLayer
+		handoff.set("arrival_texture", _intro.get("handoff_texture"))
 		get_tree().root.add_child(handoff)
-	_apply_selection()
+	if not _apply_selection():
+		if handoff != null: handoff.queue_free()
+		_busy = false
+		_waiting_to_enter = false
+		_remove_cancel_button()
+		queue_redraw()
+		return
 	var err: int = get_tree().change_scene_to_packed(packed)
 	if err != OK:
 		if handoff != null: handoff.queue_free()
@@ -383,6 +409,7 @@ func _swap_scene(packed: PackedScene) -> void:
 ## Never leave the player with a menu that ignores every tap: say why it
 ## failed and unlock the buttons so they can try again.
 func _fail(msg: String) -> void:
+	_story_pending = false
 	if is_instance_valid(_intro): _intro.queue_free()
 	_intro = null
 	push_error("[MainMenu] " + msg + " (" + GAME_SCENE + ")")

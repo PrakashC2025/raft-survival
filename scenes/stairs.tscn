@@ -4,6 +4,8 @@
 
 [ext_resource type="Shader" path="res://shaders/wood_planks.gdshader" id="2_wood"]
 
+[ext_resource type="Texture2D" path="res://textures/construction/timber_photographic_atlas.png" id="photo_atlas"]
+
 [sub_resource type="BoxShape3D" id="BoxShape3D_step"]
 size = Vector3(2, 0.22, 0.25)
 
@@ -12,6 +14,10 @@ points = PackedVector3Array(-1, -0.2, 0, 1, -0.2, 0, -1, -0.2, 3, 1, -0.2, 3, -1
 
 [sub_resource type="ShaderMaterial" id="mat_stairs"]
 shader = ExtResource("2_wood")
+shader_parameter/photographic_wood = true
+shader_parameter/wood_texture = ExtResource("photo_atlas")
+shader_parameter/atlas_strip = 0.0
+shader_parameter/tint_variation = 0.16
 shader_parameter/base_color = Color(0.55, 0.38, 0.20, 1)
 shader_parameter/seam_color = Color(0.28, 0.18, 0.10, 1)
 shader_parameter/half_x = 1.0
@@ -29,6 +35,10 @@ size = Vector3(2, 0.18, 1.0)
 
 [sub_resource type="ShaderMaterial" id="mat_landing"]
 shader = ExtResource("2_wood")
+shader_parameter/photographic_wood = true
+shader_parameter/wood_texture = ExtResource("photo_atlas")
+shader_parameter/atlas_strip = 0.0
+shader_parameter/tint_variation = 0.16
 shader_parameter/base_color = Color(0.55, 0.38, 0.20, 1)
 shader_parameter/seam_color = Color(0.28, 0.18, 0.10, 1)
 shader_parameter/half_x = 1.0

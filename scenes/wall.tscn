@@ -4,17 +4,25 @@
 
 [ext_resource type="Shader" path="res://shaders/wood_planks.gdshader" id="2_wood"]
 
+[ext_resource type="Script" path="res://scripts/construction_visual.gd" id="visual_details"]
+[ext_resource type="Texture2D" path="res://textures/construction/timber_photographic_atlas.png" id="timber_atlas"]
+
 [sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
 size = Vector3(2, 2.5, 0.2)
 
 [sub_resource type="ShaderMaterial" id="mat_wall"]
 shader = ExtResource("2_wood")
+shader_parameter/photographic_wood = true
+shader_parameter/wood_texture = ExtResource("timber_atlas")
+shader_parameter/atlas_strip = 1.0
 shader_parameter/base_color = Color(0.62, 0.43, 0.22, 1)
 shader_parameter/seam_color = Color(0.30, 0.20, 0.11, 1)
 shader_parameter/half_x = 1.0
 shader_parameter/half_y = 1.25
 shader_parameter/half_z = 0.1
 shader_parameter/plank_width = 0.25
+shader_parameter/horizontal_boards = true
+shader_parameter/moss_amount = 0.13
 shader_parameter/seam_width = 0.006
 
 [sub_resource type="BoxMesh" id="BoxMesh_ybjjv"]
@@ -69,3 +77,7 @@ accepts = Array[String](["Wall", "Door", "Window"])
 
 [node name="SampleMarker" type="Marker3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="TimberDetails" type="Node3D" parent="."]
+script = ExtResource("visual_details")
+kind = "Wall"

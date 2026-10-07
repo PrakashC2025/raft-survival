@@ -638,14 +638,24 @@ func _build_chip_text() -> String:
 	var ok: bool = p.get("build_valid") == true
 	var state := "READY" if ok else "NO SPOT"
 	var cost := ""
+	var multiplier := 1
+	var room_plan: Dictionary = p.get("_smart_roof_plan")
+	if piece_name2 == "Roof" and not room_plan.is_empty():
+		multiplier = room_plan.transforms.size()
+		state = "READY %d TILES" % multiplier if ok else "NO SPOT"
 	if Inventory.RECIPES.has(piece_name2):
 		var parts: Array = []
 		var recipe: Dictionary = Inventory.RECIPES[piece_name2]
 		for item in recipe:
-			parts.append("%s %d" % [str(item).substr(0, 3).to_upper(), int(recipe[item])])
+			parts.append("%s %d" % [str(item).substr(0, 3).to_upper(), int(recipe[item])*multiplier])
 		cost = "   " + "  ".join(parts)
 	var afford := "OK" if Inventory.can_afford(piece_name2) else "NEED MORE"
-	return "%s  %s%s   [%s]" % [piece_name2.to_upper(), state, cost, afford]
+	if multiplier > 1:
+		var total_cost := {}
+		for item in Inventory.RECIPES[piece_name2]: total_cost[item] = int(Inventory.RECIPES[piece_name2][item])*multiplier
+		afford = "OK" if Inventory.infinite or Inventory.has_cost(total_cost) else "NEED MORE"
+	var piece_label: String = {"HalfWall":"HALF WALL","CargoCrate":"CARGO CRATE"}.get(piece_name2,piece_name2.to_upper())
+	return "%s  %s%s   [%s]" % [piece_label, state, cost, afford]
 
 
 func _get_stat(which: String) -> float:
@@ -662,7 +672,7 @@ func _do_quick_save() -> void:
 	var p := _get_player()
 	if p == null or not p.has_method("quick_save"):
 		return
-	p.call("quick_save")
+	if not bool(p.call("quick_save")): return
 	_save_flash_until = Time.get_ticks_msec() / 1000.0 + 1.6
 	queue_redraw()
 

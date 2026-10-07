@@ -28,7 +28,7 @@
 [ext_resource type="Script" uid="uid://cdfw5dgx18uri" path="res://scripts/island_beacon.gd" id="25_beacon"]
 [ext_resource type="Script" uid="uid://bak02doledtl7" path="res://scripts/island_marker.gd" id="26_marker"]
 [ext_resource type="Script" path="res://scripts/mobile_performance.gd" id="27_performance"]
-[ext_resource type="PackedScene" path="res://models/beach_survivor.glb" id="28_survivor"]
+[ext_resource type="PackedScene" path="res://models/survivalist.glb" id="28_survivor"]
 [ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_short.glb" id="29_palm_short"]
 [ext_resource type="Script" path="res://scripts/ocean_ambience.gd" id="30_ocean_audio"]
 [ext_resource type="PackedScene" path="res://scenes/destination_island.tscn" id="31_destination"]
@@ -38,6 +38,8 @@
 [ext_resource type="Script" path="res://scripts/island_birds.gd" id="35_island_birds"]
 
 [ext_resource type="Script" path="res://scripts/fish_school.gd" id="40_fish"]
+
+[ext_resource type="Script" path="res://scripts/ocean_atmosphere.gd" id="atmosphere"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
 render_priority = 0
@@ -189,7 +191,7 @@ background_mode = 2
 sky = SubResource("Sky_qsp4k")
 ambient_light_source = 3
 ambient_light_color = Color(0.26, 0.31, 0.45, 1)
-ambient_light_sky_contribution = 0.85
+ambient_light_sky_contribution = 0.55
 ambient_light_energy = 1.0
 reflected_light_source = 2
 tonemap_mode = 3
@@ -268,6 +270,9 @@ margin = 0.1
 
 [node name="Camera3D" type="Camera3D" parent="Player/CamPivot/SpringArm3D" unique_id=1154674721]
 current = true
+fov = 75.0
+near = 0.1
+far = 1000.0
 
 [node name="HandPivot" type="Node3D" parent="Player/CamPivot/SpringArm3D/Camera3D" unique_id=658310106]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.18, -0.3, -0.55)
@@ -435,9 +440,10 @@ camera_attributes = SubResource("CameraAttributesPractical_seu75")
 script = ExtResource("16_0odxb")
 fog_enabled = false
 current_time = 9.5
-sun_energy = 2.6
+sun_energy = 1.5
 ambient_energy = 1.0
-moon_energy = 2.4
+sky_contribution = 0.55
+moon_energy = 0.3
 wind_direction = 2.35619451204804
 metadata/_custom_type_script = "uid://deo0gxkmk2ahd"
 
@@ -457,9 +463,10 @@ shadow_enabled = false
 directional_shadow_max_distance = 150.0
 
 [node name="FillLight" type="DirectionalLight3D" parent="Sky3D" unique_id=1883530153]
-transform = Transform3D(1, 0, 0, 0, 0.2588191, -0.9659258, 0, 0.9659258, 0.2588191, 0, 10, 0)
+rotation_degrees = Vector3(-50, 0, 0)
 light_color = Color(0.68, 0.78, 0.95, 1)
-light_energy = 0.12
+light_energy = 0.4
+light_specular = 0.0
 
 [node name="SkyDome" type="Node" parent="Sky3D" unique_id=2052497160]
 script = ExtResource("17_lswn8")
@@ -467,13 +474,18 @@ ground_color = Color(0.04, 0.07, 0.12, 1)
 sun_azimuth = 0.27925268
 sun_altitude = 2.9638693
 sun_light_color = Color(1, 0.96, 0.89, 1)
-sun_horizon_light_color = Color(1, 0.55, 0.3, 1)
-sun_light_energy = 2.6
+sun_horizon_light_color = Color(1, 0.73, 0.52, 1)
+sun_light_energy = 1.5
+cumulus_coverage = 0.48
+cumulus_noise_freq = 2.15
+cumulus_thickness = 0.019
+cumulus_size = 0.7
+cirrus_coverage = 0.28
 moon_azimuth = 3.4208453
 moon_altitude = 0.17772332
 moon_size = 0.11
 moon_light_color = Color(0.75, 0.86, 1, 1)
-moon_light_energy = 2.4
+moon_light_energy = 0.3
 atm_night_tint = Color(0.26, 0.31, 0.45, 1)
 atm_moon_mie_intensity = 2.0
 fog_visible = false
@@ -483,7 +495,7 @@ wind_direction = 2.35619451204804
 [node name="TimeOfDay" type="Node" parent="Sky3D" unique_id=1075981311]
 script = ExtResource("18_a6jrf")
 dome_path = NodePath("../SkyDome")
-minutes_per_day = 18.0
+minutes_per_day = 24.0
 current_time = 9.5
 day = 5
 celestials_calculations = 0
@@ -496,3 +508,6 @@ script = ExtResource("40_fish")
 
 [node name="OceanAmbience" type="AudioStreamPlayer" parent="."]
 script = ExtResource("30_ocean_audio")
+
+[node name="OceanAtmosphere" type="Node3D" parent="."]
+script = ExtResource("atmosphere")

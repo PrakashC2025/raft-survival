@@ -1,7 +1,7 @@
 extends RefCounted
 ## Nine rounded timbers, lashings, cross-braces and a purely decorative cloth.
 const SURFACES := preload("res://scripts/object_materials.gd")
-const WOOD := preload("res://textures/ui/weathered_raft_wood.png")
+const WOOD := preload("res://textures/construction/timber_photographic_atlas.png")
 static var _timber: ShaderMaterial
 static var _log: CylinderMesh
 static func create() -> Node3D:
@@ -39,7 +39,10 @@ static func create() -> Node3D:
 		brace_batch.set_instance_transform(i,Transform3D(Basis(Vector3.RIGHT,PI/2)*Basis.from_scale(Vector3(0.5,1,0.5)),Vector3(-0.72+i*1.44,-0.18,0)))
 	braces.multimesh = brace_batch
 	root.add_child(braces)
-	var rope := SURFACES.make(SURFACES.Kind.CLOTH,Color(0.36,0.27,0.16))
+	var rope := ShaderMaterial.new()
+	rope.shader = preload("res://shaders/rope_fiber.gdshader")
+	rope.set_shader_parameter("photographic_hemp",true)
+	rope.set_shader_parameter("hemp_atlas",WOOD)
 	for i in range(2):
 		var strap := MeshInstance3D.new()
 		strap.name = "RopeLashing"+str(i)

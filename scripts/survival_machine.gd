@@ -7,6 +7,7 @@ var water := 0
 var seconds := 0.0
 var charge := 0.0
 var enabled := true
+var automatic_night := true
 var transmissions := 0
 var _preview := false
 var _sample := 0.0
@@ -86,7 +87,9 @@ func advance(step: float) -> void:
 					water += 1
 		"ElectricLamp":
 			if _light != null:
-				_light.visible = request_power(step * 0.08)
+				var atmosphere := get_tree().current_scene.get_node_or_null("Sky3D/TimeOfDay")
+				var hour: float = atmosphere.get("current_time") if atmosphere != null else 0.0
+				_light.visible = (not automatic_night or hour < 6.0 or hour >= 18.0) and request_power(step * 0.08)
 
 func request_power(amount: float) -> bool:
 	for source in get_tree().get_nodes_in_group("power_source"):
@@ -129,7 +132,7 @@ func interact_survival(player: Node) -> void:
 			enabled = not enabled
 			if not enabled and _light != null:
 				_light.visible = false
-			player.call("_hud_toast", "LAMP ON" if enabled else "LAMP OFF")
+			player.call("_hud_toast", "LAMP AUTO · ON AT NIGHT" if enabled and automatic_night else ("LAMP ON" if enabled else "LAMP OFF"))
 		"RescueRadio":
 			if request_power(20):
 				transmissions += 1
@@ -153,12 +156,12 @@ func _refresh_label() -> void:
 		"WaterPurifier": _label.text = "STILL · %d/5 WATER · %ds FUEL" % [water, int(fuel)]
 		"ElectricPurifier": _label.text = "POWERED WATER · %d/5" % water
 		"WindGenerator": _label.text = "WIND BATTERY · %d/120" % int(charge)
-		"ElectricLamp": _label.text = "LAMP · " + ("ON" if enabled else "OFF")
+		"ElectricLamp": _label.text = "LAMP · " + (("AUTO NIGHT" if automatic_night else "ON") if enabled else "OFF")
 		"RescueRadio": _label.text = "SOS SENT" if transmissions > 0 else "RADIO · NEEDS 20 CHARGE"
 
 func save_survival_state() -> Dictionary:
 	return {"fuel": fuel, "water": water, "seconds": seconds, "charge": charge,
-		"enabled": enabled, "transmissions": transmissions, "power_reported": _power_reported}
+		"enabled": enabled, "automatic_night": automatic_night, "transmissions": transmissions, "power_reported": _power_reported}
 
 func restore_survival_state(data: Dictionary) -> void:
 	fuel = clampf(float(data.get("fuel", 0)), 0, 200)
@@ -166,6 +169,7 @@ func restore_survival_state(data: Dictionary) -> void:
 	seconds = clampf(float(data.get("seconds", 0)), 0, 20)
 	charge = clampf(float(data.get("charge", 0)), 0, 120)
 	enabled = bool(data.get("enabled", true))
+	automatic_night = bool(data.get("automatic_night", true))
 	transmissions = clampi(int(data.get("transmissions", 0)), 0, 10000)
 	_power_reported = bool(data.get("power_reported", false))
 	_refresh_label()

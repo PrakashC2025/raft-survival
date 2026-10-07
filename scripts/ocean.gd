@@ -27,7 +27,7 @@ class_name Ocean
 @export var crest_color := Color(0.10, 0.34, 0.46)
 @export var foam_color := Color(1.15, 1.25, 1.42)
 @export var haze_color := Color(0.45, 0.6, 0.75)
-@export var sparkle_strength := 0.6
+@export var sparkle_strength := 1.8
 
 # Optional editor-only time shortcuts. F5 is reserved for the player's quick-save.
 @export var dev_time_keys := false

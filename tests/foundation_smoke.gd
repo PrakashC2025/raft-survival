@@ -70,7 +70,11 @@ func _run() -> void:
 		socket_types.append(socket.get("socket_type"))
 		socket.set("socket_type", 2)
 	aim_at(Vector2i(1, 0), raft)
+	if not player.get("build_valid"): print("FOUNDATION DIAGNOSTIC ",player.get("_diag"))
 	check(player.get("build_valid") and player.get("_ghost_target_socket") == null, "Grid preview is valid without optional edge socket metadata")
+	if not player.get("build_valid"):
+		quit(1)
+		return
 	var preview: Transform3D = player.get("_ghost_transform")
 	press_p()
 	check(container.get_child_count() == before_count + 1, "P places a green foundation without socket metadata")

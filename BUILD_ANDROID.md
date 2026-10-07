@@ -97,3 +97,19 @@ frame rate, heat, and multi-touch feel on the actual phone before distribution.
 The 2026-10-03 source fixes the Pause → Quit detached-HUD error and the reported integer-division/fishing-variable warnings. Tree preparation is split across frames, and Android grass scattering uses smaller work batches to reduce startup spikes. Reopen Godot before manually exporting a fresh APK; installing the old build will not include these changes. No new APK was exported by the coding agent.
 
 For the owner's Xiaomi 11 Lite-class phone, begin with **Settings → Graphics → Battery Saver**, **Frame rate → 30 FPS**, in landscape. Keep ARM64 enabled and all required island textures included when exporting. Install the APK as an update with the existing signing key and package name, preserving app data/saves. Test New Game/Continue, walking and looking together, Pause → Quit → Continue, building and bag/map/crafting. Actual phone frame rate, temperature and memory use remain unverified. Try Balanced after stable play; High may need more GPU time than this device can sustain.
+
+
+## New video intro (2026-10-07)
+
+New Game now uses the 31-second movie with video sound, spoken narration and subtitles, followed by a prepared dawn fade. Reopen the project and let resource imports finish before exporting. Keep **Export all resources** selected and do not exclude `video/*`: both `video/new_game_intro.ogv` and `video/intro_arrival.jpg` are required. The existing preset already includes them. The local raw film and preparation tools under `tools/` remain excluded. Required island textures must also remain included.
+
+After manually exporting, test full New Game playback, Skip, Back to Menu/Android Back, background/resume, volume/mute, the dawn transition and Continue on the phone. Continue should bypass the video and restore its saved time. Four isolated source suites passed 164 checks, and full desktop Mobile-renderer playback/arrival passed; no APK or Android phone playback was verified by this change. Battery Saver at 30 FPS remains the suggested starting setting for the owner's Xiaomi phone.
+
+
+## Latest rounded timber source update
+
+Reopen the editor and let resource imports finish before the owner's manual export. Keep `models/survivalist.glb`, `scenes/half_wall.tscn`, `scenes/cargo_crate.tscn`, `textures/construction/` and all existing required island textures included. The selected timber atlas retains its import settings: VRAM compression, High Quality, mipmaps, and Size Limit 1024. Current generated formats are desktop BPTC and Android ASTC; the source PNG remains 1254 by 1254. The existing video-intro export instructions still apply. No APK was built or inspected for this source update.
+
+The Mobile renderer uses depth fog and analytic ocean reflection; SSAO, SSR and volumetric fog are enabled only for the supported desktop Forward+ profile. Start phone testing with Battery Saver and 30 FPS, then check the intro transition, rounded decks, room roofs, the cargo crate/net/coil, open wooden shutters and touch release after pausing. Desktop preview rates are not phone evidence.
+
+Encrypted-save transfers require `raft_save.key` along with the primary and backup save files in the same app data directory. Do not delete the owner's app data to test this update; source verification uses isolated storage.

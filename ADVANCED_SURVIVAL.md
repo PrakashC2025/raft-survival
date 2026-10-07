@@ -23,7 +23,7 @@ Oxygen depletes underwater, regenerates at the surface and causes drowning damag
 
 ## Flooded-world opening and practical survival
 
-New Game plays an audio-timed photographic cinematic of about 26 seconds: space/asteroid, coastal city, flood, then a lone survivor waking on a raft. It is animated artwork with pans and fades, not a rendered city or a recorded video. SKIP STORY advances to world preparation; BACK TO MENU cancels the choice without replacing saves. Continue and Quick Save go directly to their saved worlds. One atlas texture and simple drawing keep cinematic rendering inexpensive; resource loading runs behind it. Actual world initialization can still take time on a device.
+New Game plays the owner-supplied 31-second video with its soundtrack, eight spoken English narration lines and synchronized subtitles. SKIP STORY holds the current film frame for world preparation; BACK TO MENU cancels without replacing saves. Continue and Quick Save bypass the intro. The movie uses mobile-sized, constant-rate video; script preparation finishes before playback and resource loading continues behind it. Dawn gameplay is revealed only after initial world setup is ready. See GAME_GUIDE.md and video/INTRO_ASSETS.md for current timing, verification and provenance.
 
 The voyage chart identifies the flooded world and rare surviving islands. The 95-percent figure is story context, not a dynamically simulated planetary flood. Existing island destinations and saved structure positions are preserved. Other survivor NPCs and underwater broken-city exploration are intentionally reserved for later.
 
@@ -51,4 +51,9 @@ The large pasted concept includes additional full systems: shifting terrain/cave
 
 ## Latest cinematic and raft refinement
 
-The opening is now narrated and lasts about 26 seconds, determined by the prerecorded spoken lines. It includes approach/impact effects and a two-second image-to-dawn gameplay handoff. Narration is locally synthesized with Microsoft David Desktop. Skip stops voices/effects immediately; Continue keeps the saved clock. The starter raft is now nine rounded weathered timbers with cross-poles, rope lashings and a decorative cloth mast. The display cloth has no navigation effect and is hidden when Sail Kit is installed. Foundation decks share the new detailed timber image. Saves, collisions, building supports and upgrade controls retain their existing formats.
+The former 26-second image opening has been replaced by the 31-second owner-supplied video, narrated offline with Microsoft David Desktop. Skip stops the embedded soundtrack/voice immediately; Continue keeps the saved clock. The final film frame carries across scene entry, then fades to prepared first-person dawn. The starter raft remains nine rounded weathered timbers with cross-poles, rope lashings and a decorative cloth mast. The display cloth has no navigation effect and hides when Sail Kit is installed. Foundation decks share the detailed timber image. Existing saves, collisions, building supports and upgrade controls retain their formats.
+
+
+## Rounded construction and atmosphere refinement
+
+The latest owner reference uses rope-bound rounded timber rather than the earlier clapboard/glass concept. Five closely joined timbers form each deck/roof/wall panel and the hinged door. Windows have an opening wooden shutter and no glass. Half walls, transactional whole-room roofs, a construction grid, automatic night lamps and a configurable 24-minute clock extend the existing survival systems. A craftable CargoCrate includes a rope coil and draped net; it is a decorative physical prop with no second storage inventory. The original CC0 character rig has muted clothing colours and a swimming clip. Plaintext saves remain loadable through the authenticated encrypted storage layer; transferring an encrypted save also requires its key. See `VISUAL_BUILD_OVERHAUL.md` and `GAME_GUIDE.md` for exact limits and evidence.
