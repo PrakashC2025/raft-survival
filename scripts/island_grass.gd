@@ -48,10 +48,13 @@ var _retries_left := RETRY_FRAMES
 var _build_generation := 0
 var _imported_albedo_texture: Texture2D = null
 var _using_imported_model := false
+var _prepare_phase := "idle"
+var _prepare_progress := Vector2i.ZERO
 
 # Hundreds of Mesh-vs-ray queries in one frame can stall phones while the
 # island's dense trimesh is being scattered. Time-slice the work instead.
 const RUNTIME_RAY_BATCH_SIZE := 64
+const FRAME_WORK_BUDGET := preload("res://scripts/frame_work_budget.gd")
 
 func _ready() -> void:
 	if not Engine.is_editor_hint():
@@ -103,11 +106,20 @@ func rebuild() -> void:
 func _build_field(generation: int) -> void:
 	if not is_inside_tree() or generation != _build_generation:
 		return
+	_prepare_phase="waiting for terrain"
+	# Do not scatter/retry over missing terrain while all four islands cook.
+	# Setup explicitly requests the final rebuild when its colliders are ready.
+	var setup := get_parent().get_node_or_null("IslandSetup")
+	if setup == null: setup = get_parent().get_node_or_null("../IslandSetup")
+	while not Engine.is_editor_hint() and setup != null and setup.get("setup_complete") != true:
+		await get_tree().process_frame
+		if not is_inside_tree() or generation != _build_generation: return
 	var active_path := sketchfab_grass_model if not sketchfab_grass_model.is_empty() else grass_mesh_path
 	var src := _load_blade_mesh(active_path)
 	if src == null:
 		push_warning("IslandGrass: no Mesh found at %s (is the model imported?)" % active_path)
 		return
+	_prepare_phase="sampling"
 
 	var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
 	_rng.seed = scatter_seed
@@ -116,12 +128,15 @@ func _build_field(generation: int) -> void:
 	# its transforms are interpreted in OUR frame, not the world frame).
 	var world_to_local := global_transform.affine_inverse()
 
-	# Sample first, then fill. Runtime queries are split over physics frames so
+	# Sample first, then fill. Runtime queries are split over render frames so
 	# a field this size cannot monopolize the main thread on mobile.
 	var xforms: Array[Transform3D] = []
 	var customs: Array[Color] = []
 	var target_count := maxi(instance_count, 0)
-	var is_mobile := not Engine.is_editor_hint() and (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"))
+	var is_mobile := not Engine.is_editor_hint() and GameSettings.mobile_effects_profile()
+	# Each of the four islands gets a quarter of the 2 ms grass allowance.
+	# Fixed signal order must not let the first field starve later fields.
+	var work_lane := StringName("grass_%d"%get_instance_id())
 	if is_mobile:
 		# Allocate once at the mobile ceiling. Quality changes can then reveal
 		# more/fewer tufts without new terrain rays or another loading stall.
@@ -186,9 +201,10 @@ func _build_field(generation: int) -> void:
 					xforms.append(world_to_local * Transform3D(b, pos + n * 0.02))
 					customs.append(Color(_rng.randf(), _rng.randf(), _rng.randf(), _rng.randf()))
 
-		if not Engine.is_editor_hint() and rays_since_yield >= ray_batch:
+		if not Engine.is_editor_hint() and (FRAME_WORK_BUDGET.exhausted(1,work_lane,16,500) or rays_since_yield >= ray_batch):
+			_prepare_progress=Vector2i(target_count*3-attempts,target_count*3)
 			rays_since_yield = 0
-			await get_tree().physics_frame
+			await get_tree().process_frame
 			if not is_inside_tree() or generation != _build_generation:
 				return
 			# Refresh the direct-space handle after yielding to the physics loop.
@@ -208,6 +224,7 @@ func _build_field(generation: int) -> void:
 			print("[IslandGrass] gave up: no island collision found")
 		return
 	_retries_left = RETRY_FRAMES
+	_prepare_phase="filling"
 
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -217,6 +234,10 @@ func _build_field(generation: int) -> void:
 	for i in xforms.size():
 		mm.set_instance_transform(i, xforms[i])
 		mm.set_instance_custom_data(i, customs[i])
+		if not Engine.is_editor_hint() and FRAME_WORK_BUDGET.exhausted(1,work_lane,16,500):
+			_prepare_progress=Vector2i(i,xforms.size())
+			await get_tree().process_frame
+			if not is_inside_tree() or generation != _build_generation: return
 
 	var mmi := MultiMeshInstance3D.new()
 	mmi.name = "GrassField"
@@ -231,6 +252,8 @@ func _build_field(generation: int) -> void:
 	if performance != null:
 		performance.call("refresh_foliage")
 	print("[IslandGrass] placed %d blades" % xforms.size())
+	_prepare_phase="ready"
+	_prepare_progress=Vector2i(xforms.size(),xforms.size())
 
 ## Retry on a later physics frame while waiting for the island collider.
 func _retry_rebuild(generation: int) -> void:

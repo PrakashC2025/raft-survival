@@ -27,6 +27,7 @@ const ITEM_POOL := [
 	"Wood", "Wood", "Wood", "Wood", "Wood", "Wood",
 	"Rope", "Rope", "Rope",
 	"Plastic", "Plastic",
+	"Soil", "Soil",
 	"Barrel",
 	"Stone", "Stone",
 	"Metal",
@@ -39,7 +40,7 @@ const ITEM_POOL := [
 func _ready() -> void:
 	# Keep the ambient physics-body count modest on phones. The desktop stream
 	# remains denser, while mobile still starts with a visible spread of loot.
-	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
+	if GameSettings.mobile_effects_profile():
 		max_debris = mini(max_debris, 48)
 		prewarm_count = mini(prewarm_count, 24)
 	player = get_tree().get_first_node_in_group("player")

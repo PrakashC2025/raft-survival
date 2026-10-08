@@ -69,18 +69,40 @@ static func run(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) 
 	_line(c, center + Vector2(r * 0.25, r * 0.05), center + Vector2(r * 0.55, -r * 0.4), w * 1.2, col)
 
 
+# Human jumping with raised arms and bent knees.
+static func jump(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) -> void:
+	_circle(c,center+Vector2(0,-0.58)*r,r*0.18,col)
+	_line(c,center+Vector2(0,-0.33)*r,center+Vector2(0,0.12)*r,w*1.5,col)
+	for side in [-1.0,1.0]:
+		_line(c,center+Vector2(0,-0.25)*r,center+Vector2(side*0.42,-0.7)*r,w*1.25,col)
+		_line(c,center+Vector2(0,0.1)*r,center+Vector2(side*0.36,0.34)*r,w*1.4,col)
+		_line(c,center+Vector2(side*0.36,0.34)*r,center+Vector2(side*0.17,0.65)*r,w*1.3,col)
+
+static func door(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) -> void:
+	c.draw_rect(Rect2(center+Vector2(-0.52,-0.73)*r,Vector2(1.04,1.46)*r),col,false,w)
+	_line(c,center+Vector2(-0.42,-0.63)*r,center+Vector2(0.20,-0.37)*r,w,col)
+	_line(c,center+Vector2(0.20,-0.37)*r,center+Vector2(0.20,0.7)*r,w,col)
+	_circle(c,center+Vector2(0.03,0.14)*r,r*0.065,col)
+
+static func meal(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) -> void:
+	_circle(c,center,r*0.48,col,false,w)
+	_circle(c,center,r*0.32,col,false,w*0.5)
+	_line(c,center+Vector2(-0.72,-0.68)*r,center+Vector2(-0.72,0.7)*r,w,col)
+	for x in [-0.9,-0.72,-0.54]:_line(c,center+Vector2(x,-0.7)*r,center+Vector2(x,-0.28)*r,w*0.6,col)
+	_line(c,center+Vector2(0.72,-0.7)*r,center+Vector2(0.72,0.7)*r,w,col)
+
 # Simple open hand (interact).
 static func hand(c: CanvasItem, center: Vector2, r: float, _w: float, col: Color) -> void:
-	# palm
-	var palm := center + Vector2(0, r * 0.25)
-	_circle(c, palm, r * 0.34, col)
-	# four fingers
-	for i in range(4):
-		var fx := center.x + (float(i) - 1.5) * r * 0.18
-		var fy := center.y - r * 0.05
-		_circle(c, Vector2(fx, fy), r * 0.11, col)
-	# thumb
-	_circle(c, center + Vector2(-r * 0.45, r * 0.05), r * 0.13, col)
+	_circle(c,center+Vector2(0,0.24)*r,r*0.33,col)
+	c.draw_rect(Rect2(center+Vector2(-0.28,-0.08)*r,Vector2(0.56,0.43)*r),col)
+	for i in 4:
+		var x:=(float(i)-1.5)*0.17
+		var tip:=center+Vector2(x,[-0.40,-0.68,-0.62,-0.46][i])*r
+		_line(c,center+Vector2(x,0.05)*r,tip,r*0.15,col)
+		_circle(c,tip,r*0.075,col)
+	_line(c,center+Vector2(-0.18,0.28)*r,center+Vector2(-0.50,-0.02)*r,r*0.19,col)
+	_circle(c,center+Vector2(-0.50,-0.02)*r,r*0.095,col)
+	c.draw_rect(Rect2(center+Vector2(-0.16,0.48)*r,Vector2(0.32,0.25)*r),col)
 
 
 # Fishing-hook shape (rope throw).
@@ -220,6 +242,10 @@ static func item_color(item: String) -> Color:
 
 
 static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) -> void:
+	if item=="Burning Torch":item="Torch"
+	if item=="StorageBox":item="CargoCrate"
+	if item=="CookingSetup":item="Bonfire"
+	if item.trim_suffix(" Seed") in ["Potato","Carrot","Tomato","Coconut","Banana","Onion"]:item=item.trim_suffix(" Seed")
 	if ITEM_ART.draw(c, item, center, r):
 		return
 	if item.ends_with(" Seed"):
@@ -231,7 +257,48 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 		_line(c, center + Vector2(-r * 0.25, r * 0.46), center + Vector2(r * 0.25, r * 0.46), 1.0, Color(0.43, 0.37, 0.25))
 		return
 	var col := item_color(item)
+	if preload("res://scripts/food_rules.gd").RECIPES.has(item):
+		c.draw_arc(center, r*.65,0,PI,24,Color(.64,.40,.20),r*.22,true)
+		c.draw_line(center+Vector2(-r*.65,0),center+Vector2(r*.65,0),Color(.77,.44,.17),r*.20,true)
+		return
 	match item:
+		"Medkit":
+			c.draw_rect(Rect2(center-Vector2(r*.65,r*.45),Vector2(r*1.3,r*.9)),Color(.85,.88,.81))
+			_line(c,center-Vector2(r*.3,0),center+Vector2(r*.3,0),r*.18,Color(.82,.15,.15))
+			_line(c,center-Vector2(0,r*.3),center+Vector2(0,r*.3),r*.18,Color(.82,.15,.15))
+		"Can","Dirty Water Can","Clean Water Can":
+			c.draw_rect(Rect2(center-Vector2(r*.4,r*.6),Vector2(r*.8,r*1.2)),Color(.55,.62,.64))
+			_line(c,center+Vector2(-r*.36,-r*.54),center+Vector2(r*.36,-r*.54),r*.12,Color(.27,.56,.73) if item=="Clean Water Can" else Color(.30,.27,.15))
+		"Battery","Used Battery":
+			c.draw_rect(Rect2(center+Vector2(-r*.34,-r*.65),Vector2(r*.68,r*1.3)),Color(.17,.5,.25) if item=="Battery" else Color(.30,.32,.30))
+			c.draw_rect(Rect2(center+Vector2(-r*.16,-r*.76),Vector2(r*.32,r*.14)),Color(.7,.73,.7))
+			_line(c,center+Vector2(-r*.17,0),center+Vector2(r*.17,0),r*.07,Color.WHITE)
+			if item=="Battery":_line(c,center+Vector2(0,-r*.17),center+Vector2(0,r*.17),r*.07,Color.WHITE)
+		"Solar Torch":
+			c.draw_rect(Rect2(center+Vector2(-r*.24,-r*.25),Vector2(r*.48,r*.95)),Color(.15,.18,.19))
+			c.draw_rect(Rect2(center+Vector2(-r*.39,-r*.60),Vector2(r*.78,r*.40)),Color(.3,.36,.39))
+			_line(c,center+Vector2(-r*.3,-r*.59),center+Vector2(r*.3,-r*.59),r*.12,Color(.9,.96,1))
+		"Walkie Talkie":
+			c.draw_rect(Rect2(center+Vector2(-r*.39,-r*.43),Vector2(r*.78,r*1.1)),Color(.10,.13,.14))
+			_line(c,center+Vector2(-r*.22,-r*.4),center+Vector2(-r*.22,-r*.91),r*.1,Color(.18,.21,.2))
+			c.draw_rect(Rect2(center+Vector2(-r*.26,-r*.22),Vector2(r*.52,r*.27)),Color(.42,.72,.39))
+			for row in 3:_line(c,center+Vector2(-r*.23,r*(.22+row*.12)),center+Vector2(r*.23,r*(.22+row*.12)),r*.045,Color(.36,.40,.4))
+		"Binoculars":
+			_line(c,center+Vector2(-r*.4,0),center+Vector2(r*.4,0),r*.4,Color(.13,.17,.19))
+			for side in [-1,1]:
+				_circle(c,center+Vector2(r*.4*side,0),r*.4,Color(.18,.23,.25))
+				_circle(c,center+Vector2(r*.4*side,0),r*.27,Color(.20,.43,.55))
+		"Foundation", "Wall", "Roof", "Stairs", "Door", "Window":
+			piece(c,item,center,r,Color(0.73,0.58,0.32))
+		"PlanterPot", "PlanterBox", "TreePot":
+			var wide := 0.72 if item=="PlanterBox" else 0.52
+			var pot := PackedVector2Array([center+Vector2(-r*wide,-r*0.10),center+Vector2(r*wide,-r*0.10),center+Vector2(r*wide*0.76,r*0.60),center+Vector2(-r*wide*0.76,r*0.60)])
+			c.draw_colored_polygon(pot,Color(0.55,0.34,0.17))
+			_line(c,center+Vector2(-r*wide,-r*0.10),center+Vector2(r*wide,-r*0.10),r*0.18,Color(0.29,0.19,0.09))
+			_line(c,center+Vector2(0,r*0.02),center+Vector2(0,-r*0.58),r*0.07,Color(0.37,0.65,0.20))
+			for sign_value in [-1.0,1.0]:
+				var leaf := PackedVector2Array([center+Vector2(0,-r*0.25),center+Vector2(sign_value*r*0.38,-r*0.58),center+Vector2(sign_value*r*0.25,-r*0.18)])
+				c.draw_colored_polygon(leaf,Color(0.33,0.60,0.18))
 		"Sponge":
 			_circle(c,center,r*0.52,col)
 			for offset in [Vector2(-.24,-.16),Vector2(.15,-.24),Vector2(.31,.11),Vector2(-.12,.23),Vector2(-.34,.10),Vector2(.04,.02)]:
@@ -316,6 +383,13 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 		"Water":
 			_circle(c, center + Vector2(0, r * 0.10), r * 0.42, Color(0.27, 0.64, 0.76))
 			c.draw_colored_polygon(PackedVector2Array([center + Vector2(0, -r * 0.68), center + Vector2(-r * 0.39, r * 0.04), center + Vector2(r * 0.39, r * 0.04)]), Color(0.27, 0.64, 0.76))
+		"Onion":
+			_circle(c, center+Vector2(0,r*0.08), r*0.56, Color(0.48,0.25,0.07))
+			_circle(c, center+Vector2(-r*0.04,r*0.05), r*0.46, Color(0.77,0.48,0.17))
+			_circle(c, center+Vector2(-r*0.14,-r*0.04), r*0.28, Color(0.88,0.65,0.32))
+			for offset in [-0.23,0.0,0.23]:
+				_line(c,center+Vector2(offset*r,r*0.42),center+Vector2(offset*r*1.3,r*0.67),maxf(1,r*0.035),Color(0.65,0.48,0.25))
+			_line(c,center+Vector2(0,-r*0.32),center+Vector2(r*0.1,-r*0.7),maxf(1.5,r*0.13),Color(0.45,0.38,0.15))
 		"Carrot", "Tomato", "Potato", "Baked Potato":
 			_circle(c, center, r * 0.47, Color(0.77, 0.30, 0.06) if item == "Carrot" else (Color(0.72, 0.12, 0.06) if item == "Tomato" else Color(0.56, 0.39, 0.22)))
 		"Raw Bird", "Roast Bird":

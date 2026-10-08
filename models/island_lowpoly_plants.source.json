@@ -1,0 +1,57 @@
+{
+  "source": "3d models/lopoly_plants/shapespark-low-poly-plants-kit.fbx",
+  "sha256": "2d7ddd2382344d3624a9626f64924cd027798763fbbfe54aeb785ee96abd0664",
+  "exports": [
+    {
+      "source_object": "Tree-02-1",
+      "node": "CanopyA",
+      "triangles": 646,
+      "surfaces": 2
+    },
+    {
+      "source_object": "Tree-03-4",
+      "node": "CanopyB",
+      "triangles": 376,
+      "surfaces": 2
+    },
+    {
+      "source_object": "Bush-03",
+      "node": "ShrubA",
+      "triangles": 54,
+      "surfaces": 1
+    },
+    {
+      "source_object": "Bush-04",
+      "node": "ShrubB",
+      "triangles": 54,
+      "surfaces": 1
+    },
+    {
+      "source_object": "Grass-02",
+      "node": "TallGrass",
+      "triangles": 10,
+      "surfaces": 1
+    },
+    {
+      "source_object": "Flowers-02",
+      "node": "WildFlowers",
+      "triangles": 90,
+      "surfaces": 1
+    },
+    {
+      "source_object": "Clover-01",
+      "node": "CloverA",
+      "triangles": 5,
+      "surfaces": 1
+    },
+    {
+      "source_object": "Clover-03",
+      "node": "CloverB",
+      "triangles": 5,
+      "surfaces": 1
+    }
+  ],
+  "textures": "Owner embedded textures consolidated into one 2048 RGBA leaf atlas with gutters, plus 512 bark; alpha MASK .45",
+  "license": "Owner supplied FBX; no license file supplied and no CC0 claim",
+  "excluded": "Unused display variants and source layout offsets; no source script executed"
+}

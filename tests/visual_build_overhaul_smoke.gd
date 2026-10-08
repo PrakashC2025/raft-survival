@@ -194,6 +194,9 @@ func _run() -> void:
 	inv.loaded_meta["built"] = snapshot+[invalid_record]
 	player._grid_occupancy = {Vector2i.ZERO:raft}
 	player.call("_restore_built_pieces")
+	for frame in range(600):
+		if player.get("restoration_complete") == true: break
+		await process_frame
 	await frames(4)
 	check(built.get_child_count() == snapshot.size(),"70-plus mixed structures restore while invalid records are skipped")
 	var restored_window := built.find_child("Window_*",false,false)

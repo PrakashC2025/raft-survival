@@ -19,7 +19,7 @@ func _run() -> void:
 	player.set_physics_process(false)
 	root.get_node("Stats").enabled = false
 	for frame in range(1200):
-		await physics_frame
+		await process_frame
 		var ready := true
 		for name in ["Island","ReefIsle","DriftwoodCay","FarCove"]:
 			ready = ready and current_scene.get_node(name+"/IslandLandscape").landscape_ready
@@ -64,11 +64,11 @@ func _run() -> void:
 		var hit: Dictionary = current_scene.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from,from + Vector3.DOWN * 45,1))
 		check(not hit.is_empty(), name + " approach beach still has usable solid ground")
 		var foliage := 0
-		for part in landscape.get_children():
+		for part in landscape.get_node("WildPlants").get_children():
 			if part is MultiMeshInstance3D and part.is_in_group("island_landscape_foliage"):
 				foliage += 1
-				check(part.multimesh.instance_count <= 12, name + " vegetation batch stays bounded")
-		check(foliage == 4, name + " canopy and understory use four shared draws")
+				check(part.multimesh.instance_count <= 64, name + " vegetation batch stays bounded")
+		check(foliage == 8, name + " owner kit uses eight shared batches / ten material draws")
 	var ocean := get_first_node_in_group("ocean")
 	var water := (ocean as MeshInstance3D).get_active_material(0) as ShaderMaterial
 	var zones: PackedVector4Array = water.get_shader_parameter("island_shores")
@@ -83,8 +83,8 @@ func _run() -> void:
 	root.get_node("GameSettings").call("update_setting","quality",1)
 	var reduced := true
 	for part in get_nodes_in_group("island_landscape_foliage"):
-		reduced = reduced and part.multimesh.visible_instance_count <= maxi(1,floori(part.multimesh.instance_count * 0.5)) and part.visibility_range_end == 55.0
-	check(reduced,"Battery Saver halves additional vegetation and limits it to 55 metres")
+		reduced = reduced and part.multimesh.visible_instance_count == part.multimesh.instance_count and part.visibility_range_end == 55.0
+	check(reduced,"Battery Saver limits interactive plants to 55 metres without invisible trunks")
 	check(float(water.get_shader_parameter("surface_detail")) < 0.6,"Battery Saver retains its cheaper ocean detail")
 	root.get_node("GameSettings").call("update_setting","quality",2)
 	check(zones == water.get_shader_parameter("island_shores"),"Quality changes retain the prepared shore masks")

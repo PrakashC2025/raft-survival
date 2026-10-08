@@ -15,10 +15,11 @@ const MODEL_PATHS := {
 	"Roast Bird": "res://models/coastal_gull.glb",
 	"Coconut": "res://models/kenney_coconut.glb",
 	"Banana": "res://models/kenney_banana.glb",
+	"Onion": "res://models/onion_bulb.glb",
 	"Stone": "res://models/kenney_rock_small.glb",
 	"Wood": "res://models/kenney_log.glb",
 }
-const TARGET_SIZES := {"Coconut": 0.42, "Banana": 0.48, "Stone": 0.46, "Wood": 0.72}
+const TARGET_SIZES := {"Coconut": 0.42, "Banana": 0.48, "Onion": 0.32, "Stone": 0.46, "Wood": 0.72}
 
 @export var item_name := "Coconut"
 @export var amount := 1
@@ -32,6 +33,7 @@ var _base_y := 0.0
 
 
 func _ready() -> void:
+	item_name=Inventory.canonical_item(item_name)
 	add_to_group("debris")
 	collision_layer = 2
 	collision_mask = 0
@@ -88,6 +90,12 @@ func get_pickup_id() -> String:
 
 
 func _make_visual() -> Node3D:
+	if item_name in ["Potato","Baked Potato","Tomato","Banana"]:
+		var produce := preload("res://scripts/produce_visual.gd").create(item_name)
+		produce.scale=Vector3.ONE*1.7
+		return produce
+	if item_name=="Medkit" or item_name.ends_with("Can") or preload("res://scripts/food_rules.gd").RECIPES.has(item_name):
+		return preload("res://scripts/survival_item_visual.gd").create(item_name)
 	if not MODEL_PATHS.has(item_name):
 		return _make_generic_visual()
 	var path: String = str(MODEL_PATHS[item_name])

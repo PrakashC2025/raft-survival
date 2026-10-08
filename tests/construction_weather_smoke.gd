@@ -86,7 +86,10 @@ func _run() -> void:
 	var roof:=built.find_child("Roof_*",false,false) as Node3D
 	check(roof!=null,"Automatic roof confirmation places the ceiling")
 	if roof!=null:
-		check(not aim("Stairs",Vector3(4,0.15,4),deck).get("valid",false),"Stairs reject a low ceiling that blocks the player's head")
+		wall.get_node("CollisionShape3D").disabled=true
+		await frames()
+		check(aim("Stairs",Vector3(4,0.15,4),deck).get("valid",false),"Stairs can cut their walking corridor into an existing ceiling")
+		wall.get_node("CollisionShape3D").disabled=false
 		var flight:=fixture("Stairs",Vector3(6,0.25,3))
 		var opening: Dictionary=player.SMART_ROOF.plan(raft,raft.to_global(Vector3(6,0.15,4)))
 		check(opening.get("stair_opening",false),"Automatic roofing preserves an opening above an existing stair flight")

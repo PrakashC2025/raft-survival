@@ -81,7 +81,7 @@ func _run() -> void:
 	player.call("select_hotbar_slot",0)
 	root.get_node("Stats").set("hunger",25.0)
 	player.call("_handle_selected_item_use")
-	check(root.get_node("Stats").hunger == 70 and not inv.call("has","Cooked Meat",1),"Eating the final equipped meat portion refreshes safely and restores hunger")
+	check(root.get_node("Stats").hunger == 59 and not inv.call("has","Cooked Meat",1),"Eating the final equipped meat portion refreshes safely and restores configured hunger")
 	var radio: Node = machines.RescueRadio
 	progress.call("record","build:RescueRadio")
 	generator.charge = 19
@@ -176,10 +176,12 @@ func _run() -> void:
 	fire.set("burning",true)
 	fire.set("fuel",100.0)
 	wood_before = int(inv.call("total","Wood"))
+	player.set("aim_valid",true);player.set("aim_collider",fire);player.set("aim_point",fire.global_position)
 	progress.call("use_torch")
-	check(progress.torch_fuel == 180 and int(inv.call("total","Wood")) == wood_before-1,"Torch borrows fire and spends exactly one wood")
+	check(progress.torch_fuel > 0 and int(inv.call("total","Wood")) == wood_before and inv.call("has","Burning Torch",1),"Aimed fire lights a Burning Torch until dawn without an extra crafting charge")
+	var lit_fuel: float=progress.torch_fuel
 	progress.call("_process",0.5)
-	check(progress.torch_fuel < 180 and progress.get("_torch_light").visible,"Held torch burns fuel and casts nearby light")
+	check(progress.torch_fuel <= lit_fuel and progress.get("_torch_light").visible,"Held Burning Torch follows the clock and casts nearby light")
 	player.set("is_swimming",true)
 	progress.call("_process",0.5)
 	check(progress.torch_fuel == 0,"Immersing torch extinguishes its flame")

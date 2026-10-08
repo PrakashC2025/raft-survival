@@ -26,7 +26,7 @@ var _state: int = State.IDLE
 @export var quick_cast_distance: float = 20.0
 @export var charge_speed: float = 50.0
 @export var throw_speed: float = 42.0
-@export var hook_gravity: float = 12.0
+@export var hook_gravity: float = 9.81
 @export var reel_speed: float = 18.0
 @export var return_speed: float = 45.0
 @export var debris_hook_radius: float = 1.8
@@ -226,6 +226,10 @@ func _physics_process(delta: float) -> void:
 
 	# Update hook origin (follows the player's hand)
 	_update_hook_origin()
+	# Keep a restrained two-hand reeling pose while the loaded spool is running.
+	if _state == State.REELING and player.has_node("SurvivalAction"):
+		var action:=player.get_node("SurvivalAction")
+		if str(action.get("kind")) != "reel":player.call("play_action","reel",0.8)
 
 	# State machine
 	match _state:
@@ -590,15 +594,24 @@ func _collect_one(d: RigidBody3D) -> void:
 		d.set("is_hooked", false)
 		d.freeze = false
 		return
-	if Inventory.add(item_name, 1) > 0:
+	var amount:=maxi(1,int(d.get("amount"))) if "amount" in d else 1
+	var overflow:=Inventory.add(item_name,amount)
+	if overflow<amount:
+		Inventory.pickup_received.emit(Inventory.canonical_item(item_name),amount-overflow)
+		_collected=true
+	if overflow > 0:
 		# Capacity can change while the rope reels in. Release the catch back to
 		# the ocean instead of deleting it when the last slot has filled up.
 		d.set("is_hooked", false)
 		d.freeze = false
 		d.linear_velocity = Vector3.ZERO
 		d.angular_velocity = Vector3.ZERO
+		if overflow<amount:
+			if d.has_method("set_pickup_amount"):d.call("set_pickup_amount",overflow)
+			elif "amount" in d:d.set("amount",overflow)
 		return
 	d.set("collected", true)
+	if d.has_method("get_pickup_id"):Inventory.mark_island_pickup_collected(str(d.call("get_pickup_id")))
 	d.queue_free()
 	_collected = true
 

@@ -2,6 +2,8 @@ extends StaticBody3D
 ## Portable torch transferred to a wall; fuel and lit state survive Continue.
 var fuel := 0.0
 var burning := false
+var end_time := 0.0
+const CYCLE := preload("res://scripts/torch_cycle.gd")
 var _visual: Node3D
 var _light: OmniLight3D
 var _tick := 0.0
@@ -33,7 +35,11 @@ func _process(delta: float) -> void:
 	if _preview: return
 	_tick += delta
 	if burning:
-		fuel = maxf(0.0,fuel-delta)
+		var actor:=get_tree().get_first_node_in_group("player")
+		if actor!=null:
+			if end_time<=0:end_time=CYCLE.next_dawn(actor)
+			fuel=CYCLE.seconds_left(actor,end_time)
+		else:fuel=maxf(0.0,fuel-delta)
 		if fuel <= 0.0: burning = false
 	if _tick >= 0.4:
 		_tick = 0.0
@@ -46,29 +52,25 @@ func _process(delta: float) -> void:
 
 func _update_flame() -> void:
 	if _visual != null: _visual.call("set_burning",burning and fuel > 0.0 and not _preview)
-	if _light != null: _light.visible = burning and fuel > 0.0 and not _preview
+	if _light != null: _light.visible = burning and fuel > 0.0 and not _preview and get_meta("light_allowed",true)
 
 func interact_survival(player: Node) -> void:
 	if _preview: return
 	var progress := player.get_node("SurvivalProgression")
 	var selected := str(player.get("active_item"))
 	if selected == "Wood":
-		if fuel > 720.0 or not Inventory.has("Wood",1): return
-		Inventory.remove("Wood",1)
-		fuel = minf(900.0,fuel+180.0)
-		player.call("_hud_toast","TORCH FUEL ADDED · LIGHT WITH A BURNING TORCH")
-	elif selected == "Torch" and not burning and float(progress.get("torch_fuel")) > 0.0:
-		burning = fuel > 0.0
-		player.call("_hud_toast","WALL TORCH LIT" if burning else "ADD WOOD FIRST")
+		player.call("_hud_toast","TAKE THE TORCH TO A BONFIRE OR COOKING SETUP TO RELIGHT")
 	else:
 		if burning and float(progress.get("torch_fuel")) > 0.0:
 			player.call("_hud_toast","PUT OUT YOUR HELD TORCH BEFORE TAKING ANOTHER")
 			return
-		if not Inventory.can_store_rewards({"Torch":1}):
+		var item:="Burning Torch" if burning else "Torch"
+		if not Inventory.can_store_rewards({item:1}):
 			player.call("_hud_toast","BAG FULL · TORCH STAYS ON WALL")
 			return
-		Inventory.add("Torch",1)
-		if burning: progress.set("torch_fuel",fuel)
+		Inventory.add(item,1)
+		if burning: progress.set("torch_fuel",fuel);progress.set("torch_end_time",end_time)
+		player.get_node("SurvivalServices").equip_owned(item)
 		fuel = 0.0
 		burning = false
 		get_parent().remove_child(self)
@@ -78,9 +80,10 @@ func interact_survival(player: Node) -> void:
 	player.call("_queue_save")
 
 func save_survival_state() -> Dictionary:
-	return {"fuel":fuel,"burning":burning}
+	return {"fuel":fuel,"burning":burning,"end_time":end_time}
 
 func restore_survival_state(data: Dictionary) -> void:
-	fuel = clampf(float(data.get("fuel",0.0)),0.0,900.0)
+	fuel = clampf(float(data.get("fuel",0.0)),0.0,86400.0)
+	end_time=clampf(float(data.get("end_time",0.0)),0.0,240000000.0)
 	burning = bool(data.get("burning",false)) and fuel > 0.0
 	_update_flame()

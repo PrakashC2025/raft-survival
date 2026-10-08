@@ -11,9 +11,10 @@ static var _occluders: Dictionary = {}
 func _ready() -> void:
 	_sky = get_parent().get_node("Sky3D")
 	_clock = _sky.get_node("TimeOfDay")
-	_mist = particles(12, Vector3(14,0.1,14), Color(0.72,0.81,0.84,0.035), Vector2(8,1.2), false)
-	_mist.name = "MorningSeaMist"
-	add_child(_mist)
+	if not GameSettings.mobile_effects_profile():
+		_mist = particles(12, Vector3(14,0.1,14), Color(0.72,0.81,0.84,0.035), Vector2(8,1.2), false)
+		_mist.name = "MorningSeaMist"
+		add_child(_mist)
 	GameSettings.changed.connect(_quality_changed)
 	_quality_changed()
 	call_deferred("_setup_island_effects")
@@ -63,18 +64,23 @@ func _quality_changed() -> void:
 	_sky.set("sky_contribution",0.55)
 	# Blend the sky with SkyDome's ambient tint for readable shaded timber.
 	# A bounded environment map keeps this fill affordable on Mobile.
-	env.sky.radiance_size = Sky.RADIANCE_SIZE_64 if OS.has_feature("mobile") else Sky.RADIANCE_SIZE_128
-	var high_desktop := GameSettings.quality == 3 and not OS.has_feature("mobile")
+	var mobile_effects := GameSettings.mobile_effects_profile()
+	env.sky.radiance_size = Sky.RADIANCE_SIZE_64 if mobile_effects else Sky.RADIANCE_SIZE_128
+	var high_desktop := GameSettings.quality == 3 and not mobile_effects
 	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 	# These effects require Forward+. Mobile keeps shader AO/analytic reflections
-	# and depth fog, never silently toggles unsupported rendering features.
+	# without fog or the rectangular sea-mist particles on phones.
 	env.ssao_enabled = high_desktop and forward_plus
 	env.ssr_enabled = high_desktop and forward_plus
 	env.volumetric_fog_enabled = high_desktop and forward_plus
 	if env.volumetric_fog_enabled: env.volumetric_fog_density = 0.004
 	env.glow_enabled = high_desktop
 	env.glow_intensity = 0.2
-	env.fog_enabled = true
+	env.fog_enabled = not mobile_effects
+	if mobile_effects:
+		env.fog_density = 0.0
+		_sky.set("fog_enabled",false)
+		_sky.get_node("SkyDome").set("fog_visible",false)
 	env.fog_sky_affect = 0.15
 	env.fog_sun_scatter = 0.4
 	env.adjustment_enabled = true
@@ -115,7 +121,13 @@ func _process(delta: float) -> void:
 	var dawn := hour >= 5 and hour < 8
 	var dusk := hour >= 17 and hour < 19
 	var env := _sky.environment
-	env.fog_density = 0.0015 if night else (0.001 if dawn else 0.00055)
+	var mobile_effects := GameSettings.mobile_effects_profile()
+	if mobile_effects:
+		env.fog_enabled = false
+		env.volumetric_fog_enabled = false
+		_sky.set("fog_enabled",false)
+		_sky.get_node("SkyDome").set("fog_visible",false)
+	env.fog_density = 0.0 if mobile_effects else (0.0015 if night else (0.001 if dawn else 0.00055))
 	env.fog_light_color = Color("192b44") if night else (Color("a88672") if dawn or dusk else Color("91b9ca"))
 	env.ambient_light_energy = 0.35 if night else (0.48 if dawn or dusk else 0.62)
 	var fill := _sky.get_node_or_null("FillLight") as DirectionalLight3D
@@ -123,9 +135,10 @@ func _process(delta: float) -> void:
 		# Broad sky bounce: diffuse only, so sunlight still owns water/wood glints.
 		fill.light_energy = 0.035 if night else (0.20 if dawn or dusk else 0.40)
 	var camera := get_viewport().get_camera_3d()
-	if camera != null: _mist.global_position = Vector3(camera.global_position.x,0.9,camera.global_position.z)
-	_mist.emitting = dawn and GameSettings.quality != 1
-	_mist.visible = _mist.emitting
+	if _mist != null:
+		if camera != null: _mist.global_position = Vector3(camera.global_position.x,0.9,camera.global_position.z)
+		_mist.emitting = dawn and GameSettings.quality != 1 and not mobile_effects
+		_mist.visible = _mist.emitting
 	for flies in _fireflies:
 		var nearby := camera != null and flies.global_position.distance_squared_to(camera.global_position) < 55*55
 		flies.emitting = night and nearby and GameSettings.quality != 1

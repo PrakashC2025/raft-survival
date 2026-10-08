@@ -2,6 +2,7 @@ extends CanvasLayer
 ## Holds the film frame through scene setup, then reveals ready dawn gameplay.
 const ARRIVAL: Texture2D = preload("res://video/intro_arrival.jpg")
 var arrival_texture: Texture2D
+var resuming := false
 var _image: TextureRect
 var _background: ColorRect
 var _black: ColorRect
@@ -32,7 +33,7 @@ func _ready() -> void:
 	add_child(_background)
 	_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_image = TextureRect.new()
-	_image.texture = arrival_texture if arrival_texture != null else ARRIVAL
+	_image.texture = null if resuming else (arrival_texture if arrival_texture != null else ARRIVAL)
 	_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	add_child(_image)
@@ -97,7 +98,7 @@ func _process(delta: float) -> void:
 		_warm_seconds += minf(delta, 0.1)
 		_settled_frames = _settled_frames + 1 if delta < 0.05 else 0
 		_status.visible = _seconds >= 0.8
-		_status.text = "Waking on the ocean" + ".".repeat(1 + int(_seconds * 2) % 3)
+		_status.text = ("Restoring your raft" if resuming else "Waking on the ocean") + ".".repeat(1 + int(_seconds * 2) % 3)
 		if not _world_ready(): return
 		_ready_wait_seconds += minf(delta, 0.1)
 		# A slower phone must still finish the transition if it never reaches 20 FPS.
@@ -117,6 +118,8 @@ func _process(delta: float) -> void:
 		queue_free()
 
 func _world_ready() -> bool:
+	if is_instance_valid(_player) and _player.get("restoration_complete") == false:
+		return false
 	for setup in _setups:
 		if is_instance_valid(setup) and setup.get("setup_complete") != true:
 			return false

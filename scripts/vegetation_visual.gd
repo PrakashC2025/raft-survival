@@ -121,3 +121,33 @@ static func apply_palm(root: Node3D) -> void:
 				mesh_instance.extra_cull_margin = maxf(mesh_instance.extra_cull_margin, 0.3)
 			elif label.contains("palm") or label.contains("bark"):
 				mesh_instance.set_surface_override_material(surface, _bark)
+
+static func local_bounds(root: Node3D) -> AABB:
+	var found := false
+	var lower := Vector3.ZERO
+	var upper := Vector3.ZERO
+	for candidate in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := candidate as MeshInstance3D
+		if mesh_instance == null or mesh_instance.mesh == null:
+			continue
+		var relative := mesh_instance.transform
+		var ancestor := mesh_instance.get_parent()
+		while ancestor != null and ancestor != root:
+			if ancestor is Node3D:
+				relative = (ancestor as Node3D).transform * relative
+			ancestor = ancestor.get_parent()
+		if ancestor != root:
+			continue
+		var mesh_bounds := mesh_instance.mesh.get_aabb()
+		for corner in range(8):
+			var point: Vector3 = relative * mesh_bounds.get_endpoint(corner)
+			if not found:
+				lower = point
+				upper = point
+				found = true
+			else:
+				lower = lower.min(point)
+				upper = upper.max(point)
+	return AABB(lower, upper - lower) if found else AABB()
+
+

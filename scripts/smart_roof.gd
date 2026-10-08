@@ -7,7 +7,7 @@ const DIRECTIONS := [Vector2i.RIGHT, Vector2i.LEFT, Vector2i.UP, Vector2i.DOWN]
 const MAX_ROOM_TILES := 64
 const HEIGHT := 2.725 # preserved 0.30 m foundation + 2.50 m wall + half roof
 
-static func plan(raft: Node3D, world_aim: Vector3) -> Dictionary:
+static func plan(raft: Node3D, world_aim: Vector3, exclude: Node3D = null, single_tile: bool = false) -> Dictionary:
 	if raft == null or not world_aim.is_finite():
 		return {}
 	var pieces := raft.get_node_or_null("BuiltPieces")
@@ -19,7 +19,7 @@ static func plan(raft: Node3D, world_aim: Vector3) -> Dictionary:
 	var stair_openings := {}
 	var supports := {}
 	for child in pieces.get_children():
-		if not child is Node3D or child.is_queued_for_deletion():
+		if not child is Node3D or child == exclude or child.is_queued_for_deletion():
 			continue
 		if child.name.begins_with("WallTorch"): continue
 		if child.name.begins_with("Stairs") and absf(child.position.y-0.25)<0.25:
@@ -108,8 +108,10 @@ static func plan(raft: Node3D, world_aim: Vector3) -> Dictionary:
 		queue = [start]
 	var transforms: Array[Transform3D] = []
 	var cells: Array[Vector2i] = []
+	# Moving an existing roof moves one tile, never fills the whole room.
+	if single_tile: queue = [start]
 	for cell in queue:
-		if roofs.has(cell) or stair_openings.has(cell):
+		if roofs.has(cell):
 			continue
 		cells.append(cell)
 		transforms.append(raft.global_transform * Transform3D(Basis.IDENTITY, Vector3(cell.x * 2.0, HEIGHT, cell.y * 2.0)))
@@ -123,4 +125,4 @@ static func plan(raft: Node3D, world_aim: Vector3) -> Dictionary:
 			break
 	if support == null and not supports.is_empty():
 		support = supports.values()[0]
-	return {"cells": cells, "transforms": transforms, "support": support, "room": enclosed}
+	return {"cells": cells, "transforms": transforms, "support": support, "room": enclosed, "stair_opening": stair_openings.has(start)}

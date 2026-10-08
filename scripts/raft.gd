@@ -12,6 +12,15 @@ var _deck_sample_timer := 0.0
 var _deck_sample_dirty := true
 var _deck_center := Vector3.ZERO
 var _deck_radius := 1.0
+var _sample_wave_time := -INF
+var _sample_wave_settings := Vector3.ZERO
+var _sample_origin := Vector3.ZERO
+var _sample_basis := Basis.IDENTITY
+var _sample_crest := 0.0
+var _motion_frame := -1
+var _motion_wave_time := -INF
+var _motion_level := false
+var _pending_motion_delta := 0.0
 var upgrade_tier := 0
 var _course_active := false
 var _course_target := Vector3.ZERO
@@ -94,13 +103,28 @@ func unregister_sample_point(marker: Node3D) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_pending_motion_delta+=delta
+	var oc := _get_ocean()
+	var frame := Engine.get_process_frames()
+	var wave_time := oc._time if oc != null else 0.0
+	var actor := get_tree().get_first_node_in_group("player")
+	var level_deck := actor != null and (bool(actor.get("build_mode")) or is_instance_valid(actor.get("_editing")))
+	# Moving this parent invalidates every foundation collider/child transform.
+	# Catch-up ticks share one visible wave frame: move the compound raft once,
+	# carrying elapsed navigation/smoothing time forward to the next update.
+	if frame == _motion_frame and wave_time == _motion_wave_time and level_deck == _motion_level and not _deck_sample_dirty:
+		return
+	_motion_frame=frame
+	_motion_wave_time=wave_time
+	_motion_level=level_deck
+	delta=_pending_motion_delta
+	_pending_motion_delta=0.0
 	var before_move := global_position
 	var next_position := _course_position(delta)
 	var horizontal_delta := next_position-before_move
 	if horizontal_delta.length_squared() > 0.000001:
 		_carry_passenger(before_move, horizontal_delta)
 
-	var oc := _get_ocean()
 	if oc == null:
 		global_position=next_position
 		return
@@ -109,12 +133,9 @@ func _physics_process(delta: float) -> void:
 		_refresh_deck_samples()
 	var next_rotation := _swell_rotation(oc,delta,next_position)
 	var next_basis := (get_parent() as Node3D).global_basis*Basis.from_euler(next_rotation)
-	var crest := -INF
-	for at in _deck_samples:
-		var offset := next_basis*at
-		# Every tilted corner gets the same minimum clearance, including large
-		# decks. Subtract its height so the downhill edge cannot enter a wave.
-		crest=maxf(crest,oc.get_height(next_position+offset)-offset.y)
+	# Batch the same tilted-corner probes; the downhill edge keeps its full
+	# clearance without hundreds of separate Node calls each physics tick.
+	var crest := _deck_crest(oc,next_position,next_basis)
 	var time := float(oc.get("_time"))
 	var bob := sin(time*0.84)*0.012+sin(time*1.19+1.3)*0.008
 	var target_y := crest+maxf(float_height,0.20)+bob
@@ -125,6 +146,27 @@ func _physics_process(delta: float) -> void:
 	# AnimatableBody sync_to_physics queues a transform and restores the current
 	# one until the physics tick. Separate setters overwrite the queued tilt.
 	global_transform=Transform3D(next_basis,next_position)
+
+func _deck_crest(oc: Ocean, origin: Vector3, deck_basis: Basis) -> float:
+	var settings := Vector3(oc.wave_height,oc.wave_speed,oc.global_position.y)
+	var motion := origin-_sample_origin
+	var dx := deck_basis.x-_sample_basis.x
+	var dz := deck_basis.z-_sample_basis.z
+	var horizontal := absf(motion.x)+absf(motion.z) \
+			+_deck_radius*(absf(dx.x)+absf(dx.z)+absf(dz.x)+absf(dz.z))
+	var vertical := _deck_radius*(absf(dx.y)+absf(dz.y))
+	# Ocean advances once per rendered frame. Physics may run several catch-up
+	# steps against that identical wave field: reuse its crest with a conservative
+	# bound for small raft movement/tilt, rather than resampling the whole deck.
+	if _sample_wave_time == oc._time and _sample_wave_settings == settings \
+			and horizontal <= 0.12 and vertical <= 0.025:
+		return _sample_crest+oc.get_wave_slope_bound()*horizontal+vertical
+	_sample_crest=oc.get_deck_crest(origin,deck_basis,_deck_samples)
+	_sample_wave_time=oc._time
+	_sample_wave_settings=settings
+	_sample_origin=origin
+	_sample_basis=deck_basis
+	return _sample_crest
 
 func _swell_rotation(oc: Ocean,delta: float,next_position: Vector3) -> Vector3:
 	var player := get_tree().get_first_node_in_group("player")
@@ -147,6 +189,7 @@ func _swell_rotation(oc: Ocean,delta: float,next_position: Vector3) -> Vector3:
 
 func _refresh_deck_samples() -> void:
 	_deck_sample_dirty=false;_deck_sample_timer=0.0
+	_sample_wave_time=-INF
 	var origins: Array[Vector3]=[Vector3.ZERO]
 	var built := get_node_or_null("BuiltPieces")
 	if built!=null:

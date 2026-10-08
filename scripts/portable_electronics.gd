@@ -1,0 +1,261 @@
+extends Node
+## Portable solar tools. Battery state is stored separately from stackable spare cells.
+const TOOLS := ["Solar Torch","Binoculars","Walkie Talkie"]
+const POWERED := ["Solar Torch","Walkie Talkie"]
+const AUDIO := preload("res://scripts/survival_audio.gd")
+var charge := {"Solar Torch":100.0,"Walkie Talkie":100.0}
+var installed := {"Solar Torch":true,"Walkie Talkie":true}
+var enabled := {"Solar Torch":false,"Walkie Talkie":false}
+var solar := false
+var zoomed := false
+var cover_open := false
+var battery_animation := 0.0
+var battery_operation := ""
+var _battery_item := ""
+var _reply := 0.0
+var _radio_cooldown := 0.0
+var _solar_tick := 1.0
+var _normal_fov := 75.0
+var player: CharacterBody3D
+var beam: SpotLight3D
+var _audio: AudioStreamPlayer
+var _ui: CanvasLayer
+var _panel: VBoxContainer
+var _status: Label
+var _power: Button
+var _cover: Button
+var _remove: Button
+var _replace: Button
+var _solar_button: Button
+var _ui_tick := 0.0
+var _visuals: Array[Dictionary] = []
+var _first_root: Node3D
+var _third_root: Node3D
+var _hand_generation := 0
+
+func _ready() -> void:
+	player=get_parent() as CharacterBody3D
+	restore_state(Inventory.loaded_meta.get("electronics",{}))
+	beam=SpotLight3D.new()
+	beam.name="SolarFlashlightBeam"
+	beam.light_color=Color(0.94,0.97,1)
+	beam.light_energy=3.0
+	beam.spot_range=32
+	beam.spot_angle=28
+	beam.spot_attenuation=1.2
+	beam.shadow_enabled=false
+	player.get_node("CamPivot/SpringArm3D/Camera3D").add_child(beam)
+	beam.position=Vector3(0.16,-0.12,-0.25)
+	beam.hide()
+	_audio=AudioStreamPlayer.new();_audio.volume_db=-12;add_child(_audio)
+	_build_ui()
+
+func _build_ui() -> void:
+	_ui=CanvasLayer.new();_ui.layer=8;add_child(_ui)
+	_panel=VBoxContainer.new();_panel.name="PortableToolControls";_panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	_panel.offset_left=-242;_panel.offset_right=-20;_panel.offset_top=-376;_panel.offset_bottom=-110
+	_panel.add_theme_constant_override("separation",5);_ui.add_child(_panel)
+	_status=Label.new();_status.add_theme_font_size_override("font_size",16);_panel.add_child(_status)
+	_power=_button("POWER ON / OFF",toggle_power)
+	_solar_button=_button("RAISE PANEL TO SUN",raise_solar)
+	_cover=_button("OPEN BATTERY COVER",toggle_cover)
+	_remove=_button("REMOVE BATTERY",func():battery_action("remove"))
+	_replace=_button("INSERT / REPLACE BATTERY",func():battery_action("replace"))
+	_panel.hide()
+
+func _button(label: String,action: Callable) -> Button:
+	var button:=Button.new();button.text=label;button.custom_minimum_size=Vector2(220,38)
+	button.add_theme_font_size_override("font_size",14)
+	button.button_down.connect(func():GameSettings.release_gameplay_input())
+	button.pressed.connect(action);_panel.add_child(button)
+	return button
+
+func _blocked() -> bool:
+	var hud:=player.get_node_or_null("CanvasLayer/SurvivalHUD")
+	return get_tree().paused or GameSettings.is_open or bool(player.get("build_mode")) \
+		or player.get("_editing")!=null or player.get_node("SurvivalServices").busy() or (hud!=null and hud.call("gameplay_input_blocked"))
+
+func use() -> void:
+	var item:=str(player.get("active_item"))
+	if _blocked() or not Inventory.has(item,1):return
+	if item=="Binoculars":set_zoom(not zoomed)
+	elif item=="Solar Torch":toggle_power()
+	elif item=="Walkie Talkie":
+		if not enabled[item]:toggle_power();return
+		if not installed[item] or float(charge[item])<=0.0:player.call("_hud_toast","BATTERY EMPTY · CHARGE IN SUNLIGHT OR REPLACE");return
+		if _radio_cooldown>0:return
+		_radio_cooldown=5.0
+		_reply=2.4
+		_sound("radio_send")
+		player.call("play_action","radio",0.9)
+		player.call("_hud_toast","CH 16 · TRANSMITTING LOCATION SIGNAL")
+		player.call("_queue_save")
+
+func toggle_power() -> void:
+	var item:=str(player.get("active_item"))
+	if item not in POWERED or _blocked() or battery_animation>0.0 or not Inventory.has(item,1):return
+	if not installed[item] or float(charge[item])<=0.0:
+		player.call("_hud_toast","INSERT A CHARGED BATTERY OR RAISE THE PANEL TO SUNLIGHT");return
+	enabled[item]=not enabled[item]
+	_sound("switch")
+	player.call("play_action","switch",0.35)
+	player.call("_queue_save")
+
+func set_zoom(value: bool) -> void:
+	if zoomed==value:return
+	var camera:=player.get_node("CamPivot/SpringArm3D/Camera3D") as Camera3D
+	if value:
+		player.get_node("SurvivalEquipment").call("set_aiming",false)
+		_normal_fov=camera.fov
+		camera.fov=18.0
+		player.call("play_action","look",0.6)
+	else:camera.fov=_normal_fov
+	zoomed=value
+
+func toggle_cover() -> void:
+	if _blocked() or battery_animation>0:return
+	cover_open=not cover_open
+	_sound("switch")
+	player.call("play_action","battery",0.65)
+
+func raise_solar() -> void:
+	if _blocked() or battery_animation>0:return
+	player.call("play_action","solar",1.2)
+	_solar_tick=1.0
+	player.call("_hud_toast","SOLAR CHARGING · FULL IN FOUR MINUTES OF DIRECT SUN" if _sun_exposed() else "NEED DAYLIGHT AND AN OPEN VIEW OF THE SUN")
+
+func battery_action(operation: String) -> bool:
+	var item:=str(player.get("active_item"))
+	if item not in POWERED or _blocked() or not cover_open or battery_animation>0:return false
+	if operation=="remove" and not installed[item]:return false
+	var replacement := "Battery" if Inventory.has("Battery",1) else "Used Battery"
+	if operation=="replace" and not Inventory.has(replacement,1):player.call("_hud_toast","CRAFT A BATTERY FIRST");return false
+	# An inserted charged cell is exchanged for the old spent/partial cell atomically.
+	var rewards: Dictionary={"Used Battery":1} if installed[item] else {}
+	if operation=="remove" and float(charge[item])>=99.9:rewards={"Battery":1}
+	if not Inventory.try_exchange({replacement:1} if operation=="replace" else {},rewards):
+		player.call("_hud_toast","BAG FULL · LEAVE ROOM FOR THE REMOVED BATTERY");return false
+	installed[item]=operation=="replace"
+	charge[item]=100.0 if installed[item] and replacement=="Battery" else 0.0
+	enabled[item]=false
+	_battery_item=item
+	battery_operation=operation
+	battery_animation=1.8
+	_sound("battery")
+	player.call("play_action","battery",1.8)
+	player.call("_queue_save")
+	return true
+
+func _sun_exposed() -> bool:
+	var sky:=get_tree().current_scene.get_node_or_null("Sky3D")
+	if sky==null or bool(player.get("is_swimming")):return false
+	var hour:=float(sky.get("current_time"))
+	if hour<6.5 or hour>17.5:return false
+	var rain:=get_tree().get_first_node_in_group("rain_system")
+	if rain!=null and rain.call("is_raining"):return false
+	var origin:=player.global_position+Vector3.UP*1.8
+	var sun:=sky.find_child("SunLight",true,false) as DirectionalLight3D
+	var toward:=sun.global_basis.z if sun!=null else Vector3.UP
+	if toward.y<=0.1:return false
+	var hit:=player.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(origin,origin+toward*80,1,[player.get_rid()]))
+	return hit.is_empty()
+
+func _process(delta: float) -> void:
+	var item:=str(player.get("active_item"))
+	var blocked:=_blocked()
+	if zoomed and (item!="Binoculars" or blocked):set_zoom(false)
+	_solar_tick+=delta
+	if _solar_tick>=0.5:_solar_tick=0.0;solar=_sun_exposed()
+	var sky:=get_tree().current_scene.get_node_or_null("Sky3D")
+	var day_seconds:=absf(float(sky.get("minutes_per_day")))*60.0 if sky!=null else 1440.0
+	if day_seconds<1:day_seconds=1440.0
+	advance_power(delta,day_seconds,solar)
+	beam.visible=item=="Solar Torch" and enabled[item] and installed[item] and float(charge[item])>0 and not blocked
+	if battery_animation>0.0:
+		battery_animation=maxf(0,battery_animation-delta)
+		if battery_animation==0.0:cover_open=false;battery_operation=""
+	_radio_cooldown=maxf(0,_radio_cooldown-delta)
+	if _reply>0.0:
+		_reply=maxf(0,_reply-delta)
+		if _reply==0.0 and enabled["Walkie Talkie"] and installed["Walkie Talkie"] and float(charge["Walkie Talkie"])>0.0:
+			_sound("radio_receive")
+			var nearest: Node3D
+			var distance_value:=INF
+			for island in get_tree().get_nodes_in_group("island"):
+				var distance_to:=player.global_position.distance_to(island.global_position)
+				if distance_to<distance_value:nearest=island;distance_value=distance_to
+			var location:=str(nearest.get("map_label")) if nearest!=null else "open ocean"
+			player.call("_hud_toast","CH 16 · SIGNAL RECEIVED: "+location.to_upper()+" · %d M"%int(distance_value))
+	_ui_tick+=delta
+	var update_text:=_ui_tick>=.1
+	if update_text:_ui_tick=0.0
+	_update_visuals(item,update_text)
+	_panel.visible=item in POWERED and Inventory.has(item,1) and not blocked
+	if _panel.visible and update_text:
+		var status_text:=("RADIO CH 16" if item=="Walkie Talkie" else "SOLAR FLASHLIGHT")+" · "+("ON" if enabled[item] else "OFF")+"\n"+("BATTERY %d%%"%roundi(float(charge[item])) if installed[item] else "NO BATTERY")+(" · SOLAR ☀" if solar else "")
+		if _status.text!=status_text:_status.text=status_text
+		_cover.text="CLOSE BATTERY COVER" if cover_open else "OPEN BATTERY COVER"
+		_remove.visible=cover_open;_replace.visible=cover_open
+		_remove.disabled=battery_animation>0 or not installed[item]
+		_replace.disabled=battery_animation>0
+
+func advance_power(seconds: float,day_seconds: float,in_sun: bool) -> void:
+	for item in POWERED:
+		if not Inventory.has(item,1) or not installed[item]:continue
+		# Only the exposed held panel charges; an enclosed backpack cannot collect sunlight.
+		if in_sun and str(player.get("active_item"))==item:
+			charge[item]=minf(100,float(charge[item])+seconds*100.0/240.0)
+		elif enabled[item]:
+			var lifetime:=day_seconds*30.0 if item=="Walkie Talkie" else 1800.0
+			charge[item]=maxf(0,float(charge[item])-seconds*100.0/maxf(lifetime,1))
+		if float(charge[item])<=0.000001:charge[item]=0.0;enabled[item]=false
+
+func _update_visuals(item: String,update_text: bool=true) -> void:
+	var hand:=player.get("_hand_item") as Node3D
+	var action:=player.get_node_or_null("SurvivalAction")
+	var third:=action.get("_held") as Node3D if action!=null else null
+	var generation:=hand.get_child(hand.get_child_count()-1).get_instance_id() if is_instance_valid(hand) and hand.get_child_count()>0 else 0
+	if hand!=_first_root or third!=_third_root or generation!=_hand_generation:
+		_first_root=hand;_third_root=third;_visuals.clear()
+		_hand_generation=generation
+		_cache_visual(hand);_cache_visual(third)
+	for parts in _visuals:
+		var screen: Label3D=parts.screen if is_instance_valid(parts.screen) else null
+		if is_instance_valid(screen) and update_text:
+			var screen_text:=("CH16" if enabled["Walkie Talkie"] else "OFF")+"\n"+("%d%%"%roundi(float(charge["Walkie Talkie"])) if installed["Walkie Talkie"] else "NO CELL")+(" SUN" if solar and item=="Walkie Talkie" else "")
+			if screen.text!=screen_text:screen.text=screen_text
+		var cover: Node3D=parts.cover if is_instance_valid(parts.cover) else null
+		if is_instance_valid(cover):
+			cover.position.z=lerpf(cover.position.z,0.11 if cover_open else 0.049,0.2)
+			cover.rotation.x=lerpf(cover.rotation.x,-1.1 if cover_open else 0.0,0.2)
+		var cell: Node3D=parts.cell if is_instance_valid(parts.cell) else null
+		if is_instance_valid(cell):
+			cell.visible=battery_animation>0.0 and item==_battery_item
+			var t:=1.0-battery_animation/1.8
+			var slide:=sin(t*PI)
+			cell.position=Vector3(0,-0.085-0.08*slide,0.045+0.16*slide)
+			cell.rotation.z=0.35*slide
+
+func _cache_visual(held: Node3D) -> void:
+	if not is_instance_valid(held):return
+	_visuals.append({"screen":held.find_child("RadioScreen",true,false),"cover":held.find_child("BatteryCover",true,false),"cell":held.find_child("AnimatedBattery",true,false)})
+
+func _sound(kind: String) -> void:
+	_audio.stream=AUDIO.electronic_stream(kind);_audio.play()
+
+func save_state() -> Dictionary:
+	return {"charge":charge.duplicate(),"installed":installed.duplicate(),"enabled":enabled.duplicate()}
+func restore_state(data: Variant) -> void:
+	if not data is Dictionary:return
+	for field in ["charge","installed","enabled"]:
+		if not data.get(field,{}) is Dictionary:return
+	for item in POWERED:
+		var value: Variant=data.get("charge",{}).get(item,100.0)
+		var amount:=float(value) if value is int or value is float else 0.0
+		charge[item]=clampf(amount,0,100) if is_finite(amount) else 0.0
+		installed[item]=bool(data.get("installed",{}).get(item,true))
+		enabled[item]=bool(data.get("enabled",{}).get(item,false)) and installed[item] and float(charge[item])>0
+
+func _notification(what: int) -> void:
+	if what in [NOTIFICATION_APPLICATION_FOCUS_OUT,NOTIFICATION_APPLICATION_PAUSED] and is_instance_valid(player):
+		set_zoom(false)

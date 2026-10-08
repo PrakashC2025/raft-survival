@@ -30,11 +30,14 @@ var _foliage_reduced := false
 
 func _ready() -> void:
 	add_to_group("mobile_performance")
-	_mobile = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")
+	_mobile = GameSettings.mobile_effects_profile()
 
 	# A 60 FPS ceiling avoids running phones at 90/120 Hz when the game cannot
 	# usefully present extra frames, reducing heat and performance throttling.
 	Engine.max_fps = GameSettings.target_fps
+	# A 30 FPS phone must not simulate the full world twice for every frame.
+	# All movement/buoyancy use delta; 60 FPS and desktop retain 60 Hz physics.
+	Engine.physics_ticks_per_second = 30 if _mobile and GameSettings.target_fps == 30 else 60
 	_viewport = get_viewport()
 	_can_scale_3d = _has_viewport_property("scaling_3d_scale")
 	if _can_scale_3d:
@@ -51,13 +54,14 @@ func _ready() -> void:
 func _apply_profile() -> void:
 	_cache_sky_material()
 	Engine.max_fps = GameSettings.target_fps
+	Engine.physics_ticks_per_second = 30 if _mobile and GameSettings.target_fps == 30 else 60
 	if _last_quality == GameSettings.quality and _last_fps == GameSettings.target_fps:
 		return
 	_last_quality = GameSettings.quality
 	_last_fps = GameSettings.target_fps
 	_foliage_reduced = false
 	refresh_foliage()
-	_viewport.msaa_3d = Viewport.MSAA_DISABLED if GameSettings.quality == 1 else Viewport.MSAA_2X
+	_viewport.msaa_3d = Viewport.MSAA_DISABLED if GameSettings.quality == 1 or (_mobile and GameSettings.quality == 0) else Viewport.MSAA_2X
 	_sample_seconds = 0.0
 	_frame_seconds = 0.0
 	_frame_count = 0
@@ -68,7 +72,7 @@ func _apply_profile() -> void:
 		_set_render_scale(1.0)
 		_set_cumulus_visible(true)
 		return
-	var initial_scale: float = [0.82, 0.65, 0.82, 1.0][GameSettings.quality]
+	var initial_scale: float = [0.72, 0.65, 0.82, 1.0][GameSettings.quality]
 	_set_render_scale(initial_scale)
 	_set_cumulus_visible(GameSettings.quality == 3)
 	_limit_mobile_shadow_distance()
@@ -154,6 +158,8 @@ func refresh_foliage() -> void:
 		if batch == null or batch.multimesh == null: continue
 		var fraction: float = [1.0, 0.50, 0.75, 1.0][GameSettings.quality]
 		if _foliage_reduced: fraction *= 0.65
+		# Harvestable plants must remain visible wherever their interaction bodies exist.
+		if batch.get_meta("interactive_foliage",false): fraction = 1.0
 		batch.multimesh.visible_instance_count = maxi(1, floori(batch.multimesh.instance_count * fraction))
 		batch.visibility_range_end = 55.0 if GameSettings.quality == 1 else 110.0
 	if not _mobile:

@@ -127,6 +127,10 @@ func _apply_imported_palm_models(island: Node3D) -> void:
 	template.visible = false
 	template.add_to_group("no_collision")
 	add_child(template)
+	# Authored roots retain their 2.0..2.8 size variation and yaw; normalize
+	# the supplied 1.45m asset to 3m locally for 6..8.4m adult island palms.
+	var palm_bounds := VEGETATION_VISUAL.local_bounds(template)
+	var palm_scale := 3.0 / maxf(palm_bounds.size.y, 0.01)
 	for child in island.get_children():
 		if not (child is Node3D and child.name.begins_with("Palm")):
 			continue
@@ -139,6 +143,9 @@ func _apply_imported_palm_models(island: Node3D) -> void:
 			inst.name = "CoconutPalmModel"
 			inst.visible = true
 			inst.remove_from_group("no_collision")
+			var adult_scale := palm_scale * maxf(1.0, 2.0 / palm.global_basis.get_scale().y)
+			inst.scale = Vector3.ONE * adult_scale
+			inst.position.y = -palm_bounds.position.y * adult_scale
 			palm.add_child(inst)
 		# Importing every detailed palm in one frame creates a startup hitch.
 		await get_tree().physics_frame

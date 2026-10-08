@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$GodotPath,
-    [string[]]$Tests = @('rope_smoke.gd', 'testing_resources_smoke.gd', 'mobile_smoke.gd', 'foundation_smoke.gd', 'environment_smoke.gd', 'island_marker_smoke.gd', 'menu_loading_smoke.gd', 'survival_loop_smoke.gd', 'advanced_survival_smoke.gd', 'cinematic_raft_smoke.gd', 'world_visual_smoke.gd', 'visual_build_overhaul_smoke.gd', 'island_visual_smoke.gd')
+    [string[]]$Tests = @('rope_smoke.gd', 'testing_resources_smoke.gd', 'mobile_smoke.gd', 'foundation_smoke.gd', 'environment_smoke.gd', 'island_marker_smoke.gd', 'menu_loading_smoke.gd', 'survival_loop_smoke.gd', 'advanced_survival_smoke.gd', 'cinematic_raft_smoke.gd', 'world_visual_smoke.gd', 'visual_build_overhaul_smoke.gd', 'island_visual_smoke.gd'),
+    [string[]]$GodotUserArgs = @()
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -18,7 +19,7 @@ $config = '[application]' + [Environment]::NewLine + 'config/use_custom_user_dir
 foreach ($test in $Tests) {
     $testPath = Join-Path (Join-Path $projectRoot 'tests') $test
     $logPath = Join-Path (Join-Path $projectRoot 'build') ('source-' + [IO.Path]::GetFileNameWithoutExtension($test) + '.log')
-    $processOutput = & $GodotPath --headless --path $sourceRoot --script $testPath --log-file $logPath 2>&1 | Out-String
+    $processOutput = & $GodotPath --headless --path $sourceRoot --script $testPath --log-file $logPath -- @GodotUserArgs 2>&1 | Out-String
     $testExit = $LASTEXITCODE
     $consolePath = Join-Path (Join-Path $projectRoot 'build') ('source-' + [IO.Path]::GetFileNameWithoutExtension($test) + '-console.log')
     [IO.File]::WriteAllText($consolePath, $processOutput)

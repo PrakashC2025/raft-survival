@@ -352,22 +352,40 @@ const _E2_S := 0.10
 
 # Returns the exact water surface height (world Y) at any given world position.
 func get_height(world_pos: Vector3) -> float:
-	var p := Vector2(world_pos.x, world_pos.z)
-	var tt := _time * wave_speed
-	var warp := Vector2(
-		_M_AMP * sin(p.dot(_M1_DIR) * _M1_F + tt * _M1_S) + _M_AMP2 * sin(p.dot(_M2_DIR) * _M2_F + tt * _M2_S),
-		_M_AMP * sin(p.dot(_M1_DIR) * _M1_F + tt * _M1_S + 2.1) + _M_AMP2 * sin(p.dot(_M2_DIR) * _M2_F + tt * _M2_S + 4.2))
-	var pw := p + warp
+	return global_position.y + _sample_wave(Vector2(world_pos.x,world_pos.z),_time*wave_speed)*wave_height*0.33
+
+# Evaluate a whole deck without repeated Node transform lookups or Variant
+# wave-array iteration for every corner. Keep every probe and its tilted Y.
+func get_deck_crest(origin: Vector3, deck_basis: Basis, points: PackedVector3Array) -> float:
+	var tt := _time*wave_speed
+	var water_y := global_position.y
+	var amplitude := wave_height*0.33
+	var crest := -INF
+	for point in points:
+		var offset := deck_basis*point
+		var p := Vector2(origin.x+offset.x,origin.z+offset.z)
+		crest=maxf(crest,water_y+_sample_wave(p,tt)*amplitude-offset.y)
+	return crest
+
+func get_wave_slope_bound() -> float:
+	# Four wave gradients sum below .764; envelope adds < .022, and
+	# the meander Jacobian magnifies by < 1.39. After the .33 amplitude
+	# factor, .5*height safely bounds world-space slope for this formula.
+	return absf(wave_height)*0.5
+
+func _sample_wave(p: Vector2, tt: float) -> float:
+	var phase1 := p.dot(_M1_DIR)*_M1_F+tt*_M1_S
+	var phase2 := p.dot(_M2_DIR)*_M2_F+tt*_M2_S
+	var pw := p+Vector2(_M_AMP*sin(phase1)+_M_AMP2*sin(phase2),
+			_M_AMP*sin(phase1+2.1)+_M_AMP2*sin(phase2+4.2))
 	var env := 0.75 + 0.25 * sin(pw.dot(_E1_DIR) * _E1_F + tt * _E1_S) * sin(pw.dot(_E2_DIR) * _E2_F + tt * _E2_S)
-	var h := 0.0
-	for w in _WAVES:
-		var d: Vector2 = w[0]
-		var f: float = w[1]
-		var a: float = w[2]
-		var s: float = w[3]
-		h += a * sin(pw.dot(d) * f + tt * s)
-	h *= env
-	return global_position.y + h * wave_height * 0.33
+	# The four fixed shader waves, explicitly typed instead of unpacking four
+	# untyped arrays in this hot path. _WAVES remains the reference constants.
+	var h := sin(pw.dot(Vector2(1.0,0.15))*0.18+tt*0.80)
+	h += 0.75*sin(pw.dot(Vector2(-0.4,0.92))*0.33+tt*1.10)
+	h += 0.38*sin(pw.dot(Vector2(0.8,-0.5))*0.59+tt*1.55)
+	h += 0.13*sin(pw.dot(Vector2(-0.75,-0.65))*0.95+tt*1.90)
+	return h*env
 
 func _update_deck_displacement(delta: float) -> void:
 	if _mat == null: return

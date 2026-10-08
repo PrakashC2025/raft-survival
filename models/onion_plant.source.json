@@ -1,0 +1,40 @@
+{
+  "source": "3d models/Onion/real_onion_plant.blend",
+  "sha256": "4606eaab024ba25e62f786e0a2b0b0354d8ba433884477018abf0ed532852003",
+  "exports": [
+    {
+      "file": "onion_sprout.glb",
+      "source_stage": 1,
+      "triangles": 186,
+      "surfaces": 2
+    },
+    {
+      "file": "onion_young.glb",
+      "source_stage": 3,
+      "triangles": 3221,
+      "surfaces": 6
+    },
+    {
+      "file": "onion_growing.glb",
+      "source_stage": 5,
+      "triangles": 8790,
+      "surfaces": 9
+    },
+    {
+      "file": "onion_plant.glb",
+      "source_stage": 6,
+      "triangles": 9422,
+      "surfaces": 8
+    },
+    {
+      "file": "onion_bulb.glb",
+      "source_stage": 6,
+      "triangles": 1066,
+      "surfaces": 4
+    }
+  ],
+  "materials": "Owner supplied botanical green leaves and golden onion skins retained",
+  "excluded": "Preview soil, presentation camera/lights, source animation",
+  "license": "Owner supplied blend; no license supplied and no CC0 claim",
+  "security": "Embedded text inspected but never executed"
+}

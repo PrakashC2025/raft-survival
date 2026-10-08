@@ -17,6 +17,9 @@ uniform vec3 wind_direction = vec3(-0.707, 0.0, 0.707); // matches Sky3D wind_di
 uniform float wind_strength = 0.07;   // keep 0.35 m grass rooted during gusts
 uniform float wind_speed = 1.6;       // sway cycles per second
 uniform float wind_gustiness = 0.5;   // how much strength varies over time
+uniform bool use_clearance_mask = false;
+uniform sampler2D clearance_mask : filter_nearest, repeat_disable;
+uniform vec4 clearance_bounds = vec4(0.0, 0.0, 16.0, 16.0);
 
 varying float v_mask;
 varying float v_tint;
@@ -35,6 +38,12 @@ void vertex() {
     // Slow global gust so clumps breathe together, plus per-blade phase
     vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
     float distance_fade = 1.0 - smoothstep(55.0, 95.0, distance(wp, CAMERA_POSITION_WORLD));
+    if (use_clearance_mask) {
+        vec2 ground_uv = (MODEL_MATRIX[3].xz - clearance_bounds.xy) / (clearance_bounds.zw * 2.0) + 0.5;
+        if (all(greaterThanEqual(ground_uv, vec2(0.0))) && all(lessThanEqual(ground_uv, vec2(1.0)))) {
+            distance_fade *= 1.0 - step(0.5, textureLod(clearance_mask, ground_uv, 0.0).r);
+        }
+    }
     VERTEX *= distance_fade;
     // Traveling gusts cross the field; individual blades flutter behind them.
     float gust = sin(TIME * 0.55 - dot(wp.xz, vec2(-0.10, 0.10))) * 0.5 + 0.5;

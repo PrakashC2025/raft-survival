@@ -54,7 +54,7 @@ const CLIMB_OUT_RANGE := 2.2
 const CLIMB_LAND_INSET := 0.45
 
 # Build
-const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "HalfWall", "CargoCrate", "WallTorch", "SandFilter"]
+const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "HalfWall", "CargoCrate", "WallTorch", "SandFilter","StorageBox","CookingSetup"]
 const BUILD_SCENES := [
 	"res://scenes/foundation.tscn",
 	"res://scenes/wall.tscn",
@@ -76,10 +76,13 @@ const BUILD_SCENES := [
 	"res://scenes/cargo_crate.tscn",
 	"res://scenes/wall_torch.tscn",
 	"res://scenes/sand_filter.tscn",
+	"res://scenes/storage_box.tscn",
+	"res://scenes/cooking_setup.tscn",
 ]
 const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
 const HUMAN_HAND: PackedScene = preload("res://models/human_hand.glb")
 const SURVIVAL_EQUIPMENT := preload("res://scripts/survival_equipment.gd")
+const FOOD_RULES := preload("res://scripts/food_rules.gd")
 var _equipment: Node
 var _action: Node
 var _pending_build: Dictionary = {}
@@ -184,6 +187,9 @@ var _edit_original_cell: Vector2i = Vector2i(999999, 999999)
 var _edit_valid: bool = false
 var _edit_candidate_transform: Transform3D = Transform3D()
 var _edit_candidate_cell: Vector2i = Vector2i(999999, 999999)
+var _edit_original_local_transform := Transform3D()
+var _edit_socket_snapshot: Array[Dictionary] = []
+var _edit_target_socket: BuildSocket = null
 # Double-click detection
 var _last_click_time: float = 0.0
 var _last_clicked_piece: Node3D = null
@@ -203,6 +209,9 @@ var was_swimming: bool = false
 # HUD
 var _hud_label: Label = null
 var _last_hud_text := ""
+const FRAME_WORK_BUDGET := preload("res://scripts/frame_work_budget.gd")
+var restoration_complete := false
+var _restore_in_progress := false
 
 # Grid occupancy — maps raft-relative Vector2i → Node3D
 var _grid_occupancy: Dictionary = {}
@@ -223,9 +232,15 @@ func _get_ocean() -> Ocean:
 # INIT
 # ============================================================
 func _ready() -> void:
+	var services := preload("res://scripts/survival_services.gd").new()
+	services.name="SurvivalServices"
+	add_child(services)
 	var progress := preload("res://scripts/survival_progression.gd").new()
 	progress.name = "SurvivalProgression"
 	add_child(progress)
+	var electronics := preload("res://scripts/portable_electronics.gd").new()
+	electronics.name="PortableElectronics"
+	add_child(electronics)
 	var wildlife := preload("res://scripts/island_wildlife.gd").new()
 	wildlife.name = "IslandWildlife"
 	add_child(wildlife)
@@ -246,7 +261,8 @@ func _ready() -> void:
 	camera.current = true
 	_apply_camera_mode(true)
 	cam_mode = CAM_TPS if GameSettings.third_person else CAM_FPS
-	if get_tree().root.get_node_or_null("WakeHandoff") != null:
+	var entry_handoff := get_tree().root.get_node_or_null("WakeHandoff")
+	if entry_handoff != null and entry_handoff.get("resuming") != true:
 		cam_mode = CAM_FPS
 	_apply_camera_mode(true)
 	if build_pieces.is_empty():
@@ -292,7 +308,8 @@ func _ready() -> void:
 	# game starts on Day 1 instead of inheriting the scene's editor test date.
 	var sky3d: Node = get_parent().get_node_or_null("Sky3D")
 	if sky3d != null:
-		if get_tree().root.get_node_or_null("WakeHandoff") != null:
+		var wake := get_tree().root.get_node_or_null("WakeHandoff")
+		if wake != null and wake.get("resuming") != true:
 			sky3d.set("current_time",6.25)
 		if Inventory.loaded_meta.has("game_time"):
 			sky3d.set("current_time", float(Inventory.loaded_meta["game_time"]))
@@ -505,11 +522,13 @@ func _find_island_ancestor(node: Node) -> Node3D:
 
 
 func _is_sand_surface_hit() -> bool:
+	if not is_instance_valid(aim_collider):aim_collider=null;aim_valid=false
 	if not aim_valid or aim_collider == null or aim_distance > PICKUP_RANGE \
 			or aim_normal.dot(Vector3.UP) < 0.58:
 		return false
 	var current: Node = aim_collider
 	while current != null:
+		if current.is_in_group("wild_plant"): return false
 		if current.name.begins_with("Palm") or current.name.begins_with("IslandGrass") \
 				or current.name.begins_with("IslandBeacon"):
 			return false
@@ -817,7 +836,7 @@ func _handle_pickup() -> void:
 	if not Input.is_action_just_pressed("interact"):
 		return
 	# SHOOT is dedicated to the selected bow; CLIMB has its own touch button.
-	if active_item in ["Bow", "Bandage", "Diving Tank", "Torch"]:
+	if active_item in ["Bow", "Bandage", "Diving Tank", "Torch","Burning Torch","Medkit","Can","Solar Torch","Binoculars","Walkie Talkie"]:
 		_handle_selected_item_use()
 		return
 	# Boarding the raft from the water takes priority over pickups: when the
@@ -853,17 +872,17 @@ func _handle_pickup() -> void:
 					_hud_toast("SAND ADDED TO SOIL")
 				return
 			if not planter.has_plant():
-				# Exact selected seed takes priority; otherwise auto-pick the first
-				# seed that fits this planter so aiming + E just works.
 				var seed_name: String = ""
-				if active_item.ends_with(" Seed") and Inventory.has(active_item, 1):
+				if PlantDB.crop_for_item(active_item)!="" and Inventory.has(active_item, 1):
 					seed_name = active_item
 				else:
 					seed_name = _find_fitting_seed(planter)
-				if seed_name != "" and planter.plant_seed(seed_name.trim_suffix(" Seed")):
+				if seed_name != "" and planter.plant_seed(PlantDB.crop_for_item(seed_name)):
 					Inventory.remove(seed_name, 1)
 					play_action("plant",0.75,aim_point)
 					_queue_save()
+					_hud_toast("PLANTED "+PlantDB.crop_for_item(seed_name).to_upper()+" · WATER TO KEEP SOIL MOIST")
+				else:_hud_toast("SELECT A CROP THAT FITS THIS POT · TREES NEED A TREE POT")
 			return
 	if aim_valid and aim_collider != null:
 		if aim_collider.is_in_group("debris") and aim_distance <= PICKUP_RANGE:
@@ -879,12 +898,16 @@ func _handle_pickup() -> void:
 			toggler.toggle()
 			return
 	if _is_sand_surface_hit():
+		if PlantDB.crop_for_item(active_item)!="":
+			_plant_on_ground()
+			return
 		if _sand_gather_cooldown > 0.0:
 			return
 		var gathered := "Soil" if aim_point.y > 1.0 else "Sand"
 		var overflow := Inventory.add(gathered, 1)
 		if overflow == 0:
 			_sand_gather_cooldown = 0.65
+			Inventory.pickup_received.emit(gathered,1)
 			play_world_sfx(PICKUP_SOUND, -10.0)
 			play_action("scoop",0.65,aim_point)
 			_hud_toast(gathered.to_upper()+"  +1")
@@ -905,8 +928,14 @@ func _handle_pickup() -> void:
 
 
 func _handle_selected_item_use() -> void:
+	if active_item in ["Medkit","Can"] or FOOD_RULES.edible(active_item):
+		get_node("SurvivalServices").call("use_item",active_item)
+		return
 	match active_item:
-		"Torch":
+		"Solar Torch","Binoculars","Walkie Talkie":
+			get_node("PortableElectronics").call("use")
+			return
+		"Torch","Burning Torch":
 			get_node("SurvivalProgression").call("use_torch")
 		"Bandage":
 			if Stats.health < 100 and Inventory.has("Bandage", 1):
@@ -925,44 +954,6 @@ func _handle_selected_item_use() -> void:
 			return
 		"Bow":
 			_equipment.call("begin_draw")
-			return
-		"Water":
-			if Inventory.has("Water", 1):
-				Inventory.remove("Water", 1)
-				play_action("drink",1.0)
-				Stats.drink(35.0)
-				_hud_toast("FRESH WATER  +THIRST")
-			return
-		"Cooked Fish", "Roast Bird", "Baked Potato", "Carrot", "Tomato", "Potato", "Cooked Meat", "Cooked Crab":
-			if Inventory.has(active_item, 1):
-				var nutrition := {"Cooked Fish": 40.0, "Roast Bird": 38.0, "Baked Potato": 30.0, "Carrot": 14.0, "Tomato": 18.0, "Potato": 10.0, "Cooked Meat": 45.0, "Cooked Crab": 28.0}
-				var eaten := active_item
-				Inventory.remove(eaten, 1)
-				play_action("eat",0.95)
-				Stats.eat(float(nutrition[eaten]))
-				_hud_toast(eaten.to_upper() + "  +HUNGER")
-			return
-		"Coconut":
-			if Inventory.has("Coconut", 1):
-				Inventory.remove("Coconut", 1)
-				play_action("eat",0.95)
-				Stats.eat(12.0)
-				Stats.drink(28.0)
-				_hud_toast("COCONUT  +HUNGER  +THIRST")
-			return
-		"Banana":
-			if Inventory.has("Banana", 1):
-				Inventory.remove("Banana", 1)
-				play_action("eat",0.95)
-				Stats.eat(30.0)
-				_hud_toast("BANANA  +HUNGER")
-			return
-		"Fish":
-			if Inventory.has("Fish", 1):
-				Inventory.remove("Fish", 1)
-				play_action("eat",0.95)
-				Stats.eat(10.0)
-				_hud_toast("RAW FISH  +HUNGER")
 			return
 		"Spear":
 			var shark := _get_aimed_shark()
@@ -1129,6 +1120,7 @@ func take_shark_damage(amount: float) -> void:
 
 func _on_player_died() -> void:
 	set_physics_process(false)
+	get_node("SurvivalServices").call("on_death")
 	var hud: Node = get_node_or_null("CanvasLayer/SurvivalHUD")
 	if hud != null and hud.has_method("show_death"):
 		hud.call("show_death")
@@ -1178,8 +1170,66 @@ func _find_planter_ancestor(n: Node3D) -> Planter:
 	return null
 
 
-## Pick a seed the player owns that fits this planter type (hotsbar first,
-## then bag), so planting works without manually selecting the seed first.
+## Plant the held crop directly on reachable, dry island ground.
+func _plant_on_ground() -> bool:
+	var crop:String=PlantDB.crop_for_item(active_item)
+	if crop=="" or not Inventory.has(active_item,1) or not _is_sand_surface_hit():return false
+	var island:=_find_island_ancestor(aim_collider)
+	if island==null or aim_point.y<0.4 or aim_normal.y<0.82:
+		_hud_toast("PLANT ON DRY, LEVEL ISLAND GROUND")
+		return false
+	if get_tree().get_nodes_in_group("ground_plot").size()>=64:
+		_hud_toast("HARVEST AN EXISTING GROUND CROP FIRST");return false
+	for wild in get_tree().get_nodes_in_group("island_wild_plants"):
+		if wild.blocks_crop(aim_point):
+			_hud_toast("GATHER PLANTS OR CHOP THE TREE TO CLEAR THIS GROUND");return false
+	for plot in get_tree().get_nodes_in_group("ground_plot"):
+		if plot.global_position.distance_to(aim_point)<1.1:
+			_hud_toast("LEAVE SPACE BETWEEN CROPS");return false
+	var query:=PhysicsShapeQueryParameters3D.new()
+	var space:=SphereShape3D.new();space.radius=0.45
+	query.shape=space;query.transform.origin=aim_point+Vector3.UP*0.5
+	query.collision_mask=1;query.exclude=[get_rid(),aim_collider.get_rid()]
+	if not get_world_3d().direct_space_state.intersect_shape(query,1).is_empty():
+		_hud_toast("CLEAR SOME SPACE FOR THIS CROP");return false
+	var bed:=preload("res://scripts/ground_plot.gd").new()
+	bed.position=island.to_local(aim_point)
+	island.add_child(bed)
+	if not bed.plant_seed(crop):bed.queue_free();return false
+	Inventory.remove(active_item,1)
+	for wild in get_tree().get_nodes_in_group("island_wild_plants"):
+		wild.advance(0.01)
+	play_action("plant",0.75,aim_point);_queue_save()
+	_hud_toast("PLANTED "+crop.to_upper()+" · GROWING ON ISLAND SOIL")
+	return true
+
+func _serialize_ground_crops() -> Array:
+	var crops:Array=[]
+	for plot in get_tree().get_nodes_in_group("ground_plot"):
+		if plot.is_queued_for_deletion() or not plot.has_plant():continue
+		crops.append({"island":str(plot.get_parent().get_path()),"p":[plot.position.x,plot.position.y,plot.position.z],"plant":plot.save_plant_state(),"moisture":plot.moisture})
+	return crops
+
+func _restore_ground_crops(sliced: bool = false) -> void:
+	var saved:Variant=Inventory.loaded_meta.get("ground_crops",[])
+	if not saved is Array:return
+	for entry in saved.slice(0,64):
+		if not entry is Dictionary or not entry.get("plant") is Dictionary:continue
+		var values:Variant=entry.get("p",[])
+		if not values is Array or values.size()!=3:continue
+		var at:=Vector3(float(values[0]),float(values[1]),float(values[2]))
+		if not at.is_finite() or at.length()>3000:continue
+		var island:=get_node_or_null(str(entry.get("island",""))) as Node3D
+		if island==null or not island.is_in_group("island"):continue
+		var bed:=preload("res://scripts/ground_plot.gd").new()
+		bed.position=at;island.add_child(bed)
+		bed.moisture=clampf(float(entry.get("moisture",0.75)),0,1)
+		bed.restore_plant_state(entry.plant)
+		if not bed.has_plant():bed.queue_free()
+		if sliced and FRAME_WORK_BUDGET.exhausted(8):
+			await get_tree().process_frame
+			if not is_inside_tree(): return
+
 func _find_fitting_seed(planter: Planter) -> String:
 	var cat: String = planter.category_name()
 	var db: Node = get_node_or_null("/root/PlantDB")
@@ -1188,9 +1238,9 @@ func _find_fitting_seed(planter: Planter) -> String:
 	var order: Array = range(Inventory.HOTBAR_COUNT) + range(Inventory.BAG_START, Inventory.SLOT_COUNT)
 	for i in order:
 		var it: String = Inventory.slot_item(i)
-		if it == "" or not it.ends_with(" Seed") or Inventory.slot_count(i) <= 0:
+		if PlantDB.crop_for_item(it) == "" or Inventory.slot_count(i) <= 0:
 			continue
-		var def: Dictionary = db.get_def(it.trim_suffix(" Seed"))
+		var def: Dictionary = db.get_def(PlantDB.crop_for_item(it))
 		if def.is_empty():
 			continue
 		if def.get("planter_categories", []).has(cat):
@@ -1209,6 +1259,7 @@ func _collect_debris(debris: Node3D) -> void:
 	if "amount" in debris:
 		pickup_amount = maxi(1, int(debris.get("amount")))
 	var overflow := Inventory.add(item_name, pickup_amount)
+	if pickup_amount>overflow:Inventory.pickup_received.emit(Inventory.canonical_item(item_name),pickup_amount-overflow)
 	if overflow > 0:
 		if overflow < pickup_amount and debris.has_method("set_pickup_amount"):
 			debris.call("set_pickup_amount", overflow)
@@ -1250,6 +1301,7 @@ func _process(delta: float) -> void:
 ## delivery. Mobile controls emulate actions with Input.action_press(), which
 ## updates action state but does not send an unhandled InputEvent to this node.
 func _poll_gameplay_actions() -> void:
+	if get_node("SurvivalServices").busy():return
 	var hud: Node = get_node_or_null("CanvasLayer/SurvivalHUD")
 	if hud != null and hud.has_method("gameplay_input_blocked") \
 			and bool(hud.call("gameplay_input_blocked")):
@@ -1345,6 +1397,7 @@ func _toggle_build() -> void:
 	if build_pieces.is_empty():
 		return
 	build_mode = !build_mode
+	if _action != null: _action.call("_process",0.0)
 	if build_mode:
 		_hud_toast("BUILD MODE · CHOOSE A PIECE, THEN PLACE THE GREEN PREVIEW")
 		build_rotation = 0.0
@@ -1433,8 +1486,9 @@ func _ensure_starter_seeds() -> void:
 		Inventory.place_at(3, "Banana Seed", 3)
 		Inventory.add("Carrot Seed", 4)
 		Inventory.add("Tomato Seed", 4)
+		Inventory.add("Onion", 4)
 		return
-	for seed_item in ["Potato Seed", "Coconut Seed", "Banana Seed", "Carrot Seed", "Tomato Seed"]:
+	for seed_item in ["Potato", "Coconut", "Banana", "Carrot", "Tomato", "Onion"]:
 		var already_in_hotbar := false
 		for i in range(Inventory.HOTBAR_COUNT):
 			if Inventory.slot_item(i) == seed_item:
@@ -1496,6 +1550,8 @@ func _queue_save() -> void:
 ## Build the state meta (selected slot + time of day + the built structure)
 ## and write it to the given slot ("main" autosave or "quick" quick-save).
 func _write_save(slot: String) -> bool:
+	# Never replace a complete Continue save with a half-restored structure.
+	if not restoration_complete: return false
 	var meta := {"active_slot": active_slot_index, "rope_gun_selected": rope_gun_selected}
 	meta["island_layout"] = preload("res://scripts/island_layout.gd").version(Inventory.loaded_meta)
 	meta["island_groves"] = Inventory.loaded_meta.get("island_groves",{}).duplicate(true)
@@ -1504,7 +1560,12 @@ func _write_save(slot: String) -> bool:
 		var tree_states: Dictionary = meta["island_groves"].get(key,{})
 		tree_states.merge(grove.call("save_state"),true)
 		meta["island_groves"][key] = tree_states
+	meta["wild_plants"] = Inventory.loaded_meta.get("wild_plants",{}).duplicate(true)
+	for wild in get_tree().get_nodes_in_group("island_wild_plants"):
+		if wild.prepared: meta["wild_plants"][str(wild.island_node().name)] = wild.save_state()
 	meta["progression"] = get_node("SurvivalProgression").call("save_state")
+	meta["electronics"] = get_node("PortableElectronics").call("save_state")
+	meta["survival_services"] = get_node("SurvivalServices").call("save_state")
 	meta["wildlife"] = get_node("IslandWildlife").call("save_state")
 	var stat_state: Dictionary = Stats.save_state()
 	# Quitting from the death screen must not write a zero-health Continue save.
@@ -1531,6 +1592,7 @@ func _write_save(slot: String) -> bool:
 	# The built structure lives under the raft's BuiltPieces — without this the
 	# save file holds only inventory and Continue returns an empty raft.
 	meta["built"] = _serialize_built_pieces()
+	meta["ground_crops"] = _serialize_ground_crops()
 	if not Inventory.save_game(meta, slot):
 		_hud_toast(Inventory.last_save_error)
 		return false
@@ -1583,7 +1645,7 @@ func _serialize_built_pieces() -> Array:
 		if piece.name.begins_with("HalfWall"): pname = "HalfWall"
 		if pname == "" or pname == "Raft":
 			continue
-		var t := (piece as Node3D).transform
+		var t := _edit_original_local_transform if piece == _editing else (piece as Node3D).transform
 		var b := t.basis
 		var entry := {
 			"t": pname,
@@ -1604,6 +1666,8 @@ func _serialize_built_pieces() -> Array:
 				entry["plant"] = plant_state
 		if piece.has_method("save_survival_state"):
 			entry["survival"] = piece.call("save_survival_state")
+		var station_job := piece.get_node_or_null("StationJob")
+		if station_job!=null and not station_job.job.is_empty():entry["station_job"]=station_job.save_job()
 		out.append(entry)
 	return out
 
@@ -1613,17 +1677,26 @@ func _serialize_built_pieces() -> Array:
 ## given the saved raft-local transform, collisions enabled, registered in the
 ## occupancy grid + buoyancy samples, and sockets re-linked best-effort.
 func _restore_built_pieces() -> void:
+	if _restore_in_progress: return
+	_restore_in_progress = true
+	restoration_complete = false
+	await _restore_ground_crops(true)
+	if not is_inside_tree(): return
 	var built: Array = Inventory.loaded_meta.get("built", [])
 	if built.is_empty():
+		restoration_complete = true
+		_restore_in_progress = false
 		return
 	var raft: Node3D = _get_raft_node()
 	if raft == null:
+		_restore_in_progress = false
 		return
 	var container: Node = raft.get_node_or_null("BuiltPieces")
 	if container == null:
 		container = Node3D.new()
 		container.name = "BuiltPieces"
 		raft.add_child(container)
+	container.set_meta("restoring", true)
 	var restored: Array = []
 	for entry in built:
 		if not (entry is Dictionary):
@@ -1669,6 +1742,8 @@ func _restore_built_pieces() -> void:
 				(piece as Planter).restore_plant_state(entry["plant"])
 		if piece.has_method("restore_survival_state") and entry.get("survival", null) is Dictionary:
 			piece.call("restore_survival_state", entry["survival"])
+		if entry.get("station_job") is Dictionary and (piece.is_in_group("campfire") or str(piece.get("machine_type")) in ["SandFilter","WaterPurifier","ElectricPurifier"]):
+			get_node("SurvivalServices").ensure_job(piece).restore_job(entry.station_job)
 		piece.add_to_group("build_surface")
 		restored.append(piece)
 		# Grid occupancy (foundations are grid-registered; walls/doors/etc are
@@ -1681,14 +1756,30 @@ func _restore_built_pieces() -> void:
 			sample = piece.get_node_or_null("F1")
 		if sample != null and raft.has_method("register_sample_point"):
 			raft.register_sample_point(sample)
+		if FRAME_WORK_BUDGET.exhausted(8):
+			await get_tree().process_frame
+			if not is_inside_tree(): return
 	# Best-effort socket re-link: every socket occupies the piece sitting at
 	# its horizontal position (covers raft edge->Foundation, Foundation
 	# Socket_Top->Wall/Door/Window, Stairs sockets, ...).
-	_relink_restored_sockets(raft, restored)
+	await _relink_restored_sockets(raft, restored, true)
+	if not is_inside_tree(): return
+	container.set_meta("restoring", false)
+	restoration_complete = true
+	_restore_in_progress = false
 	print("[SAVE] Restored %d built piece(s) from %s" % [restored.size(), str(Inventory.loaded_meta.get("loaded_slot", "main"))])
 
 
-func _relink_restored_sockets(raft: Node3D, restored: Array) -> void:
+func _relink_restored_sockets(raft: Node3D, restored: Array, sliced: bool = false) -> void:
+	# Nine nearby bins replace comparing every socket with every saved piece.
+	# Retain the legacy horizontal-distance rule and original order for ties.
+	var bins := {}
+	for index in restored.size():
+		var piece := restored[index] as Node3D
+		if not is_instance_valid(piece): continue
+		var cell := Vector2i(floori(piece.global_position.x / 0.45), floori(piece.global_position.z / 0.45))
+		if not bins.has(cell): bins[cell] = []
+		bins[cell].append({"piece":piece,"index":index})
 	for s in _get_all_sockets(raft):
 		var parent: Node3D = s.get_parent_piece()
 		if parent == null:
@@ -1697,19 +1788,28 @@ func _relink_restored_sockets(raft: Node3D, restored: Array) -> void:
 		var ws: Vector3 = flat * s.position
 		var best: Node3D = null
 		var best_d: float = 0.45
-		for p in restored:
-			if p == parent or not is_instance_valid(p):
-				continue
-			var d: float = Vector2(p.global_position.x - ws.x, p.global_position.z - ws.z).length()
-			if d < best_d:
-				best_d = d
-				best = p
+		var best_index := restored.size()
+		var cell := Vector2i(floori(ws.x / 0.45), floori(ws.z / 0.45))
+		for x in range(-1,2):
+			for z in range(-1,2):
+				for candidate in bins.get(cell + Vector2i(x,z), []):
+					var p := candidate.piece as Node3D
+					if p == parent: continue
+					var d := Vector2(p.global_position.x - ws.x, p.global_position.z - ws.z).length()
+					if d < best_d or (best != null and d == best_d and int(candidate.index) < best_index):
+						best_d = d
+						best = p
+						best_index = int(candidate.index)
 		if best != null:
 			s.occupy(best)
+		if sliced and FRAME_WORK_BUDGET.exhausted():
+			await get_tree().process_frame
+			if not is_inside_tree(): return
 
 
 # In _process (exists below): when _save_pending, count down and flush.
 func _tick_save(delta: float) -> void:
+	if not restoration_complete: return
 	if not _save_pending:
 		return
 	_save_timer -= delta
@@ -1762,8 +1862,16 @@ func _update_hand_item() -> void:
 	# Each item is composed from primitives placed in a NATURAL HAND POSE around
 	# the fist (offsets below are fist-local: +X right, +Y up, -Z forward).
 	var along_forward := Basis(Vector3.RIGHT, PI / 2.0)
+	if active_item in ["Medkit","Can","Dirty Water Can","Clean Water Can"] or FOOD_RULES.RECIPES.has(active_item):
+		var survival_item := preload("res://scripts/survival_item_visual.gd").create(active_item)
+		survival_item.position=Vector3(0,-.02,-.24);_hand_item.add_child(survival_item);return
 	match active_item:
-		"Torch":
+		"Solar Torch","Binoculars","Walkie Talkie":
+			var tool := preload("res://scripts/electronics_visual.gd").create(active_item)
+			tool.position=Vector3(0,-0.015,-0.25)
+			_hand_item.add_child(tool)
+			return
+		"Torch","Burning Torch":
 			var torch := preload("res://scripts/torch_visual.gd").new()
 			torch.name = "Torch"
 			torch.position = Vector3(0,-0.02,-0.20)
@@ -1904,8 +2012,12 @@ func _update_hand_item() -> void:
 			_hand_part(vest_mini, _hand_mat(Color(0.95, 0.35, 0.13)), Transform3D(Basis.IDENTITY, Vector3(0.0, -0.03, -0.26)))
 		"Coconut":
 			_add_hand_asset("res://models/kenney_coconut.glb", 0.3)
-		"Banana":
-			_add_hand_asset("res://models/kenney_banana.glb", 0.3)
+		"Banana", "Tomato", "Potato", "Baked Potato":
+			var produce := preload("res://scripts/produce_visual.gd").create(active_item)
+			produce.position=Vector3(0,-0.01,-0.22)
+			_hand_item.add_child(produce)
+		"Onion":
+			_add_hand_asset("res://models/onion_bulb.glb", 0.23)
 		"Fish", "Cooked Fish":
 			_add_hand_asset("res://models/coastal_fish.glb", 0.42)
 		"Raw Bird", "Roast Bird":
@@ -1919,18 +2031,9 @@ func _update_hand_item() -> void:
 				arrow.bottom_radius = 0.006
 				arrow.radial_segments = 6
 				_hand_part(arrow, _hand_mat(Color(0.48, 0.29, 0.13)), Transform3D(along_forward, Vector3(0.0, 0.03, -0.30)))
-		"Carrot", "Tomato", "Potato", "Baked Potato":
-			var produce := SphereMesh.new()
-			produce.radius = 0.075
-			produce.height = 0.15
-			var color := Color(0.67, 0.41, 0.20)
-			var shape := Vector3(1.0, 1.0, 1.0)
-			if active_item == "Carrot":
-				color = Color(0.82, 0.31, 0.05)
-				shape = Vector3(0.5, 1.8, 0.5)
-			elif active_item == "Tomato":
-				color = Color(0.65, 0.08, 0.025)
-			_hand_part(produce, _hand_mat(color), Transform3D(Basis.IDENTITY.scaled(shape), Vector3(0.0, 0.0, -0.2)))
+		"Carrot":
+			var carrot := CylinderMesh.new();carrot.top_radius=0.034;carrot.bottom_radius=0.003;carrot.height=0.22
+			_hand_part(carrot,_hand_mat(Color(0.82,0.31,0.05)),Transform3D(Basis(Vector3.RIGHT,0.4),Vector3(0,0,-0.2)))
 		"Water":
 			var water_can := RESOURCE_VISUAL.create("Plastic")
 			# Its raised handle sits at the fingers; the can hangs below the palm.
@@ -2062,43 +2165,70 @@ func _update_hand_sway(_delta: float) -> void:
 ##     case — in real life you only take debris that is within your pickable
 ##     range, and the E key collects those even without precise aiming).
 func interaction_caption() -> String:
-	if active_item == "Torch":
+	if active_item=="Medkit":return "USE MEDKIT"
+	if active_item=="Can":return "COLLECT WATER"
+	if active_item.ends_with("Water Can") and aim_valid and is_instance_valid(aim_collider) and get_node("SurvivalServices").is_filter(aim_collider):return "FILTER WATER"
+	if not is_instance_valid(aim_collider):aim_collider=null;aim_valid=false
+	if active_item=="Binoculars":return "LOWER" if get_node("PortableElectronics").zoomed else "LOOK"
+	if active_item=="Solar Torch":return "LIGHT OFF" if get_node("PortableElectronics").enabled[active_item] else "LIGHT ON"
+	if active_item=="Walkie Talkie":return "SEND SIGNAL" if get_node("PortableElectronics").enabled[active_item] else "POWER ON"
+	if active_item in ["Torch","Burning Torch"]:
 		if aim_valid and aim_collider != null and _find_piece_name(aim_collider) == "WallTorch": return "TAKE / LIGHT"
-		if bool(_resolve_wall_torch().get("valid",false)): return "MOUNT"
-		return "PUT OUT" if get_node("SurvivalProgression").torch_fuel > 0 else "LIGHT"
+		if get_node("SurvivalProgression").is_held_lit() and bool(_resolve_wall_torch().get("valid",false)): return "PLACE TORCH"
+		return "PUT OUT" if get_node("SurvivalProgression").is_held_lit() else "LIGHT TORCH"
 	if active_item in ["Diving Tank", "Bandage"]:
 		return "EQUIP" if active_item == "Diving Tank" else "HEAL"
 	if active_item == "Bow":
 		return "SHOOT"
-	if _is_sand_surface_hit():return "GATHER SOIL" if aim_point.y>1.0 else "GATHER SAND"
+	if _is_sand_surface_hit():
+		if PlantDB.crop_for_item(active_item)!="":return "PLANT"
+		return "GATHER SOIL" if aim_point.y>1.0 else "GATHER SAND"
 	if aim_valid and aim_collider != null and aim_distance <= PICKUP_RANGE:
 		var target: Node = aim_collider
 		while target != null:
 			if target is Planter:
-				return "WATER" if active_item == "Water" else "PLANT"
+				if active_item == "Water":return "WATER"
+				if target.has_plant():return "GROWING" if target._plant._stage<PlantInstance.Stage.MATURE else "READY"
+				return "PLANT"
+			if target.is_in_group("debris"):return "COLLECT"
+			if "toggle" in target:
+				return "CLOSE" if bool(target.get("is_open")) else "OPEN"
 			if target is PlantInstance:
-				return "HARVEST"
+				return "GROWING" if target._stage<PlantInstance.Stage.MATURE else "HARVEST"
 			if target.has_method("interact_survival"):
+				if target.has_method("interaction_caption"): return str(target.call("interaction_caption"))
 				return "USE"
 			target = target.get_parent()
 	if active_item == "Fishing Rod":
 		return "FISH"
+	for debris in get_tree().get_nodes_in_group("debris"):
+		if debris is Node3D and is_instance_valid(debris) and debris.get("collected") != true and global_position.distance_squared_to(debris.global_position)<=NEARBY_PICKUP_RANGE*NEARBY_PICKUP_RANGE:
+			return "COLLECT"
+	if active_item in ["Sail Kit","Motor Kit"]:return "INSTALL"
+	if active_item == "Life Vest":return "EQUIP"
+	if active_item == "Spear":return "STRIKE"
+	if FOOD_RULES.edible(active_item):return "DRINK" if active_item.ends_with("Water Can") else "EAT"
 	if active_item == "Water":
 		return "DRINK"
-	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Cooked Meat", "Cooked Crab"]:
+	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Onion", "Cooked Meat", "Cooked Crab"]:
 		return "EAT"
 	return "USE"
 
 
 func can_interact_now() -> bool:
-	if active_item == "Torch" and Inventory.has("Torch",1): return true
+	if active_item=="Medkit":return Stats.health<Stats.MAX_VALUE and Inventory.has(active_item,1)
+	if active_item=="Can":return Inventory.has(active_item,1) and get_node("SurvivalServices").ocean_point().is_finite()
+	if FOOD_RULES.edible(active_item) and Inventory.has(active_item,1):return true
+	if not is_instance_valid(aim_collider):aim_collider=null;aim_valid=false
+	if active_item in ["Solar Torch","Binoculars","Walkie Talkie"]:return Inventory.has(active_item,1)
+	if active_item in ["Torch","Burning Torch"] and Inventory.has(active_item,1): return true
 	if active_item in ["Cooked Meat", "Cooked Crab"] and Inventory.has(active_item,1):
 		return true
 	if active_item == "Bandage" and Stats.health < 100 and Inventory.has("Bandage", 1):
 		return true
 	if active_item == "Diving Tank" and Inventory.has("Diving Tank", 1) and not get_node("SurvivalProgression").diving_tank:
 		return true
-	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Water"] and Inventory.has(active_item, 1):
+	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Onion", "Water"] and Inventory.has(active_item, 1):
 		return true
 	if active_item == "Bow":
 		return true
@@ -2134,7 +2264,7 @@ func can_interact_now() -> bool:
 						and not (n as Planter).has_sand():
 					return true
 				if not (n as Planter).has_plant() \
-					and active_item.ends_with(" Seed") and Inventory.has(active_item, 1):
+					and PlantDB.crop_for_item(active_item)!="" and Inventory.has(active_item, 1):
 					return true
 				break  # a planter with a plant already in it is not hand-usable
 			if n is PlantInstance:
@@ -2143,9 +2273,10 @@ func can_interact_now() -> bool:
 	if _sand_gather_cooldown <= 0.0 and _is_sand_surface_hit():
 		return true
 	# Nearby debris the E key would collect without aiming.
+	var here := global_position
 	for d in get_tree().get_nodes_in_group("debris"):
 		if d is Node3D and is_instance_valid(d) and d.get("collected") != true:
-			if global_position.distance_to(d.global_position) <= NEARBY_PICKUP_RANGE:
+			if here.distance_squared_to(d.global_position) <= NEARBY_PICKUP_RANGE*NEARBY_PICKUP_RANGE:
 				return true
 	return false
 
@@ -2159,14 +2290,22 @@ func can_interact_now() -> bool:
 func _nearest_climb_surface() -> Node3D:
 	var best: Node3D = null
 	var best_d: float = CLIMB_OUT_RANGE
+	var here := global_position
+	var nearby_limit := (CLIMB_OUT_RANGE+1.5)*(CLIMB_OUT_RANGE+1.5)
 	var oc := _get_ocean()
-	var water_y: float = oc.get_height(global_position) if oc != null else -INF
+	var water_y: float = oc.get_height(here) if oc != null else -INF
 	for s in get_tree().get_nodes_in_group("build_surface"):
 		if s == null or not is_instance_valid(s) or not (s is Node3D):
 			continue
 		# Only the raft itself and Foundations are deck ledges you can pull
 		# yourself onto from the water (walls/roofs are not climb targets).
 		if not (s.name.begins_with("Raft") or s.name.begins_with("Foundation")):
+			continue
+		# A foundation's 2x2 footprint fits inside this conservative circle.
+		# Reject distant decks before inverting their support transforms.
+		var center: Vector3 = s.global_position
+		var separation := Vector2(center.x-here.x,center.z-here.z)
+		if separation.length_squared() > nearby_limit:
 			continue
 		# Deck top = flat origin + half thickness (raft and foundations are
 		# both 0.3 thick boxes; this matches how the player walks on them).
@@ -2452,6 +2591,8 @@ func _is_roof_top_aim(roof: Node3D, aim_world: Vector3) -> bool:
 func _find_support_piece(collider: Node3D) -> Node3D:
 	if collider == null:
 		return null
+	if _editing != null and (collider == _editing or _editing.is_ancestor_of(collider)):
+		return null
 	if collider.name.begins_with("Foundation") or collider.name.begins_with("Wall") \
 		or collider.name.begins_with("Roof") or collider.name.begins_with("Stairs") \
 		or collider.name.begins_with("Door") or collider.name.begins_with("Window") \
@@ -2481,7 +2622,14 @@ func _find_piece_name(node: Node3D) -> String:
 	return ""
 
 func _piece_name_from_node(node: Node3D) -> String:
+	if node != null and node.name.begins_with("HalfWall"): return "HalfWall"
 	return _find_piece_name(node)
+
+func _placement_children(container: Node) -> Array[Node]:
+	var pieces: Array[Node] = []
+	for child in container.get_children():
+		if child != _editing and not child.is_queued_for_deletion(): pieces.append(child)
+	return pieces
 
 func _get_socket_world_direction(socket: BuildSocket) -> Vector3:
 	var parent_piece: Node3D = socket.get_parent_piece()
@@ -3274,7 +3422,7 @@ func _compute_foundation_transform(cell: Vector2i) -> Transform3D:
 	# Canonical grid formula: local_pos = cell * FOUNDATION_WIDTH/DEPTH
 	var local_pos: Vector3 = Vector3(cell.x * FOUNDATION_WIDTH, 0.0, cell.y * FOUNDATION_DEPTH)
 	var world_pos: Vector3 = flat_xf * local_pos
-	var world_basis: Basis = flat_xf.basis.rotated(Vector3.UP, build_rotation)
+	var world_basis: Basis = flat_xf.basis * Basis(Vector3.UP, snappedf(build_rotation, PI / 2.0))
 	return Transform3D(world_basis, world_pos)
 
 # Find the socket on the support that faces a given candidate cell direction.
@@ -3369,7 +3517,7 @@ func _resolve_roof_plane_tile(aim_pos: Vector3, _gh: Node3D) -> Dictionary:
 	if bp == null:
 		return {}
 	var roofs: Array = []
-	for child in bp.get_children():
+	for child in _placement_children(bp):
 		if child is Node3D and _find_piece_name(child) == "Roof":
 			roofs.append(child)
 	if roofs.is_empty():
@@ -3529,7 +3677,7 @@ func _resolve_wall_torch() -> Dictionary:
 	var container := raft.get_node_or_null("BuiltPieces")
 	if container != null:
 		var count := 0
-		for mounted in container.get_children():
+		for mounted in _placement_children(container):
 			if _find_piece_name(mounted as Node3D) != "WallTorch": continue
 			count += 1
 			if (mounted as Node3D).global_position.distance_to(pos) < 0.65: return invalid
@@ -3545,7 +3693,9 @@ func _resolve_wall_torch() -> Dictionary:
 	return {"valid":true,"socket":null,"transform":Transform3D(orientation,pos),"support":wall}
 
 func mount_held_torch() -> bool:
-	if not Inventory.has("Torch",1): return false
+	var selected:=active_item
+	var progress := get_node("SurvivalProgression")
+	if selected not in ["Torch","Burning Torch"] or not Inventory.has(selected,1) or not progress.is_held_lit():return false
 	var placement := _resolve_wall_torch()
 	if not bool(placement.get("valid",false)): return false
 	var raft := _get_raft_node()
@@ -3557,19 +3707,38 @@ func mount_held_torch() -> bool:
 	var torch := build_pieces[BUILD_RECIPE_NAMES.find("WallTorch")].instantiate() as Node3D
 	torch.name = "WallTorch_%d" % torch.get_instance_id()
 	torch.transform = raft.global_transform.affine_inverse() * (placement.transform as Transform3D)
-	var progress := get_node("SurvivalProgression")
 	torch.set("fuel",float(progress.get("torch_fuel")))
+	torch.set("end_time",float(progress.get("torch_end_time")))
 	torch.set("burning",float(progress.get("torch_fuel")) > 0.0)
-	Inventory.remove("Torch",1)
+	Inventory.remove(selected,1)
 	progress.set("torch_fuel",0.0)
+	progress.set("legacy_torch",false)
 	container.add_child(torch)
-	_hud_toast("TORCH MOUNTED · SELECT WOOD TO REFUEL, USE TO TAKE")
+	_hud_toast("TORCH MOUNTED · BURNS UNTIL DAWN · USE TO TAKE")
 	_queue_save()
 	return true
+
+var _placement_ray_override: Dictionary = {}
+
+func _placement_ray_origin() -> Vector3:
+	return _placement_ray_override.get("origin",camera.global_position)
+
+func _placement_ray_direction() -> Vector3:
+	return _placement_ray_override.get("direction",-camera.global_basis.z)
 
 func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	if piece_name == "WallTorch":
 		return _resolve_wall_torch()
+	if piece_name in ["PlanterPot","PlanterBox","TreePot"]:
+		# Pots use the actual top hit. Never project an ocean/land hit onto
+		# a nearby foundation, or clamp an unsupported pot back onto its edge.
+		_diag = {}
+		if not aim_point.is_finite():return {"valid":false}
+		var planter_support: Node3D = _find_support_piece(aim_collider) if aim_valid and is_instance_valid(aim_collider) else null
+		if planter_support == null or not _is_structurally_supported(planter_support):
+			_diag["invalid_reason"] = "PLACE ON TOP OF A FOUNDATION OR ROOF"
+			return {"valid":false,"transform":Transform3D(Basis(Vector3.UP,build_rotation),aim_point+Vector3.UP*0.25)}
+		return _resolve_deck_prop(piece_name,planter_support,aim_point)
 	if piece_name == "HalfWall":
 		var half := _resolve_placement("Wall", _hit_point)
 		if half.has("transform"):
@@ -3601,8 +3770,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	# For Wall: use ACTUAL ray hit — the player's crosshair determines which edge.
 	if piece_name == "Foundation":
 		var deck_y_bp: float = _get_structural_deck_y()
-		var ray_o: Vector3 = camera.global_position
-		var ray_d: Vector3 = -camera.global_transform.basis.z
+		var ray_o: Vector3 = _placement_ray_origin()
+		var ray_d: Vector3 = _placement_ray_direction()
 		if absf(ray_d.y) > 0.001:
 			var t_bp: float = (deck_y_bp - ray_o.y) / ray_d.y
 			if t_bp > 0.0 and t_bp < AIM_DISTANCE:
@@ -3617,10 +3786,10 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		and _find_support_piece(aim_collider) != null
 	if not _hit_is_build:
 		var raft: Node3D = _get_raft_node()
-		if raft != null and build_mode:
+		if raft != null and (build_mode or _editing != null):
 			var deck_y: float = _get_structural_deck_y()
-			var ray_origin: Vector3 = camera.global_position
-			var ray_dir: Vector3 = -camera.global_transform.basis.z
+			var ray_origin: Vector3 = _placement_ray_origin()
+			var ray_dir: Vector3 = _placement_ray_direction()
 			# Calculate build plane intersection (works even for horizontal camera)
 			var _bp_t: float = -1.0
 			if absf(ray_dir.y) > 0.001:
@@ -3724,6 +3893,11 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		var candidates: Array[Vector2i] = []
 		# Direct aim cell — this is the cell the player is pointing at
 		var aim_cell: Vector2i = _world_to_grid(effective_aim_point)
+		var exact_target := _compute_foundation_transform(aim_cell)
+		var target_offset := exact_target.affine_inverse()*effective_aim_point
+		if _grid_is_blocked(aim_cell) and maxf(absf(target_offset.x),absf(target_offset.z)) < 0.78:
+			_diag["invalid_reason"] = "FOUNDATION CELL OCCUPIED · AIM AT AN EDGE OR GAP"
+			return {"valid":false,"transform":exact_target}
 		if not candidates.has(aim_cell):
 			candidates.append(aim_cell)
 		# Aim side neighbor of the direct aim cell (in case aim hits edge)
@@ -3807,12 +3981,12 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		_diag["solved_pos"] = found_solved.origin
 
 		# Step 4f: Apply to ghost
-		if ghost != null:
+		if ghost != null and _editing == null:
 			ghost.global_transform = found_solved
 			ghost.visible = true
 
 		# Step 4f1: Size validation — collision and mesh must match canonical tile
-		if ghost != null:
+		if ghost != null and _editing == null:
 			var col_check: CollisionShape3D = ghost.get_node_or_null("CollisionShape3D") as CollisionShape3D
 			if col_check != null and col_check.shape != null and col_check.shape is BoxShape3D:
 				var box: BoxShape3D = col_check.shape as BoxShape3D
@@ -3885,7 +4059,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		# All checks passed
 		_diag["final"] = "VALID"
 		# Hard validation: ghost cell must match candidate cell
-		var ghost_grid_cell: Vector2i = _world_to_grid(ghost.global_position)
+		var ghost_grid_cell: Vector2i = _world_to_grid(found_solved.origin)
 		_diag["ghost_grid_cell"] = ghost_grid_cell
 		_diag["cell_match"] = ghost_grid_cell == best_cell
 		if ghost_grid_cell != best_cell:
@@ -3894,8 +4068,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			_diag["error_category"] = "GRID_ERROR"
 			return {"valid": false}
 		# Hard validation: ghost must be horizontal (not vertical)
-		var ghost_x_rot: float = ghost.global_rotation.x
-		var ghost_z_rot: float = ghost.global_rotation.z
+		var ghost_x_rot: float = found_solved.basis.get_euler().x
+		var ghost_z_rot: float = found_solved.basis.get_euler().z
 		_diag["ghost_rot_x"] = rad_to_deg(ghost_x_rot)
 		_diag["ghost_rot_z"] = rad_to_deg(ghost_z_rot)
 		if absf(ghost_x_rot) > 0.1 or absf(ghost_z_rot) > 0.1:
@@ -4004,8 +4178,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			and _find_support_piece(aim_collider) != null
 		if not _hit_is_build_wall:
 			var _deck_y_wall: float = _get_structural_deck_y()
-			var _ro_wall: Vector3 = camera.global_position
-			var _rd_wall: Vector3 = -camera.global_transform.basis.z
+			var _ro_wall: Vector3 = _placement_ray_origin()
+			var _rd_wall: Vector3 = _placement_ray_direction()
 			var _bp_t_wall: float = -1.0
 			if absf(_rd_wall.y) > 0.001:
 				_bp_t_wall = (_deck_y_wall - _ro_wall.y) / _rd_wall.y
@@ -4056,7 +4230,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				wall_foundation = _raft
 				var bp: Node3D = _raft.get_node_or_null("BuiltPieces")
 				if bp != null:
-					for child in bp.get_children():
+					for child in _placement_children(bp):
 						if child is Node3D:
 							var _cn: String = _find_piece_name(child)
 							if _cn == "Foundation" or _cn == "Raft" or _cn == "Wall" \
@@ -4118,7 +4292,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				if _raft0 != null:
 					var _bp0: Node3D = _raft0.get_node_or_null("BuiltPieces")
 					if _bp0 != null:
-						for _ch0 in _bp0.get_children():
+						for _ch0 in _placement_children(_bp0):
 							if _ch0 is Node3D:
 								var _cn0: String = _find_piece_name(_ch0)
 								if _cn0 == "Wall" or _cn0 == "Door" or _cn0 == "Window":
@@ -4186,7 +4360,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 						var _bp_wf: Node3D = _raft_wf.get_node_or_null("BuiltPieces")
 						if _bp_wf != null:
 							var _best_wf_d: float = INF
-							for _wf_child in _bp_wf.get_children():
+							for _wf_child in _placement_children(_bp_wf):
 								if _wf_child is Node3D and _find_piece_name(_wf_child) == "Foundation":
 									var _wf_dist: float = Vector2(wall_foundation.global_position.x - _wf_child.global_position.x, wall_foundation.global_position.z - _wf_child.global_position.z).length()
 									if _wf_dist < _best_wf_d:
@@ -4211,7 +4385,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 					var _best_wfb_d: float = INF
 					var _bp_wfb: Node3D = _raft_wfb.get_node_or_null("BuiltPieces")
 					if _bp_wfb != null:
-						for _wfb_child in _bp_wfb.get_children():
+						for _wfb_child in _placement_children(_bp_wfb):
 							if _wfb_child is Node3D and (_find_piece_name(_wfb_child) == "Foundation" or _find_piece_name(_wfb_child) == "Raft"):
 								var _wfb_d: float = Vector2(wall_foundation.global_position.x - _wfb_child.global_position.x, wall_foundation.global_position.z - _wfb_child.global_position.z).length()
 								if _wfb_d < _best_wfb_d:
@@ -4259,7 +4433,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		if _raft_w != null:
 			var _bp_w: Node3D = _raft_w.get_node_or_null("BuiltPieces")
 			if _bp_w != null:
-				for _w in _bp_w.get_children():
+				for _w in _placement_children(_bp_w):
 					if _w is Node3D and is_instance_valid(_w) and _w != wall_foundation:
 						var _wn: String = _find_piece_name(_w)
 						if _wn == "Wall" or _wn == "Door" or _wn == "Window":
@@ -4291,8 +4465,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 		# never need a pixel-perfect ray hit to place it.
 		if not aim_valid or effective_collider == null:
 			var _deck_y_r: float = _get_structural_deck_y()
-			var _ro_r: Vector3 = camera.global_position
-			var _rd_r: Vector3 = -camera.global_transform.basis.z
+			var _ro_r: Vector3 = _placement_ray_origin()
+			var _rd_r: Vector3 = _placement_ray_direction()
 			var _t_r: float = -1.0
 			if absf(_rd_r.y) > 0.001:
 				_t_r = (_deck_y_r - _ro_r.y) / _rd_r.y
@@ -4459,7 +4633,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 				if bp != null:
 					var aim_over_wall: Node3D = null
 					var aim_over_socket: BuildSocket = null
-					for child in bp.get_children():
+					for child in _placement_children(bp):
 						if not (child is Node3D):
 							continue
 						var cpn: String = _find_piece_name(child)
@@ -4484,7 +4658,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 						roof_support = aim_over_wall
 					else:
 						var best_horiz_d: float = 4.0  # generous horizontal search
-						for child in bp.get_children():
+						for child in _placement_children(bp):
 							if not (child is Node3D):
 								continue
 							var cpn2: String = _find_piece_name(child)
@@ -4701,6 +4875,8 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	# ============================================================
 	if piece_name == "Stairs":
 		return _resolve_stairs(support, effective_aim_point)
+	if piece_name in ["PlanterPot","PlanterBox","TreePot","Bonfire","RainCollector","SandFilter","WaterPurifier","WindGenerator","ElectricLamp","ElectricPurifier","RescueRadio","CargoCrate","StorageBox","CookingSetup"]:
+		return _resolve_deck_prop(piece_name,support,effective_aim_point)
 
 	# OTHER NON-FOUNDATION: Socket-based placement
 	# ============================================================
@@ -5017,7 +5193,7 @@ func _apply_ghost_material(valid: bool) -> void:
 	while not stack.is_empty():
 		var n: Node = stack.pop_back()
 		if n is MeshInstance3D:
-			(n as MeshInstance3D).set_surface_override_material(0, mat)
+			(n as MeshInstance3D).material_override = mat
 		elif n is MultiMeshInstance3D:
 			(n as MultiMeshInstance3D).material_override = mat
 		for c in n.get_children():
@@ -5261,8 +5437,11 @@ func _begin_build_action() -> void:
 		for item in Inventory.recipe_cost(name2):costs[item]=int(Inventory.recipe_cost(name2)[item])*tiles
 		if not Inventory.has_cost(costs):
 			_hud_toast("ROOF · NEED %d WOOD + %d ROPE FOR %d TILES"%[costs.Wood,costs.Rope,tiles]);return
-	_pending_build={"time":0.0,"index":selected_piece_index,"collider":aim_collider,
+	var locked_support: Node3D = _ghost_support if is_instance_valid(_ghost_support) else aim_collider
+	_pending_build={"time":0.0,"index":selected_piece_index,"collider":locked_support,
 		"point":raft.to_local(aim_point),"normal":aim_normal,"distance":aim_distance,
+		"ray_origin":raft.to_local(camera.global_position),"ray_direction":raft.global_basis.inverse()*-camera.global_basis.z,
+		"rotation":build_rotation,"pitch":build_rotation_x,
 		"local_transform":raft.global_transform.affine_inverse()*_ghost_transform}
 	play_action("build",0.75,_ghost_transform.origin)
 	_action.get("_label").text="ASSEMBLING "+name2.to_upper()+ (" · %d TILES"%tiles if tiles>1 else "")
@@ -5270,7 +5449,7 @@ func _begin_build_action() -> void:
 func _tick_build_action(delta: float) -> void:
 	if _pending_build.is_empty():return
 	var hud := get_node_or_null("CanvasLayer/SurvivalHUD")
-	var cancelled := not build_mode or selected_piece_index!=int(_pending_build.index) or is_swimming
+	var cancelled := not build_mode or selected_piece_index!=int(_pending_build.index)
 	if hud!=null and bool(hud.call("gameplay_input_blocked")):cancelled=true
 	var raft := _get_raft_node()
 	if raft==null or not is_instance_valid(_pending_build.collider):cancelled=true
@@ -5283,13 +5462,18 @@ func _tick_build_action(delta: float) -> void:
 	if global_position.distance_to(placement)>PICKUP_RANGE+4.0:
 		_hud_toast("BUILD CANCELLED · OUT OF REACH");return
 	var old_aim := [aim_point,aim_normal,aim_collider,aim_distance,aim_valid]
+	var old_rotation:=Vector2(build_rotation,build_rotation_x)
+	build_rotation=float(saved.rotation);build_rotation_x=float(saved.pitch)
 	aim_point=placement
 	aim_normal=saved.normal
 	aim_collider=saved.collider
 	aim_distance=float(saved.distance)
 	aim_valid=true
+	_placement_ray_override = {"origin":raft.to_global(saved.ray_origin),"direction":raft.global_basis*saved.ray_direction}
 	_update_build_preview()
 	_try_build()
+	_placement_ray_override.clear()
+	build_rotation=old_rotation.x;build_rotation_x=old_rotation.y
 	aim_point=old_aim[0]
 	aim_normal=old_aim[1]
 	aim_collider=old_aim[2]
@@ -5301,19 +5485,22 @@ func _try_build() -> void:
 		_hud_toast("CAN'T PLACE HERE: " + str(_diag.get("invalid_reason", "AIM AT A SUPPORTED SPACE")))
 		return
 	var piece_name: String = BUILD_RECIPE_NAMES[selected_piece_index]
+	if piece_name in ["PlanterPot","PlanterBox","TreePot"]:
+		var final_planter_spot := _resolve_placement(piece_name,aim_point)
+		if not final_planter_spot.get("valid",false):
+			build_valid = false
+			_hud_toast("CAN'T PLACE HERE: "+str(_diag.get("invalid_reason","AIM AT A FOUNDATION OR ROOF TOP")))
+			return
+		_ghost_transform = final_planter_spot.transform
+		_ghost_support = final_planter_spot.support
 	if piece_name == "Roof" and not _smart_roof_plan.is_empty():
 		_build_smart_roof()
 		return
 	if not _ghost_transform.origin.is_finite() or not _ghost_transform.basis.is_finite():
 		_hud_toast("INVALID BUILD POSITION")
 		return
-	# Foundations already passed grid occupancy, support, height and overlap
-	# checks. Requiring an optional socket here contradicts a green preview.
-	if piece_name != "Foundation" and piece_name != "Wall" \
-		and piece_name != "Door" and piece_name != "Window" and piece_name != "HalfWall" \
-		and piece_name != "Stairs" and piece_name != "WallTorch" and _ghost_target_socket == null:
-		_hud_toast("AIM AT A FREE CONNECTION POINT")
-		return
+	# The placement solver owns grid, support and overlap validation. Some
+	# supported pieces intentionally use a deck point instead of a socket.
 	if not Inventory.recipe_unlocked(piece_name):
 		_hud_toast("LOCKED · COMPLETE YOUR LEVEL MISSION")
 		return
@@ -5376,7 +5563,7 @@ func _try_build() -> void:
 	if piece_name == "Foundation":
 		# Grid-based: exact formula from cell coordinates
 		var raft_local_pos: Vector3 = Vector3(cell.x * FOUNDATION_WIDTH, 0.0, cell.y * FOUNDATION_DEPTH)
-		var raft_local_basis: Basis = Basis(Vector3.UP, build_rotation)
+		var raft_local_basis: Basis = Basis(Vector3.UP, snappedf(build_rotation, PI / 2.0))
 		piece.transform = Transform3D(raft_local_basis, raft_local_pos)
 	else:
 		# Wall/other: use the ghost's preview transform, converted to raft-local
@@ -5446,6 +5633,8 @@ func _link_reciprocal_socket(new_piece: Node3D, parent_socket: BuildSocket) -> v
 # BUILD SYSTEM — EDIT SYSTEM
 # ============================================================
 const RECIPE_REFUND := {
+	"StorageBox": {"Wood":6,"Rope":2,"Metal":1},
+	"CookingSetup": {"Wood":8,"Stone":4,"Metal":2},
 	"WallTorch": {"Wood":2,"Rope":1},
 	"SandFilter": {"Wood":6,"Sand":4,"Sponge":2,"Plastic":2},
 	"CargoCrate": {"Wood": 6, "Rope": 2, "Metal": 1},
@@ -5503,8 +5692,16 @@ func _handle_double_click_edit() -> void:
 
 # Start editing a building piece.
 func _start_edit(target: Node3D) -> void:
+	if not is_instance_valid(target) or _editing != null: return
+	_ensure_ghost_materials()
 	_editing = target
 	_edit_original_transform = target.global_transform
+	_edit_original_local_transform = target.transform
+	_edit_socket_snapshot.clear()
+	_edit_target_socket = null
+	var raft_for_rotation := _get_raft_node()
+	build_rotation = target.rotation.y if raft_for_rotation != null else target.global_rotation.y
+	build_rotation_x = 0.0
 	_edit_original_cell = _world_to_grid(target.global_position)
 	_edit_valid = false
 	_edit_candidate_transform = target.global_transform
@@ -5512,12 +5709,15 @@ func _start_edit(target: Node3D) -> void:
 	# Disable ALL collision shapes so the piece doesn't block itself while it is
 	# dragged (a Door's leaf collider lives on its own child body).
 	for c: Node in target.find_children("*", "CollisionShape3D", true, false):
+		c.set_meta("edit_collision_disabled",(c as CollisionShape3D).disabled)
 		(c as CollisionShape3D).disabled = true
 	# Unregister from grid — its cell is now free for candidate evaluation
-	_grid_unregister(_edit_original_cell)
+	if _piece_name_from_node(target) == "Foundation":
+		_grid_unregister(_edit_original_cell)
 	# Free sockets this piece occupies
 	for s in _get_all_sockets(target):
 		if s.is_occupied:
+			_edit_socket_snapshot.append({"socket":s,"piece":s.occupying_piece})
 			s.free_socket()
 	# Free support sockets that reference this piece (siblings in BuiltPieces)
 	var raft: Node3D = _get_raft_node()
@@ -5531,6 +5731,7 @@ func _start_edit(target: Node3D) -> void:
 					continue
 				for s in _get_all_sockets(sibling):
 					if s.is_occupied and s.occupying_piece == target:
+						_edit_socket_snapshot.append({"socket":s,"piece":target})
 						s.free_socket()
 	# Apply transparent preview material
 	_set_edit_color(_ghost_valid_mat)
@@ -5539,210 +5740,65 @@ func _start_edit(target: Node3D) -> void:
 
 # Called every frame while editing — update the preview position.
 func _update_edit_follow() -> void:
-	if _editing == null or not is_instance_valid(_editing):
+	if not is_instance_valid(_editing):
 		_editing = null
 		return
-	_ensure_ghost_materials()
-	var piece_name := _piece_name_from_node(_editing)
-	var raft: Node3D = _get_raft_node()
-	if raft == null:
-		_edit_valid = false
-		_set_edit_color(_ghost_invalid_mat)
-		return
-	# Compute aim point on the structural deck plane
-	var deck_y: float = _get_structural_deck_y()
-	var ray_o: Vector3 = camera.global_position
-	var ray_d: Vector3 = -camera.global_transform.basis.z
-	var edit_aim: Vector3 = Vector3.ZERO
-	var got_aim: bool = false
-	if absf(ray_d.y) > 0.001:
-		var t: float = (deck_y - ray_o.y) / ray_d.y
-		if t > 0.0 and t < AIM_DISTANCE:
-			edit_aim = ray_o + ray_d * t
-			got_aim = true
-	if not got_aim:
-		# Fallback: use current piece position as aim
-		edit_aim = _editing.global_position
-	# Shared variables for both branches
-	var new_xform: Transform3D = Transform3D()
-	# --- Foundation: grid-based placement with neighbor search ---
-	if piece_name == "Foundation":
-		var aim_cell: Vector2i = _world_to_grid(edit_aim)
-		# Try aim cell first, then neighbors — find best empty supported cell
-		var best_cell: Vector2i = Vector2i(999999, 999999)
-		var best_score: float = -1.0e10
-		var cells_to_try: Array[Vector2i] = [aim_cell]
-		for offset in [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]:
-			cells_to_try.append(aim_cell + offset)
-		for offset in [Vector2i(1,1), Vector2i(1,-1), Vector2i(-1,1), Vector2i(-1,-1)]:
-			cells_to_try.append(aim_cell + offset)
-		for c in cells_to_try:
-			if _grid_is_occupied(c):
-				continue
-			var wp: Vector3 = _grid_to_world(c)
-			var dist: float = edit_aim.distance_to(wp)
-			if dist > 6.0:
-				continue
-			var score: float = -dist
-			if c == aim_cell:
-				score += 100.0
-			var nc: int = _count_supporting_neighbors(c)
-			score += float(nc) * 2.0
-			if score > best_score:
-				best_score = score
-				best_cell = c
-		if best_cell.x == 999999:
-			# No valid cell found — stay at current position, show invalid
-			_edit_valid = false
-			_set_edit_color(_ghost_invalid_mat)
-			return
-		new_xform = _compute_foundation_transform(best_cell)
-		# Overlap check — exclude editing piece itself
-		var ovl: Shape3D = _largest_descendant_box(_editing) if piece_name == "Door" else null
-		if ovl == null:
-			var _col0 := _editing.get_node_or_null("CollisionShape3D") as CollisionShape3D
-			if _col0 != null:
-				ovl = _col0.shape
-		if ovl != null:
-			var hits := _check_overlap(ovl, new_xform, _editing)
-			if hits.size() > 0:
-				_edit_valid = false
-				_set_edit_color(_ghost_invalid_mat)
-				return
-		_editing.global_transform = new_xform
-		_edit_candidate_transform = new_xform
-		_edit_candidate_cell = best_cell
-		_edit_valid = true
-		_set_edit_color(_ghost_valid_mat)
-		return
-	# --- Non-foundation: socket-based placement ---
-	var support: Node3D = null
-	if aim_valid and aim_collider != null:
-		support = _find_support_piece(aim_collider)
-	if support == null:
-		support = raft
-	if support == null:
-		_edit_valid = false
-		_set_edit_color(_ghost_invalid_mat)
-		return
-	var socket: BuildSocket = _find_best_socket(support, piece_name, edit_aim, Vector3.UP)
-	if socket == null:
-		_edit_valid = false
-		_set_edit_color(_ghost_invalid_mat)
-		return
-	var reciprocal: BuildSocket = null
-	var best_dist: float = 999.0
-	for s in _get_all_sockets(_editing):
-		if not s.is_compatible(_find_piece_name(support)):
-			continue
-		var d: float = (s.global_position - socket.global_position).length()
-		if d < best_dist:
-			best_dist = d
-			reciprocal = s
-			if best_dist < 0.01:
-				break
-	if reciprocal == null:
-		_edit_valid = false
-		_set_edit_color(_ghost_invalid_mat)
-		return
-	var flat_xform: Transform3D = _get_flat_support_transform(support)
-	var target_pos: Vector3 = flat_xform * socket.position
-	var offset: Vector3 = reciprocal.position.rotated(Vector3.UP, build_rotation)
-	var new_pos: Vector3 = target_pos - flat_xform.basis * offset
-	var new_basis: Basis = flat_xform.basis.rotated(Vector3.UP, build_rotation)
-	new_xform = Transform3D(new_basis, new_pos)
-	# Overlap check — exclude editing piece
-	var ovl2: Shape3D = _largest_descendant_box(_editing) if piece_name == "Door" else null
-	if ovl2 == null:
-		var _col1 := _editing.get_node_or_null("CollisionShape3D") as CollisionShape3D
-		if _col1 != null:
-			ovl2 = _col1.shape
-	if ovl2 != null:
-		var hits := _check_overlap(ovl2, new_xform, _editing)
-		if hits.size() > 0:
-			_edit_valid = false
-			_set_edit_color(_ghost_invalid_mat)
-			return
-	_editing.global_transform = new_xform
-	_edit_candidate_transform = new_xform
-	_edit_valid = true
-	_set_edit_color(_ghost_valid_mat)
+	var resolved := _resolve_placement(_piece_name_from_node(_editing), aim_point)
+	_edit_valid = bool(resolved.get("valid", false))
+	_edit_target_socket = resolved.get("socket", null) if _edit_valid else null
+	_edit_candidate_cell = resolved.get("cell", Vector2i(999999,999999))
+	if resolved.has("transform"):
+		_edit_candidate_transform = resolved.transform
+		_editing.global_transform = _edit_candidate_transform
+	_set_edit_color(_ghost_valid_mat if _edit_valid else _ghost_invalid_mat)
+	if is_instance_valid(ghost): ghost.visible = false
 
 # Confirm edit: place the building at the preview position.
 func _confirm_edit() -> void:
-	if _editing == null or not is_instance_valid(_editing):
+	if not is_instance_valid(_editing):
 		_editing = null
 		return
+	# Recheck the exact aim on PLACE; a stale green preview cannot be committed.
+	_update_edit_follow()
 	if not _edit_valid:
+		_hud_toast(str(_diag.get("invalid_reason", "AIM AT A CLEAR SUPPORTED PLACE")))
 		return
-	for c: Node in _editing.find_children("*", "CollisionShape3D", true, false):
-		(c as CollisionShape3D).disabled = false
-	_apply_building_color(_editing)
-	# Register at new grid cell
-	var new_cell: Vector2i = _world_to_grid(_editing.global_position)
-	_grid_register(new_cell, _editing)
-	# Re-link sockets for non-foundation pieces
-	var piece_name := _piece_name_from_node(_editing)
-	if piece_name != "Foundation":
-		var support: Node3D = null
-		if aim_valid and aim_collider != null:
-			support = _find_support_piece(aim_collider)
-		if support == null:
-			support = _get_raft_node()
-		if support != null:
-			var socket: BuildSocket = _find_best_socket(support, piece_name, aim_point, aim_normal)
-			if socket != null:
-				socket.occupy(_editing)
-				_link_reciprocal_socket(_editing, socket)
-	_editing = null
-	_queue_save()
-	# If still in build mode, restore ghost visibility
-	if build_mode and ghost != null:
-		ghost.visible = true
-		_update_build_preview()
+	var piece := _editing
+	piece.global_transform = _edit_candidate_transform
+	if _piece_name_from_node(piece) == "Foundation":
+		_grid_register(_edit_candidate_cell, piece)
+	if is_instance_valid(_edit_target_socket):
+		_edit_target_socket.occupy(piece)
+		_link_reciprocal_socket(piece, _edit_target_socket)
+	_finish_edit()
+	_hud_toast("PIECE MOVED")
 
-# Cancel edit: restore the building to its original position.
+# Cancel uses the raft-local snapshot, even if the raft sailed while editing.
 func _cancel_edit() -> void:
-	if _editing == null or not is_instance_valid(_editing):
+	if not is_instance_valid(_editing):
 		_editing = null
 		return
-	# Restore original transform
-	_editing.global_transform = _edit_original_transform
-	for c: Node in _editing.find_children("*", "CollisionShape3D", true, false):
-		(c as CollisionShape3D).disabled = false
-	_apply_building_color(_editing)
-	# Re-register at original grid cell
-	_grid_register(_edit_original_cell, _editing)
-	# Re-link sockets at original position
-	var piece_name := _piece_name_from_node(_editing)
-	if piece_name != "Foundation":
-		var raft := _get_raft_node()
-		if raft != null:
-			var support: Node3D = null
-			var bp: Node3D = raft.get_node_or_null("BuiltPieces")
-			if bp != null:
-				for sibling in bp.get_children():
-					if sibling == _editing or not (sibling is Node3D):
-						continue
-					if sibling.get_node_or_null("BuildSockets") == null:
-						continue
-					var d: float = (sibling.global_position - _edit_original_transform.origin).length()
-					if d < 5.0:
-						support = sibling
-						break
-				if support == null:
-					support = raft
-			if support != null:
-				var socket: BuildSocket = _find_best_socket(support, piece_name, _edit_original_transform.origin, Vector3.UP)
-				if socket != null:
-					socket.occupy(_editing)
-					_link_reciprocal_socket(_editing, socket)
-	# Clear edit state
+	_editing.transform = _edit_original_local_transform
+	if _piece_name_from_node(_editing) == "Foundation":
+		_grid_register(_edit_original_cell, _editing)
+	for link in _edit_socket_snapshot:
+		if is_instance_valid(link.socket) and is_instance_valid(link.piece):
+			link.socket.occupy(link.piece)
+	_finish_edit()
+
+func _finish_edit() -> void:
+	var piece := _editing
+	for c: CollisionShape3D in piece.find_children("*", "CollisionShape3D", true, false):
+		c.set_deferred("disabled", bool(c.get_meta("edit_collision_disabled", false)))
+		c.remove_meta("edit_collision_disabled")
+	_apply_building_color(piece)
 	_editing = null
 	_edit_valid = false
+	_edit_target_socket = null
+	_edit_socket_snapshot.clear()
+	if piece.has_method("refresh"): piece.call("refresh")
 	_queue_save()
-	# If still in build mode, restore ghost visibility
-	if build_mode and ghost != null:
+	if build_mode and is_instance_valid(ghost):
 		ghost.visible = true
 		_update_build_preview()
 
@@ -5751,6 +5807,11 @@ func _remove_editing() -> void:
 	if _editing == null or not is_instance_valid(_editing):
 		_editing = null
 		return
+	if _editing.has_method("empty") and not _editing.empty():
+		_hud_toast("EMPTY THE STORAGE BOX BEFORE REMOVING IT");return
+	var running_job := _editing.get_node_or_null("StationJob")
+	if running_job!=null and not running_job.job.is_empty():
+		_hud_toast("LET THE STATION FINISH BEFORE REMOVING IT");return
 	var building_name := _editing.name
 	var refund: Dictionary = {}
 	for recipe_name in RECIPE_REFUND:
@@ -5762,10 +5823,8 @@ func _remove_editing() -> void:
 	if not Inventory.can_store_rewards(refund):
 		_hud_toast("BAG FULL  •  CLEAR SPACE BEFORE REMOVING")
 		return
-	# Unregister from grid
-	var cell: Vector2i = _world_to_grid(_editing.global_position)
-	if building_name.begins_with("Foundation"):
-		_grid_unregister(cell)
+	# The original cell was freed on pickup. The red preview may now be over
+	# another foundation, so removal must never unregister that target cell.
 	# Free support sockets that reference this piece
 	var raft: Node3D = _get_raft_node()
 	if raft != null:
@@ -5798,19 +5857,19 @@ func _set_edit_color(mat: StandardMaterial3D) -> void:
 	while not stack.is_empty():
 		var n: Node = stack.pop_back()
 		if n is MeshInstance3D:
-			(n as MeshInstance3D).set_surface_override_material(0, mat)
+			if not n.has_meta("edit_original_override"):n.set_meta("edit_original_override",{"material":n.material_override})
+			(n as MeshInstance3D).material_override = mat
 		elif n is MultiMeshInstance3D:
+			if not n.has_meta("edit_original_override"):n.set_meta("edit_original_override",{"material":n.material_override})
 			(n as MultiMeshInstance3D).material_override = mat
 		for c in n.get_children():
 			stack.append(c)
 
 func _apply_building_color(obj: Node3D) -> void:
 	for node in obj.find_children("*", "GeometryInstance3D", true, false):
-		if node is MeshInstance3D:
-			for surface in node.mesh.get_surface_count():
-				node.set_surface_override_material(surface, null)
-		elif node is MultiMeshInstance3D:
-			node.material_override = null
+		if node.has_meta("edit_original_override"):
+			node.material_override = node.get_meta("edit_original_override").material
+			node.remove_meta("edit_original_override")
 
 # ============================================================
 # BUILD SYSTEM — SCENE VALIDATION
@@ -6060,8 +6119,8 @@ static func _valid_saved_transform(values: Variant) -> bool:
 	return absf(basis.determinant()) > 0.01 and absf(basis.determinant()) < 100.0
 
 func _resolve_smart_roof(world_aim: Vector3) -> Dictionary:
-	var plan := SMART_ROOF.plan(_get_raft_node(), world_aim)
-	if plan.get("stair_opening",false):
+	var plan := SMART_ROOF.plan(_get_raft_node(), world_aim, _editing, _editing != null)
+	if plan.get("stair_opening",false) and not plan.has("transforms"):
 		_diag["invalid_reason"] = "KEEP STAIRWELL OPEN · ROOF BESIDE THE LANDING"
 		return {"valid":false}
 	if plan.is_empty(): return {}
@@ -6073,7 +6132,7 @@ func _resolve_smart_roof(world_aim: Vector3) -> Dictionary:
 	for xform: Transform3D in plan.transforms:
 		for hit in _check_overlap(shape, xform, plan.support):
 			var body := hit.get("collider") as Node3D
-			if body != null and _find_piece_name(_find_support_piece(body)) not in ["Raft","Foundation","Wall","Door","Window"]:
+			if body != null and _find_piece_name(_find_support_piece(body)) not in ["Raft","Foundation","Wall","Door","Window","Stairs"]:
 				_diag["invalid_reason"] = "CEILING SPACE BLOCKED"
 				return {"valid": false, "transform": xform}
 	_diag["final"] = "VALID"
@@ -6218,6 +6277,51 @@ func _add_swim_animation(animator: AnimationPlayer, idle_name: String, _survivor
 	library.add_animation("Swim",animation)
 	animator.add_animation_library("Survival",library)
 
+func _resolve_deck_prop(kind: String, support: Node3D, point: Vector3) -> Dictionary:
+	var is_planter := kind in ["PlanterPot","PlanterBox","TreePot"]
+	var support_kind := _find_piece_name(support)
+	if support_kind not in (["Foundation","Roof"] if is_planter else ["Raft","Foundation","Roof"]):
+		_diag["invalid_reason"]="PLACE ON TOP OF A FOUNDATION OR ROOF" if is_planter else "AIM AT A CLEAR DECK SURFACE"
+		return {"valid":false,"transform":Transform3D(Basis(Vector3.UP,build_rotation),point+Vector3.UP*0.25)}
+	var template:=_solver_template(build_pieces[BUILD_RECIPE_NAMES.find(kind)])
+	var col:=template.find_child("CollisionShape3D",true,false) as CollisionShape3D
+	if col==null or not col.shape is BoxShape3D:return {"valid":false}
+	var flat:=_get_flat_support_transform(support)
+	var local:=flat.affine_inverse()*point
+	var half:Vector3=col.shape.size*0.5
+	var rotation_basis:=Basis(Vector3.UP,snappedf(build_rotation,PI/2))
+	var extent:=rotation_basis.x.abs()*half.x+rotation_basis.z.abs()*half.z
+	var top_y := 0.075 if support_kind=="Roof" else 0.15
+	var aimed_height := local.y
+	if not is_planter:
+		local.x=clampf(local.x,-1.0+extent.x,1.0-extent.x)
+		local.z=clampf(local.z,-1.0+extent.z,1.0-extent.z)
+	local.y=top_y+half.y-col.position.y
+	var solved:=Transform3D(flat.basis*rotation_basis,flat*local)
+	if is_planter:
+		if not point.is_finite() or aim_normal.dot(flat.basis.y)<0.8 or absf(aimed_height-top_y)>0.12:
+			_diag["invalid_reason"]="AIM AT THE TOP OF A FOUNDATION OR ROOF"
+			return {"valid":false,"transform":solved}
+		# Test the whole base, including its centre. Roof collision panels
+		# contain real stair openings; a roof's rectangular bounds are not enough.
+		for px in [-1.0,0.0,1.0]:
+			for pz in [-1.0,0.0,1.0]:
+				var base_point := solved * (col.position+Vector3(px*half.x,-half.y,pz*half.z))
+				var probe := PhysicsRayQueryParameters3D.create(base_point+Vector3.UP*0.08,base_point-Vector3.UP*0.08,1)
+				probe.exclude = _support_ray_excludes()
+				var base_hit := get_world_3d().direct_space_state.intersect_ray(probe)
+				var base_support: Node3D = _find_support_piece(base_hit.get("collider")) if not base_hit.is_empty() else null
+				if base_support==null or _find_piece_name(base_support) not in ["Foundation","Roof"] or Vector3(base_hit.normal).dot(Vector3.UP)<0.8:
+					_diag["invalid_reason"]="THE WHOLE POT NEEDS A FOUNDATION OR ROOF BELOW"
+					return {"valid":false,"transform":solved}
+	var shape:=BoxShape3D.new();shape.size=col.shape.size-Vector3.ONE*0.035
+	var hits:=_check_overlap(shape,solved*col.transform,support)
+	if not hits.is_empty():
+		_diag["invalid_reason"]="SPACE BLOCKED · AIM AT A CLEAR PART OF THE DECK"
+		return {"valid":false,"transform":solved}
+	_diag["final"]="VALID"
+	return {"valid":true,"transform":solved,"support":support,"socket":null}
+
 func _resolve_stairs(support: Node3D, _world_aim: Vector3) -> Dictionary:
 	var kind := _find_piece_name(support)
 	if kind not in ["Raft","Foundation","Roof","Stairs"]:
@@ -6248,6 +6352,7 @@ func _resolve_stairs(support: Node3D, _world_aim: Vector3) -> Dictionary:
 		query.margin = -0.025
 		for hit in get_world_3d().direct_space_state.intersect_shape(query,16):
 			var body := _find_support_piece(hit.collider)
+			if body!=null and _find_piece_name(body)=="Roof" and absf((solved.affine_inverse()*body.global_position).y-2.475)<0.3:continue
 			if body != null and _find_piece_name(body) in ["Raft","Foundation","Roof"]:
 				var point := solved.affine_inverse()*body.global_position
 				# A deck at the foot or the upper landing may touch the stairs.
@@ -6266,8 +6371,10 @@ func _resolve_stairs(support: Node3D, _world_aim: Vector3) -> Dictionary:
 		query.collision_mask = 1
 		query.exclude = probe_excludes
 		query.margin = -0.025
-		if not get_world_3d().direct_space_state.intersect_shape(query,1).is_empty():
-			_diag["invalid_reason"] = "STAIR HEADROOM BLOCKED · REMOVE ROOF ABOVE THE FLIGHT"
+		for hit in get_world_3d().direct_space_state.intersect_shape(query,16):
+			var ceiling:=_find_support_piece(hit.collider)
+			if ceiling!=null and _find_piece_name(ceiling)=="Roof" and absf((solved.affine_inverse()*ceiling.global_position).y-2.475)<0.3:continue
+			_diag["invalid_reason"] = "STAIR HEADROOM BLOCKED · CLEAR THE FLIGHT"
 			return {"valid":false,"transform":solved,"support":support}
 	_diag["final"] = "VALID"
 	_diag["stair_grid"] = true

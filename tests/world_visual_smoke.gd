@@ -42,7 +42,7 @@ func _run() -> void:
 		var grove := island.get_node("CoastalGrove")
 		check(grove.get_child_count() == 8,"Bounded eight-tree grove on "+name)
 		var banana := grove.get_node("Banana0")
-		check(banana.find_child("TexturedBanana",true,false) != null and banana.get("_fruits").size() > 0,"Textured banana has real harvesting slots on "+name)
+		check(banana.find_child("BananaPlantModel",true,false) != null and banana.get("_fruits").size() > 0,"Supplied banana model has real harvesting slots on "+name)
 		check(not banana.is_processing(),"Distant island plants sleep outside interaction range")
 	var tree_visual := load("res://scripts/coastal_tree_visual.gd")
 	var a: Node3D = tree_visual.create(0)
@@ -63,6 +63,9 @@ func _run() -> void:
 	var rig: Skeleton3D = grip.get("skeleton")
 	check(rig != null and int(grip.get("wrist")) >= 0,"Third-person launcher resolves the animated right wrist")
 	for i in range(5): await process_frame
+	# Headless does not schedule every rendered skeleton modifier. Sample the
+	# follower explicitly before comparing the same current wrist pose.
+	grip.call("_process",0.0)
 	var bone := int(grip.get("wrist"))
 	var wrist: Transform3D = rig.global_transform*rig.get_bone_global_pose(bone)
 	check(gun.global_position.distance_to(wrist.origin) < 0.20,"Launcher stays within the real hand rather than the torso")

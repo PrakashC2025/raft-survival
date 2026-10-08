@@ -1,0 +1,23 @@
+{
+  "source": "3d models/Electronic_tools/tools+vol+2.glb",
+  "sha256": "26a0659eb12f21441bda805b5b44256a84e708c206743ea1885743b0988023ce",
+  "exports": [
+    {
+      "node": "SolarTorch",
+      "source_node": "3",
+      "triangles": 168
+    },
+    {
+      "node": "Binoculars",
+      "source_node": "1",
+      "triangles": 566
+    },
+    {
+      "node": "WalkieTalkie",
+      "source_node": "5",
+      "triangles": 370
+    }
+  ],
+  "textures": "Original owner atlas textures resized to 1024; materials preserved",
+  "license": "Owner supplied model; no license file supplied; no CC0 claim"
+}

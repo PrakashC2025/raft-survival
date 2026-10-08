@@ -42,6 +42,7 @@ func _ready() -> void:
 		_label.position.y=1.0;_label.font_size=22;_label.pixel_size=0.002
 	add_child(_label)
 	if machine_type == "ElectricLamp":
+		if not _preview:add_to_group("electric_lamp")
 		_light = OmniLight3D.new()
 		_light.position.y = 0.45
 		_light.light_color = Color(1, 0.83, 0.56)
@@ -104,7 +105,7 @@ func advance(step: float) -> void:
 			if _light != null:
 				var atmosphere := get_tree().current_scene.get_node_or_null("Sky3D/TimeOfDay")
 				var hour: float = atmosphere.get("current_time") if atmosphere != null else 0.0
-				_light.visible = (not automatic_night or hour < 6.0 or hour >= 18.0) and request_power(step * 0.08)
+				_light.visible = get_meta("light_allowed",true) and (not automatic_night or hour < 6.0 or hour >= 18.0) and request_power(step * 0.08)
 
 func request_power(amount: float) -> bool:
 	for source in get_tree().get_nodes_in_group("power_source"):
@@ -122,6 +123,9 @@ func exposed() -> bool:
 
 func interact_survival(player: Node) -> void:
 	if _preview:
+		return
+	if machine_type in ["SandFilter","WaterPurifier","ElectricPurifier"] and str(player.get("active_item"))=="Dirty Water Can":
+		player.get_node("SurvivalServices").call("open_filter",self)
 		return
 	match machine_type:
 		"SandFilter":

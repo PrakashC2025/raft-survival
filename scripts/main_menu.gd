@@ -51,16 +51,54 @@ var _title_w := 0.0
 # --- touch bookkeeping -------------------------------------------------
 var _touch_ids: Array = []        # fingers currently on the screen
 # --- background load of the game scene ---------------------------------
-## Compile scene scripts serially before the background resource request.
-## Godot 4.7 can deadlock when worker GDScript preloads wait on other scripts.
+## Prepare dependencies first, then request exactly one script at a time.
+## Concurrent script/scene requests can deadlock the GDScript preload cache.
 const SCRIPT_WARM_PATHS := [
+	"res://scripts/build_socket.gd",
+	"res://scripts/object_materials.gd",
+	"res://scripts/construction_visual.gd",
+	"res://scripts/resource_visual.gd",
+	"res://scripts/food_rules.gd",
+	"res://scripts/survival_item_visual.gd",
+	"res://scripts/produce_visual.gd",
 	"res://scripts/food_pickup.gd",
+	"res://scripts/vegetation_visual.gd",
 	"res://scripts/plant_instance.gd",
+	"res://scripts/soil_visual.gd",
 	"res://scripts/planter.gd",
+	"res://scripts/rope_launcher_visual.gd",
+	"res://scripts/sand_footprints.gd",
+	"res://scripts/survival_equipment.gd",
+	"res://scripts/frame_work_budget.gd",
+	"res://scripts/station_job.gd",
+	"res://scripts/cargo_crate.gd",
+	"res://scripts/storage_box.gd",
+	"res://scripts/item_art.gd",
+	"res://scripts/ui_icons.gd",
+	"res://scripts/storage_slot_ui.gd",
+	"res://scripts/survival_service_ui.gd",
+	"res://scripts/survival_services.gd",
+	"res://scripts/torch_cycle.gd",
+	"res://scripts/torch_visual.gd",
+	"res://scripts/rope_hand_grip.gd",
+	"res://scripts/survival_audio.gd",
+	"res://scripts/survival_progression.gd",
+	"res://scripts/portable_electronics.gd",
+	"res://scripts/survival_animal.gd",
+	"res://scripts/island_wildlife.gd",
+	"res://scripts/machine_visual.gd",
+	"res://scripts/held_arm_pose.gd",
+	"res://scripts/survival_action.gd",
+	"res://scripts/ground_plot.gd",
+	"res://scripts/island_layout.gd",
+	"res://scripts/electronics_visual.gd",
+	"res://scripts/fishing_rod_visual.gd",
+	"res://scripts/smart_roof.gd",
+	"res://scripts/construction_audio.gd",
 	"res://scripts/player.gd",
 	"res://scripts/debris.gd",
+	"res://scripts/starter_raft_visual.gd",
 	"res://scripts/raft.gd",
-	"res://scripts/build_socket.gd",
 	"res://scripts/raft_foam.gd",
 	"res://scripts/shark.gd",
 	"res://scripts/ocean.gd",
@@ -68,6 +106,7 @@ const SCRIPT_WARM_PATHS := [
 	"res://scripts/rain_system.gd",
 	"res://scripts/crosshair.gd",
 	"res://scripts/rope_system.gd",
+	"res://scripts/ui_surface.gd",
 	"res://scripts/mobile_controls.gd",
 	"res://scripts/survival_hud.gd",
 	"res://scripts/island_setup.gd",
@@ -77,8 +116,13 @@ const SCRIPT_WARM_PATHS := [
 	"res://scripts/mobile_performance.gd",
 	"res://scripts/ocean_ambience.gd",
 	"res://scripts/shark_spawner.gd",
-	"res://scripts/island_destination.gd",
+	"res://scripts/wild_plant_target.gd",
+	"res://scripts/island_wild_plants.gd",
 	"res://scripts/island_mountain.gd",
+	"res://scripts/island_landscape.gd",
+	"res://scripts/coastal_tree_visual.gd",
+	"res://scripts/island_grove.gd",
+	"res://scripts/island_destination.gd",
 	"res://scripts/island_birds.gd",
 	"res://scripts/fish_school.gd",
 	"res://addons/sky_3d/src/SkyDome.gd",
@@ -86,6 +130,89 @@ const SCRIPT_WARM_PATHS := [
 	"res://addons/sky_3d/src/TimeOfDay.gd",
 ]
 var _warming_scripts := false
+# Models, textures, sounds and shaders have no gameplay scripts. Retain their
+# prepared resources before loading scripts in dependency order on one worker.
+const MODEL_WARM_PATHS := [
+	"res://models/sand_raftsurvival.glb",
+	"res://models/coconut_palm.glb",
+	"res://models/realistic_grass.glb",
+	"res://models/island_lowpoly_plants.glb",
+	"res://models/portable_electronics.glb",
+	"res://models/banana_plant.glb",
+	"res://models/potato_plant.glb",
+	"res://models/tomato_plant.glb",
+	"res://models/carrot_plant.glb",
+	"res://models/onion_sprout.glb",
+	"res://models/onion_young.glb",
+	"res://models/onion_growing.glb",
+	"res://models/onion_plant.glb",
+	"res://models/onion_bulb.glb",
+	"res://models/beach_survivor.glb",
+	"res://models/survivalist.glb",
+	"res://models/human_hand.glb",
+	"res://models/survival_bow.glb",
+	"res://models/coastal_gull.glb",
+	"res://models/coastal_ridge.glb",
+	"res://models/coastal_fish.glb",
+	"res://models/reef_shark.glb",
+	"res://models/sea_turtle.glb",
+	"res://models/shore_crab.glb",
+	"res://models/wild_boar.glb",
+	"res://3d models/Wooded_arrow/cc0_-_wooden_arrow.glb",
+	"res://shaders/object_surface.gdshader",
+	"res://shaders/debris_weathered.gdshader",
+	"res://shaders/produce_skin.gdshader",
+	"res://shaders/sponge_surface.gdshader",
+	"res://shaders/palm_leaf.gdshader",
+	"res://shaders/palm_bark.gdshader",
+	"res://models/kenney_coconut.glb",
+	"res://models/kenney_banana.glb",
+	"res://audio/chop.ogg",
+	"res://audio/pickup_rustle.ogg",
+	"res://models/kenney_pot_large.glb",
+	"res://shaders/sand_surface.gdshader",
+	"res://shaders/soil_surface.gdshader",
+	"res://textures/island/sand_diff.jpg",
+	"res://shaders/wood_planks.gdshader",
+	"res://shaders/rope_fiber.gdshader",
+	"res://textures/construction/timber_photographic_atlas.png",
+	"res://shaders/sand_footprint.gdshader",
+	"res://audio/footstep_wood01.ogg",
+	"res://audio/footstep_wood02.ogg",
+	"res://audio/footstep_wood03.ogg",
+	"res://audio/footstep_gravel.ogg",
+	"res://textures/ui/survival_items.png",
+	"res://textures/ui/rope_launcher.png",
+	"res://textures/ui/advanced_potato.png",
+	"res://textures/ui/advanced_tomato.png",
+	"res://textures/ui/advanced_banana.png",
+	"res://shaders/campfire.gdshader",
+	"res://shaders/survivalist.gdshader",
+	"res://textures/construction/survivalist_weave.png",
+	"res://shaders/build_grid.gdshader",
+	"res://models/kenney_log.glb",
+	"res://models/kenney_barrel.glb",
+	"res://models/kenney_rock_small.glb",
+	"res://shaders/raft_timber.gdshader",
+	"res://shaders/starter_sail.gdshader",
+	"res://audio/rain_ambience.wav",
+	"res://shaders/rain_sheltered.gdshader",
+	"res://textures/island/sand_nor_gl.jpg",
+	"res://textures/island/sand_arm.jpg",
+	"res://audio/ocean_ambience.mp3",
+	"res://audio/sea_wind.wav",
+	"res://audio/foliage_rustle.wav",
+	"res://shaders/island_mountain.gdshader",
+	"res://textures/island/rock_diff.jpg",
+	"res://textures/island/rock_nor_gl.jpg",
+	"res://textures/island/rock_arm.jpg",
+	"res://textures/ui/coastal_tree_atlas.png",
+	"res://addons/sky_3d/assets/thirdparty/textures/moon/MoonMap.png",
+	"res://addons/sky_3d/assets/thirdparty/textures/milkyway/Milkyway.jpg",
+	"res://addons/sky_3d/assets/thirdparty/textures/milkyway/StarField.jpg",
+	"res://addons/sky_3d/assets/textures/noise.jpg",
+	"res://addons/sky_3d/assets/textures/noiseClouds.png",
+]
 var _warm_resources: Array[Resource] = []
 var _load_requested := false
 var _load_progress := 0.0
@@ -383,11 +510,13 @@ func _swap_scene(packed: PackedScene) -> void:
 	var previous_slots: Array = Inventory.slots.duplicate(true)
 	var previous_meta: Dictionary = Inventory.loaded_meta.duplicate(true)
 	var previous_pickups: Dictionary = Inventory.collected_island_pickups.duplicate(true)
-	var handoff: CanvasLayer
+	# Continue needs the same input/save protection during incremental restoration.
+	var handoff := load("res://scripts/wake_transition.gd").new() as CanvasLayer
 	if _selected_id == "new" and is_instance_valid(_intro):
-		handoff = load("res://scripts/wake_transition.gd").new() as CanvasLayer
 		handoff.set("arrival_texture", _intro.get("handoff_texture"))
-		get_tree().root.add_child(handoff)
+	else:
+		handoff.set("resuming", true)
+	get_tree().root.add_child(handoff)
 	if not _apply_selection():
 		if handoff != null: handoff.queue_free()
 		_busy = false
@@ -434,19 +563,27 @@ func _request_game_load() -> void:
 		_fail("MISSING  " + GAME_SCENE)
 		return
 	_warming_scripts = true
-	# Let the menu paint, then prepare one script dependency per frame. Keep
-	# strong references so preloaded assets stay ready for the scene worker.
-	for path in SCRIPT_WARM_PATHS:
-		await get_tree().process_frame
-		if not is_inside_tree():
-			return
-		var prepared := ResourceLoader.load(path)
-		if prepared == null:
+	var warm_paths: Array = MODEL_WARM_PATHS + SCRIPT_WARM_PATHS
+	for path in warm_paths:
+		var prepare_started := Time.get_ticks_msec()
+		if ResourceLoader.load_threaded_request(path) != OK:
 			_warming_scripts = false
 			_fail("COULD NOT PREPARE GAME FILES")
 			return
-		_warm_resources.append(prepared)
-		_load_progress = 0.15 * float(_warm_resources.size()) / float(SCRIPT_WARM_PATHS.size())
+		while true:
+			await get_tree().process_frame
+			if not is_inside_tree(): return
+			var model_status := ResourceLoader.load_threaded_get_status(path)
+			if model_status == ResourceLoader.THREAD_LOAD_IN_PROGRESS: continue
+			if model_status != ResourceLoader.THREAD_LOAD_LOADED:
+				_warming_scripts = false
+				_fail("COULD NOT PREPARE GAME FILES")
+				return
+			_warm_resources.append(ResourceLoader.load_threaded_get(path))
+			break
+		if "--profile-loading" in OS.get_cmdline_user_args():
+			print("LOAD RESOURCE ", path, " ", Time.get_ticks_msec()-prepare_started, " ms")
+		_load_progress = 0.60 * float(_warm_resources.size()) / float(warm_paths.size())
 	_warming_scripts = false
 	if ResourceLoader.load_threaded_request(GAME_SCENE) != OK:
 		_fail("COULD NOT START LOADING  " + GAME_SCENE)
@@ -459,7 +596,7 @@ func _poll_game_load() -> void:
 	var st := ResourceLoader.load_threaded_get_status(GAME_SCENE, prog)
 	if st == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
 		if prog.size() > 0:
-			_load_progress = 0.15 + 0.85 * clampf(float(prog[prog.size() - 1]), 0.0, 1.0)
+			_load_progress = 0.60 + 0.40 * clampf(float(prog[prog.size() - 1]), 0.0, 1.0)
 		return
 	if st == ResourceLoader.THREAD_LOAD_LOADED:
 		var res: Resource = ResourceLoader.load_threaded_get(GAME_SCENE)

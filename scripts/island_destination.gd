@@ -68,9 +68,17 @@ func _spawn_pickups() -> void:
 		pickup.rotation.y = rng.randf_range(0.0, TAU)
 
 	# New crop caches have separate IDs so existing pickup progress stays valid.
+	var medkit_id:="%s:%d:medkit"%[name,pickup_seed]
+	if not Inventory.has_collected_island_pickup(medkit_id):
+		var at:=to_global(Vector3(2.5,10,-1.5))
+		var hit:=space.intersect_ray(PhysicsRayQueryParameters3D.create(at,at+Vector3.DOWN*28,1))
+		if not hit.is_empty():
+			var medkit:=PICKUP_SCENE.instantiate() as Node3D
+			medkit.name="MedicalSupplyCache";medkit.item_name="Medkit";medkit.amount=1;medkit.pickup_id=medkit_id
+			add_child(medkit);medkit.global_position=Vector3(hit.position)+Vector3.UP*.3
 	if map_label == "Home Isle":
-		for crop_index in range(2):
-			var crop: String = ["Carrot", "Tomato"][crop_index]
+		for crop_index in range(3):
+			var crop: String = ["Carrot", "Tomato", "Onion"][crop_index]
 			var cache_id := "%s:%d:crop:%s" % [name, pickup_seed, crop]
 			if Inventory.has_collected_island_pickup(cache_id):
 				continue

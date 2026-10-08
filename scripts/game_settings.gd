@@ -20,13 +20,21 @@ var _overlay: Control
 var _panel: PanelContainer
 
 
+func mobile_effects_profile() -> bool:
+	# The command-line flag lets desktop verification exercise the phone policy.
+	return OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or "--mobile-effects" in OS.get_cmdline_user_args()
+
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	get_tree().quit_on_go_back = false
+	# Start new phone installations within a steady frame budget. Existing
+	# settings retain the owner's chosen graphics and 30/60 FPS preference.
+	if mobile_effects_profile(): target_fps = 30
 	var config := ConfigFile.new()
 	if config.load(SETTINGS_PATH) == OK:
 		quality = clampi(int(config.get_value("game", "quality", 0)), 0, 3)
-		target_fps = 30 if int(config.get_value("game", "fps", 60)) == 30 else 60
+		target_fps = 30 if int(config.get_value("game", "fps", target_fps)) == 30 else 60
 		look_speed = clampf(float(config.get_value("game", "look_speed", 1.0)), 0.3, 2.0)
 		invert_look = bool(config.get_value("game", "invert_look", false))
 		volume = clampf(float(config.get_value("game", "volume", 0.8)), 0.0, 1.0)

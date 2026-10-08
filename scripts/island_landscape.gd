@@ -1,8 +1,9 @@
 extends Node3D
-## Shared original geometry and CC0 scans. Terrain rays run once, in bounded batches.
-const TREE_VISUAL := preload("res://scripts/coastal_tree_visual.gd")
+## Owner plant kit and shared original rocks. Terrain rays run in bounded batches.
+const WILD_PLANTS := preload("res://scripts/island_wild_plants.gd")
 const ROCK_VISUAL := preload("res://scripts/island_mountain.gd")
 const SHORE_SIZE := 32
+const FRAME_WORK_BUDGET := preload("res://scripts/frame_work_budget.gd")
 static var _boulder_mesh: ArrayMesh
 var landscape_ready := false
 
@@ -20,37 +21,6 @@ func _prepare() -> void:
 	var radius := 15.0 if island.name == "Island" else 9.0
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(island.get("pickup_seed"))
-	var canopy: Array[Transform3D] = []
-	var shrubs: Array[Transform3D] = []
-	var trunks := StaticBody3D.new()
-	trunks.name = "LandscapeTrunks"
-	add_child(trunks)
-	for index in range(24):
-		# The rear half becomes a layered grove while the approach beach stays open.
-		var point := Vector2(rng.randf_range(-radius * 0.75, radius * 0.75),
-			rng.randf_range(-radius * 0.65, radius * 0.12))
-		var hit := _ground(island.to_global(Vector3(point.x, 0, point.y)))
-		if not hit.is_empty() and Vector3(hit.normal).y > 0.48 and Vector3(hit.position).y >= 0.42:
-			var scale_value := rng.randf_range(0.72, 1.18) if index < 12 else rng.randf_range(0.24, 0.45)
-			var basis := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * scale_value)
-			var local_position := to_local(Vector3(hit.position))
-			var transform_value := Transform3D(basis, local_position)
-			if index < 12:
-				canopy.append(transform_value)
-				var collider := CollisionShape3D.new()
-				var shape := CapsuleShape3D.new()
-				shape.radius = 0.13 * scale_value
-				shape.height = 2.5 * scale_value
-				collider.shape = shape
-				collider.position = local_position + Vector3.UP * shape.height * 0.5
-				trunks.add_child(collider)
-			else:
-				shrubs.append(transform_value)
-		if index % 8 == 7:
-			await get_tree().physics_frame
-			if not is_inside_tree(): return
-	_batch_trees(1, canopy, "Canopy")
-	_batch_trees(0, shrubs, "Understory")
 	var stones: Array[Transform3D] = []
 	var shore_rocks := StaticBody3D.new()
 	shore_rocks.name = "ShoreRockCollision"
@@ -77,19 +47,17 @@ func _prepare() -> void:
 	await get_tree().physics_frame
 	if not is_inside_tree(): return
 	await _shore_mask(radius + 6.0)
+	if not is_inside_tree(): return
+	var wild := WILD_PLANTS.new()
+	wild.name = "WildPlants"
+	add_child(wild)
+	await wild.prepare()
 	if is_inside_tree(): landscape_ready = true
 
 func _ground(position_value: Vector3) -> Dictionary:
 	var from := Vector3(position_value.x, 26.0, position_value.z)
 	return get_world_3d().direct_space_state.intersect_ray(
 		PhysicsRayQueryParameters3D.create(from, Vector3(from.x,-28,from.z), 1))
-
-func _batch_trees(kind: int, transforms: Array[Transform3D], label: String) -> void:
-	var template := TREE_VISUAL.create(kind)
-	for index in range(2):
-		var part := template.get_child(index) as MeshInstance3D
-		_add_batch(label + str(index), part.mesh, part.material_override, transforms, true)
-	template.free()
 
 func _add_batch(label: String, mesh_value: Mesh, material_value: Material, transforms: Array[Transform3D], foliage: bool) -> void:
 	if transforms.is_empty(): return
@@ -136,7 +104,6 @@ func _shore_mask(extent: float) -> void:
 	# 4 KB per island, one optional water lookup; no screen/depth/reflection pass.
 	var height_image := Image.create(SHORE_SIZE, SHORE_SIZE, false, Image.FORMAT_RF)
 	var center := global_position
-	var ray_batch := 16 if OS.has_feature("mobile") or OS.has_feature("android") else 64
 	for index in range(SHORE_SIZE * SHORE_SIZE):
 		var x := index % SHORE_SIZE
 		var z := floori(float(index) / float(SHORE_SIZE))
@@ -145,8 +112,8 @@ func _shore_mask(extent: float) -> void:
 			((float(z) + 0.5) / SHORE_SIZE * 2.0 - 1.0) * extent)
 		var hit := _ground(position_value)
 		height_image.set_pixel(x,z,Color(float(Vector3(hit.position).y) if not hit.is_empty() else -20.0,0,0,1))
-		if index % ray_batch == ray_batch - 1:
-			await get_tree().physics_frame
+		if FRAME_WORK_BUDGET.exhausted():
+			await get_tree().process_frame
 			if not is_inside_tree(): return
 	var ocean := get_tree().get_first_node_in_group("ocean")
 	if ocean != null:

@@ -29,9 +29,13 @@ var _refresh_seconds := 0.0
 ## ============================================================
 
 const PIECE_ORDER := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
-const CRAFT_ORDER := ["Fishing Rod", "Spear", "Sail Kit", "Motor Kit", "Life Vest", "Bow", "Arrow", "Bandage", "Diving Tank", "Torch"]
-const RESOURCE_PILL_ITEMS := ["Wood", "Rope", "Plastic", "Metal"]
-const STATS := [["health", "Health"], ["hunger", "Hunger"], ["thirst", "Thirst"]]
+const CRAFT_ORDER := ["PlanterPot","PlanterBox","TreePot","Foundation","Wall","Roof","Stairs","Door","Window","Bonfire","RainCollector","SandFilter","Fishing Rod", "Spear", "Sail Kit", "Motor Kit", "Life Vest", "Bow", "Arrow", "Bandage", "Diving Tank", "Torch","Solar Torch","Binoculars","Walkie Talkie","Battery","Medkit","Can","StorageBox","CookingSetup","HalfWall","CargoCrate","WallTorch","WaterPurifier","WindGenerator","ElectricLamp","ElectricPurifier","RescueRadio"]
+const RESOURCE_PILL_ITEMS := []
+const STATS := [["health", "HEALTH"], ["thirst", "WATER"], ["hunger", "HUNGER"]]
+const FOOD_RULES := preload("res://scripts/food_rules.gd")
+var _display_stats := [100.0,100.0,100.0]
+const CRAFT_PAGE_SIZE := 6
+const ITEM_LABELS := {"PlanterPot":"Plant Pot","PlanterBox":"Plant Bed","TreePot":"Tree Pot","RainCollector":"Rain Collector","SandFilter":"Sand Filter","HalfWall":"Half Wall","CargoCrate":"Cargo Crate","WallTorch":"Wall Torch","WaterPurifier":"Water Purifier","WindGenerator":"Wind Generator","ElectricLamp":"Electric Lamp","ElectricPurifier":"Electric Purifier","RescueRadio":"Rescue Radio"}
 const MAP_RANGE_METERS := 430.0
 
 const HOTBAR_COUNT := 6
@@ -56,10 +60,20 @@ var _map_markers: Array[Dictionary] = []
 var _craft_panel_rect := Rect2()
 var _craft_close_rect := Rect2()
 var _craft_card_rects: Array[Rect2] = []
+var _craft_page := 0
+var _craft_selected := "PlanterPot"
+var _craft_detail_rect := Rect2()
+var _craft_confirm_rect := Rect2()
+var _craft_prev_rect := Rect2()
+var _craft_next_rect := Rect2()
+var _inspect_slot := -1
+var _bag_use_rect := Rect2()
+var _bag_equip_rect := Rect2()
 
 # --- geometry (recomputed every frame while visible) ---
 var _vp := Vector2.ZERO
 var _hotbar_rects: Array = []      # bottom bar (normal-mode items or build pieces)
+var _rope_slot_rect := Rect2()    # permanent equipment; never an inventory stack
 var _bag_rect := Rect2()           # the BAG button (normal mode)
 var _slot := 0.0                   # current slot size
 var _panel_rect := Rect2()
@@ -77,6 +91,9 @@ var _chip_text := ""
 var _toast := ""
 var _toast_until := 0.0
 var _toast_rect := Rect2()
+var _pickup_queue: Array[Dictionary] = []
+var _pickup_active: Dictionary = {}
+var _pickup_remaining := 0.0
 
 # --- drag & touch ---
 var _press_slot := -1
@@ -117,11 +134,22 @@ func _ready() -> void:
 	anchor_bottom = 0.0
 	Inventory.changed.connect(_inventory_changed)
 	Inventory.bag_full.connect(_on_bag_full)
+	Inventory.pickup_received.connect(show_pickup)
 	var vp := get_viewport()
 	vp.size_changed.connect(_on_size_changed)
 	visible = _should_show()
 	_on_size_changed()
 
+
+func show_pickup(item: String, amount: int) -> void:
+	if amount<=0:return
+	_pickup_queue.append({"item":item,"amount":amount})
+	if _pickup_active.is_empty():_advance_pickup()
+
+func _advance_pickup() -> void:
+	_pickup_active = _pickup_queue.pop_front() if not _pickup_queue.is_empty() else {}
+	_pickup_remaining = 1.6 if not _pickup_active.is_empty() else 0.0
+	queue_redraw()
 
 func _inventory_changed() -> void:
 	_last_key = ""
@@ -131,6 +159,8 @@ func _inventory_changed() -> void:
 
 ## True while a HUD modal should keep one-shot world actions from firing.
 func gameplay_input_blocked() -> bool:
+	var actor:=_get_player()
+	if actor!=null and actor.has_node("SurvivalServices") and actor.get_node("SurvivalServices").is_modal():return true
 	return GameSettings.is_open or _map_open or _craft_open or _bag_open or _paused or _death_open
 
 
@@ -271,6 +301,9 @@ func _notification(what: int) -> void:
 func handle_back() -> void:
 	if _death_open:
 		return
+	var actor:=_get_player()
+	var service:=actor.get_node_or_null("SurvivalServices") if actor!=null else null
+	if service!=null and service.is_modal():service.close_menu();return
 	if not GameSettings.is_open:
 		var controls := get_parent().get_node_or_null("MobileControls")
 		if controls != null and bool(controls.get("_help_open")):
@@ -287,6 +320,14 @@ func handle_back() -> void:
 
 
 func _process(delta: float) -> void:
+	if _pickup_remaining>0.0 and not get_tree().paused:
+		_pickup_remaining-=delta
+		if _pickup_remaining<=0.0:_advance_pickup()
+		queue_redraw()
+	for index in STATS.size():
+		var target:=clampf(_get_stat(STATS[index][0]),0,100)
+		if absf(float(_display_stats[index])-target)>.05:
+			_display_stats[index]=lerpf(float(_display_stats[index]),target,1.0-exp(-delta*9.0));queue_redraw()
 	var want := _should_show()
 	if visible != want:
 		visible = want
@@ -304,6 +345,7 @@ func _process(delta: float) -> void:
 	if _flash_active():
 		queue_redraw()  # re-draw the "SAVED ✓" chip while it is lit
 	var key := _build_cache_key()
+	if _get_stat("health")<=25 or _get_stat("thirst")<=25 or _get_stat("hunger")<=25:queue_redraw()
 	if key != _last_key:
 		_last_key = key
 		queue_redraw()
@@ -313,7 +355,7 @@ func _process(delta: float) -> void:
 # PUBLIC — coordination with MobileControls
 # ============================================================
 func is_blocking() -> bool:
-	return GameSettings.is_open or (visible and (_bag_open or _map_open or _craft_open or _paused or _death_open))
+	return gameplay_input_blocked()
 
 
 ## Should MobileControls treat this screen point as HUD territory (never
@@ -326,6 +368,7 @@ func claims_touch(pos: Vector2) -> bool:
 		return true
 	if _pause_btn_rect.has_point(pos) or _bag_rect.has_point(pos) or _map_button_rect.has_point(pos) or _craft_button_rect.has_point(pos):
 		return true
+	if _rope_slot_rect.has_point(pos): return true
 	for r in _hotbar_rects:
 		if r.has_point(pos):
 			return true
@@ -367,7 +410,7 @@ func _compute_layout() -> void:
 	var sx := clock_left - cr
 	for i in range(STATS.size()):
 		_status_centers.append(Vector2(sx, top_safe + cr))
-		sx -= cr * 2.0 + gap
+		sx -= cr * 2.0 + maxf(gap,cr*0.60)
 
 	# pause button centered under the clock caption (same far-right column)
 	_pause_btn_rect = Rect2()
@@ -401,11 +444,13 @@ func _compute_layout() -> void:
 	var sg: float = _slot * 0.14
 	var building: bool = _in_build_mode()
 	var n: int = HOTBAR_COUNT
-	var extra: int = 0 if building else 1  # bag button after the slots
+	var extra: int = 0 if building else 2  # permanent gun first, bag last
 	var total: float = float(n + extra) * _slot + float(n - 1 + extra) * sg
 	var x0: float = (_vp.x - total) * 0.5
 	var y0: float = _vp.y - m - _slot
 	_hotbar_rects.clear()
+	_rope_slot_rect = Rect2() if building else Rect2(x0,y0,_slot,_slot)
+	if not building: x0 += _slot + sg
 	for i in range(n):
 		_hotbar_rects.append(Rect2(x0 + float(i) * (_slot + sg), y0, _slot, _slot))
 	_bag_rect = Rect2(x0 + float(n) * (_slot + sg), y0, _slot, _slot)
@@ -428,7 +473,7 @@ func _compute_layout() -> void:
 		var pad: float = cell * 0.5
 		var head_h: float = cell * 1.85
 		var pw: float = float(BAG_COLS) * cell + float(BAG_COLS - 1) * cg + pad * 2.0
-		var phh: float = float(BAG_ROWS) * cell + float(BAG_ROWS - 1) * cg + pad * 2.0 + head_h
+		var phh: float = float(BAG_ROWS) * cell + float(BAG_ROWS - 1) * cg + pad * 2.0 + head_h + cell*0.62
 		_panel_rect = Rect2((_vp.x - pw) * 0.5, (_vp.y - phh) * 0.5, pw, phh)
 		var ccr: float = cell * 0.4
 		_close_rect = Rect2(_panel_rect.end.x - ccr - pad * 0.6, _panel_rect.position.y + pad * 0.35, ccr, ccr)
@@ -449,6 +494,8 @@ func _compute_layout() -> void:
 			var rr := Rect2(grid_origin.x + float(c) * (cell + cg),
 				grid_origin.y + float(r) * (cell + cg), cell, cell)
 			_bag_slot_rects.append(rr)
+		_bag_use_rect=Rect2(_panel_rect.position.x+pad,_panel_rect.end.y-cell*0.68,pw*0.43,cell*0.56)
+		_bag_equip_rect=Rect2(_bag_use_rect.end.x+cg,_bag_use_rect.position.y,pw-pad*2-cg-_bag_use_rect.size.x,cell*0.56)
 	else:
 		_save_rect = Rect2()
 
@@ -499,33 +546,28 @@ func _compute_layout() -> void:
 		_map_center = Vector2.ZERO
 		_map_plot_radius = 0.0
 
-	# Compact two-column equipment bench, sized for both portrait phones and PC.
 	_craft_card_rects.clear()
 	if _craft_open:
-		var craft_pad: float = clampf(_vp.y * 0.03, 14.0, 24.0)
-		var craft_w: float = minf(_vp.x * 0.92, 760.0)
-		var craft_h: float = minf(_vp.y * 0.76, 680.0)
-		_craft_panel_rect = Rect2((_vp.x - craft_w) * 0.5, (_vp.y - craft_h) * 0.5, craft_w, craft_h)
-		var craft_close_r: float = clampf(craft_h * 0.04, 20.0, 28.0)
-		_craft_close_rect = Rect2(_craft_panel_rect.end.x - craft_pad - craft_close_r * 2.0,
-				_craft_panel_rect.position.y + craft_pad * 0.65,
-				craft_close_r * 2.0, craft_close_r * 2.0)
-		var grid_top: float = _craft_panel_rect.position.y + craft_pad + clampf(craft_h * 0.17, 78.0, 108.0)
-		var grid_bottom: float = _craft_panel_rect.end.y - craft_pad
-		var cg: float = clampf(craft_w * 0.025, 10.0, 18.0)
-		var card_w: float = (craft_w - craft_pad * 2.0 - cg) * 0.5
-		var row_gap: float = clampf(craft_h * 0.025, 10.0, 16.0)
-		var rows := int(ceil(float(CRAFT_ORDER.size()) / 2.0))
-		var card_h: float = (grid_bottom - grid_top - row_gap * (rows - 1)) / rows
-		for idx in range(CRAFT_ORDER.size()):
-			var col: int = idx % 2
-			var row: int = int(float(idx) / 2.0)
-			_craft_card_rects.append(Rect2(
-					_craft_panel_rect.position.x + craft_pad + float(col) * (card_w + cg),
-						grid_top + float(row) * (card_h + row_gap), card_w, card_h))
+		var craft_pad:float=clampf(_vp.y*0.03,14,24)
+		var craft_w:float=minf(_vp.x*0.94,1000)
+		var craft_h:float=minf(_vp.y*0.86,720)
+		_craft_panel_rect=Rect2((_vp.x-craft_w)*0.5,(_vp.y-craft_h)*0.5,craft_w,craft_h)
+		_craft_close_rect=Rect2(_craft_panel_rect.end.x-craft_pad-40,_craft_panel_rect.position.y+craft_pad,40,40)
+		var top:float=_craft_panel_rect.position.y+80
+		var list_w:float=(craft_w-craft_pad*3)*0.55
+		var craft_gap:float=12
+		var card_w:float=(list_w-craft_gap)*0.5
+		var card_h:float=(craft_h-155-craft_gap*2)*0.333333
+		var count:int=mini(CRAFT_PAGE_SIZE,CRAFT_ORDER.size()-_craft_page*CRAFT_PAGE_SIZE)
+		for idx in count:
+			_craft_card_rects.append(Rect2(_craft_panel_rect.position.x+craft_pad+(idx%2)*(card_w+craft_gap),top+floori(float(idx)/2)*(card_h+craft_gap),card_w,card_h))
+		var page_y:float=_craft_panel_rect.end.y-craft_pad-44
+		_craft_prev_rect=Rect2(_craft_panel_rect.position.x+craft_pad,page_y,80,44)
+		_craft_next_rect=Rect2(_craft_panel_rect.position.x+craft_pad+list_w-80,page_y,80,44)
+		_craft_detail_rect=Rect2(_craft_panel_rect.position.x+craft_pad*2+list_w,top,craft_w-list_w-craft_pad*3,craft_h-80-craft_pad)
+		_craft_confirm_rect=Rect2(_craft_detail_rect.position.x+12,_craft_detail_rect.end.y-62,_craft_detail_rect.size.x-24,50)
 	else:
-		_craft_panel_rect = Rect2()
-		_craft_close_rect = Rect2()
+		_craft_panel_rect=Rect2();_craft_close_rect=Rect2()
 
 	# toast pill (above the bottom bar)
 	_toast_rect = Rect2()
@@ -647,7 +689,7 @@ func _build_chip_text() -> String:
 		var parts: Array = []
 		var recipe: Dictionary = Inventory.recipe_cost(piece_name2)
 		for item in recipe:
-			parts.append("%s %d" % [str(item).substr(0, 3).to_upper(), int(recipe[item])*multiplier])
+			parts.append("%s %d/%d" % [str(item).to_upper(), Inventory.total(item),int(recipe[item])*multiplier])
 		cost = "   " + "  ".join(parts)
 	var afford := "OK" if Inventory.can_afford(piece_name2) else "NEED MORE"
 	if multiplier > 1:
@@ -691,6 +733,12 @@ func _cancel_drag() -> void:
 # ============================================================
 func _input(event: InputEvent) -> void:
 	if GameSettings.is_open:
+		return
+	var actor:=_get_player()
+	var service:=actor.get_node_or_null("SurvivalServices") if actor!=null else null
+	if service!=null and service.is_modal():
+		if event is InputEventKey and event.pressed and event.is_action_pressed("ui_cancel"):
+			service.close_menu();_consume_input()
 		return
 	var controls := get_parent().get_node_or_null("MobileControls")
 	if controls != null and bool(controls.get("_help_open")):
@@ -771,6 +819,14 @@ func _input(event: InputEvent) -> void:
 				toggle_crafting()
 				_consume_input()
 				return
+	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT:
+		var pointer_touch:=InputEventScreenTouch.new()
+		pointer_touch.index=-2;pointer_touch.position=event.position;pointer_touch.pressed=event.pressed
+		event=pointer_touch
+	elif event is InputEventMouseMotion and _inventory_touch_id==-2:
+		var pointer_drag:=InputEventScreenDrag.new()
+		pointer_drag.index=-2;pointer_drag.position=event.position;pointer_drag.relative=event.relative
+		event=pointer_drag
 	if not (event is InputEventScreenTouch or event is InputEventScreenDrag):
 		return
 	if _bag_open:
@@ -838,10 +894,16 @@ func _handle_modal_pointer(event: InputEvent) -> void:
 	elif _craft_open:
 		if _craft_close_rect.has_point(pointer):
 			_close_crafting()
+		elif _craft_confirm_rect.has_point(pointer):
+			_confirm_craft_selection()
+		elif _craft_prev_rect.has_point(pointer):
+			_craft_page=posmod(_craft_page-1,int(ceil(float(CRAFT_ORDER.size())/CRAFT_PAGE_SIZE)));_compute_layout();queue_redraw()
+		elif _craft_next_rect.has_point(pointer):
+			_craft_page=posmod(_craft_page+1,int(ceil(float(CRAFT_ORDER.size())/CRAFT_PAGE_SIZE)));_compute_layout();queue_redraw()
 		else:
 			for i in range(_craft_card_rects.size()):
 				if _craft_card_rects[i].has_point(pointer):
-					_craft_item(CRAFT_ORDER[i])
+					_craft_selected=CRAFT_ORDER[_craft_page*CRAFT_PAGE_SIZE+i];queue_redraw()
 					break
 	_consume_input()
 
@@ -881,6 +943,29 @@ func _craft_item(item_name: String) -> void:
 		_show_toast("NEED MATERIALS FOR " + item_name.to_upper())
 	queue_redraw()
 
+func _confirm_craft_selection() -> void:
+	if Inventory.RECIPES.has(_craft_selected):
+		_close_crafting()
+		var actor:=_get_player()
+		if actor!=null:actor.call("select_piece_for_build",actor.BUILD_RECIPE_NAMES.find(_craft_selected))
+		_show_toast("AIM AT A CLEAR DECK · PLACE CONFIRMS AND SPENDS MATERIALS")
+	else:_craft_item(_craft_selected)
+
+func _use_bag_selection(eat: bool) -> void:
+	if _inspect_slot<0 or Inventory.slot_empty(_inspect_slot):return
+	var actor:=_get_player()
+	if actor==null:return
+	var item:=Inventory.slot_item(_inspect_slot)
+	if eat and not FOOD_RULES.edible(item) and item not in ["Medkit","Can","Bandage","Solar Torch","Binoculars","Walkie Talkie"]:return
+	var equip_slot:=_inspect_slot
+	if equip_slot>=HOTBAR_COUNT:
+		equip_slot=clampi(int(actor.active_slot_index),0,HOTBAR_COUNT-1)
+		Inventory.swap_slots(_inspect_slot,equip_slot)
+	actor.call("select_hotbar_slot",equip_slot)
+	_bag_open=false;GameSettings.release_gameplay_input();_cancel_drag()
+	if eat:actor.call("_handle_selected_item_use")
+	queue_redraw()
+
 
 func _handle_pause_mouse(pointer: Vector2) -> void:
 	# Scene changes detach this HUD immediately: claim the event first.
@@ -897,6 +982,12 @@ func _handle_bar_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
 		if touch.pressed:
+			if _rope_slot_rect.has_point(touch.position) and not _in_build_mode():
+				var player := _get_player()
+				if player != null: player.call("equip_rope_gun")
+				queue_redraw()
+				_consume_input()
+				return
 			if _bag_rect.has_point(touch.position) and not _in_build_mode():
 				_press_bag = true
 				_bag_open = true
@@ -935,6 +1026,8 @@ func _handle_bag_input(event: InputEvent) -> void:
 			if _inventory_touch_id != -1:
 				_consume_input()
 				return
+			if _bag_use_rect.has_point(touch.position):_use_bag_selection(true);_consume_input();return
+			if _bag_equip_rect.has_point(touch.position):_use_bag_selection(false);_consume_input();return
 			if _close_rect.has_point(touch.position) or not _panel_rect.has_point(touch.position):
 				_bag_open = false
 				_cancel_drag()
@@ -974,6 +1067,7 @@ func _handle_bag_input(event: InputEvent) -> void:
 					_refresh_selection_after_move()
 				_cancel_drag()
 			else:
+				_inspect_slot=_press_slot
 				# plain tap (no drag): hotbar-row tap selects the item
 				if _press_slot < HOTBAR_COUNT:
 					var p := _get_player()
@@ -1075,6 +1169,7 @@ func _draw() -> void:
 		_draw_craft_button()
 	if _toast != "" and _toast_rect.size.x > 0.0:
 		_draw_toast()
+	if not _pickup_active.is_empty() and not gameplay_input_blocked():_draw_pickup()
 	if _dragging and _drag_from >= 0:
 		_draw_drag_ghost()
 	if _paused:
@@ -1262,54 +1357,50 @@ func _draw_map_overlay() -> void:
 
 
 func _draw_crafting_overlay() -> void:
-	draw_rect(Rect2(Vector2.ZERO, _vp), Color(0.01, 0.025, 0.035, 0.84))
-	var panel := _craft_panel_rect
-	_draw_rounded(panel, 24.0, Color(0.075, 0.09, 0.095, 0.99))
-	_draw_rounded(panel, 24.0, Color(0.82, 0.69, 0.45, 0.52), false, 2.0)
-	var title_fs: int = int(clampf(panel.size.y * 0.055, 22.0, 34.0))
-	var sub_fs: int = int(clampf(title_fs * 0.45, 12.0, 16.0))
-	_draw_text("FIELD CRAFTING", Vector2(panel.position.x + panel.size.x * 0.07,
-			panel.position.y + panel.size.y * 0.075 + title_fs * 0.36), title_fs, Color(0.98, 0.9, 0.7, 0.98))
-	var progress := _get_player().get_node_or_null("SurvivalProgression")
-	var mission := "CRAFT SURVIVAL GEAR AND UPGRADE YOUR RAFT TO SAIL."
-	if progress != null:
-		mission = "LV %d · %s" % [progress.level, progress.call("objective")]
-	_draw_text(mission,
-			Vector2(panel.position.x + panel.size.x * 0.07,
-				panel.position.y + panel.size.y * 0.12 + title_fs * 0.48 + sub_fs),
-			sub_fs, Color(0.75, 0.79, 0.75, 0.9))
-	var close_center := _craft_close_rect.get_center()
-	draw_circle(close_center, _craft_close_rect.size.x * 0.5, Color(1, 1, 1, 0.08))
-	Icons.cross(self, close_center, _craft_close_rect.size.x * 0.36, 2.5, Color(1, 1, 1, 0.9))
-	for i in range(_craft_card_rects.size()):
-		var item_name: String = CRAFT_ORDER[i]
-		var rect: Rect2 = _craft_card_rects[i]
-		var can_afford := Inventory.can_afford_item(item_name)
-		var can_store := Inventory.can_store_craft_result(item_name)
-		var ready_to_craft := can_afford and can_store
-		var bg := Color(0.12, 0.22, 0.18, 0.97) if ready_to_craft else Color(0.11, 0.13, 0.14, 0.96)
-		_draw_rounded(rect, 16.0, bg)
-		_draw_rounded(rect, 16.0, Color(0.7, 0.83, 0.68, 0.36) if ready_to_craft else Color(1, 1, 1, 0.13), false, 1.3)
-		var icon_center := Vector2(rect.position.x + rect.size.x * 0.16, rect.position.y + rect.size.y * 0.42)
-		Icons.item_icon(self, item_name, icon_center, minf(rect.size.y * 0.32, 34.0))
-		var name_fs: int = int(clampf(rect.size.y * 0.19, 14.0, 21.0))
-		_draw_text(item_name.to_upper(), Vector2(rect.position.x + rect.size.x * 0.29,
-				rect.position.y + rect.size.y * 0.25 + name_fs * 0.34), name_fs, Color(0.96, 0.93, 0.83, 0.98))
-		var cost_parts: Array[String] = []
-		var recipe: Dictionary = Inventory.ITEM_RECIPES.get(item_name, {})
-		for ingredient in recipe:
-			cost_parts.append("%s %d" % [str(ingredient).substr(0, 3).to_upper(), int(recipe[ingredient])])
-		var cost_fs: int = int(clampf(rect.size.y * 0.12, 11.0, 15.0))
-		var cost_text := "   ".join(cost_parts)
-		_draw_text(cost_text, Vector2(rect.position.x + rect.size.x * 0.29,
-				rect.position.y + rect.size.y * 0.49 + cost_fs * 0.34), cost_fs, Color(0.73, 0.79, 0.75, 0.88))
-		var status := "TAP TO CRAFT" if ready_to_craft else ("BAG FULL" if can_afford else "NEED MATERIALS")
-		if not Inventory.recipe_unlocked(item_name):
-			status = "LOCKED · COMPLETE MISSIONS"
-		var status_fs: int = int(clampf(rect.size.y * 0.12, 11.0, 15.0))
-		_draw_text(status, Vector2(rect.position.x + rect.size.x * 0.29,
-				rect.position.y + rect.size.y * 0.77 + status_fs * 0.34), status_fs,
-				Color(0.55, 0.93, 0.66, 0.95) if ready_to_craft else Color(0.89, 0.68, 0.57, 0.88))
+	draw_rect(Rect2(Vector2.ZERO,_vp),Color(0.01,0.025,0.035,0.84))
+	var panel:=_craft_panel_rect
+	_draw_rounded(panel,20,Color(0.075,0.09,0.095,0.99))
+	_draw_text("CRAFT & BUILD",panel.position+Vector2(24,40),28,Color(0.98,0.9,0.7))
+	_draw_text("Select an item to review its materials.",panel.position+Vector2(24,63),15,Color(0.75,0.79,0.75))
+	Icons.cross(self,_craft_close_rect.get_center(),14,2.5,Color.WHITE)
+	for i in _craft_card_rects.size():
+		var item:String=CRAFT_ORDER[_craft_page*CRAFT_PAGE_SIZE+i]
+		var rect:=_craft_card_rects[i]
+		var selected:=item==_craft_selected
+		_draw_rounded(rect,12,Color(0.18,0.26,0.20) if selected else Color(0.11,0.14,0.15))
+		_draw_rounded(rect,12,UI_SURFACE.BRASS if selected else Color(1,1,1,0.15),false,1.5)
+		Icons.item_icon(self,item,rect.get_center()-Vector2(0,14),minf(rect.size.y*0.26,34))
+		var label:String=ITEM_LABELS.get(item,item)
+		var fs:int=mini(17,maxi(12,int(rect.size.x/maxf(float(label.length()),1)*1.6)))
+		draw_string(ThemeDB.fallback_font,rect.position+Vector2(6,rect.size.y-18),label,HORIZONTAL_ALIGNMENT_CENTER,rect.size.x-12,fs,Color(0.96,0.93,0.83))
+	_draw_pause_button(_craft_prev_rect,"BACK",false)
+	_draw_pause_button(_craft_next_rect,"NEXT",false)
+	var page_label:="%d / %d"%[_craft_page+1,ceili(float(CRAFT_ORDER.size())/CRAFT_PAGE_SIZE)]
+	_draw_text(page_label,Vector2((_craft_prev_rect.end.x+_craft_next_rect.position.x)*0.5-18,_craft_next_rect.position.y+28),16,Color.WHITE)
+	var detail:=_craft_detail_rect
+	_draw_rounded(detail,12,Color(0.045,0.065,0.065))
+	var name_text:String=ITEM_LABELS.get(_craft_selected,_craft_selected)
+	_draw_text(name_text.to_upper(),detail.position+Vector2(16,32),20,Color(0.98,0.9,0.7))
+	var structure:=Inventory.RECIPES.has(_craft_selected)
+	var recipe:Dictionary=Inventory.recipe_cost(_craft_selected) if structure else Inventory.ITEM_RECIPES.get(_craft_selected,{})
+	_draw_text("MATERIAL        HAVE / NEED",detail.position+Vector2(16,68),14,Color(0.75,0.79,0.75))
+	var y:float=detail.position.y+104
+	for material in recipe:
+		var owned:int=Inventory.total(material)
+		var needed:int=int(recipe[material])
+		var tint:=Color(0.6,0.92,0.66) if owned>=needed else Color(1,0.48,0.36)
+		Icons.item_icon(self,material,Vector2(detail.position.x+30,y-5),14)
+		_draw_text(str(material),Vector2(detail.position.x+54,y),16,Color(0.9,0.9,0.84))
+		_draw_text("%d / %d"%[owned,needed],Vector2(detail.end.x-106,y),16,tint)
+		y+=38
+	var ready:bool=Inventory.can_afford(_craft_selected) if structure else Inventory.can_craft_item(_craft_selected)
+	var hint:="Choose a spot, then press PLACE." if structure else "Confirm to craft one item."
+	if not Inventory.recipe_unlocked(_craft_selected):hint="Locked: complete the current mission."
+	elif not ready:hint="Gather missing materials." if structure or not Inventory.can_afford_item(_craft_selected) else "Make room in your bag."
+	if _craft_selected in ["PlanterPot","PlanterBox"]:hint="Root crops · foundation or roof top."
+	elif _craft_selected=="TreePot":hint="Trees · foundation or roof top."
+	_draw_text(hint,Vector2(detail.position.x+12,_craft_confirm_rect.position.y-18),13,Color(0.78,0.82,0.75))
+	_draw_pause_button(_craft_confirm_rect,"CHOOSE BUILD SPOT" if structure else "CONFIRM CRAFT",ready)
 
 
 func _draw_mission() -> void:
@@ -1319,6 +1410,7 @@ func _draw_mission() -> void:
 	if player == null:
 		return
 	var progress := player.get_node_or_null("SurvivalProgression")
+	if bool(player.get("build_mode")) or is_instance_valid(player.get("_editing")):return
 	if progress == null:
 		return
 	var width := minf(380, _vp.x * 0.34)
@@ -1387,6 +1479,17 @@ func _draw_pause_button(btn: Rect2, label: String, primary: bool) -> void:
 			btn.position.y + btn.size.y * 0.5 + fs * 0.36), fs, Color(1, 1, 1, 0.97))
 
 
+func _draw_pickup() -> void:
+	var scale_factor:=clampf(_vp.y/720.0,0.72,1.35)
+	var rect:=Rect2(Vector2(_vp.x*0.5-160.0*scale_factor,_vp.y*0.18),Vector2(320,72)*scale_factor)
+	var fade:=clampf(minf(_pickup_remaining/0.2,(1.6-_pickup_remaining)/0.12),0.0,1.0)
+	_draw_rounded(rect,12.0*scale_factor,Color(0.025,0.065,0.075,0.92*fade))
+	_draw_rounded(rect,12.0*scale_factor,Color(0.45,0.8,0.63,fade),false,1.5)
+	var item:=str(_pickup_active.item)
+	Icons.item_icon(self,item,rect.position+Vector2(36,36)*scale_factor,26.0*scale_factor)
+	_draw_text(item.to_upper(),rect.position+Vector2(76,29)*scale_factor,int(18*scale_factor),Color(1,1,1,fade))
+	_draw_text("COLLECTED  +%d"%int(_pickup_active.amount),rect.position+Vector2(76,53)*scale_factor,int(15*scale_factor),Color(0.6,0.95,0.72,fade))
+
 func _draw_toast() -> void:
 	_draw_rounded(_toast_rect, _toast_rect.size.y * 0.5, Color(0.55, 0.12, 0.1, 0.88))
 	_draw_rounded(_toast_rect, _toast_rect.size.y * 0.5, Color(1, 1, 1, 0.35), false, 1.5)
@@ -1403,6 +1506,10 @@ func _draw_bottom_bar() -> void:
 	var p := _get_player()
 	var sel_piece: int = int(p.get("selected_piece_index")) if p != null else -1
 	var act_slot: int = int(p.get("active_slot_index")) if p != null else 0
+	if not building:
+		var gun_selected: bool = p != null and p.get("rope_gun_selected") == true
+		_draw_slot(_rope_slot_rect,false,gun_selected)
+		Icons.item_icon(self,"Rope Gun",_rope_slot_rect.get_center(),_slot*0.43)
 	for i in range(_hotbar_rects.size()):
 		var rect: Rect2 = _hotbar_rects[i]
 		if building:
@@ -1444,26 +1551,20 @@ func _draw_item_slot(rect: Rect2, idx: int, selected: bool) -> void:
 
 
 func _draw_status() -> void:
-	var cr: float = clampf(_vp.y * 0.05, 23.0, 34.0)
-	var col: Color = Color(1, 1, 1, 0.9)
-	var font := ThemeDB.fallback_font
-	for i in range(STATS.size()):
-		if i >= _status_centers.size():
-			break
-		var center: Vector2 = _status_centers[i]
-		var c: Color = _status_bg(STATS[i][0])
-		UI_SURFACE.dial(self, center, cr, UI_SURFACE.BRASS)
-		var fraction := clampf(_get_stat(STATS[i][0]) / 100.0, 0.0, 1.0)
-		if fraction > 0.001:
-			draw_arc(center, cr - 3.0, -PI * 0.5, -PI * 0.5 + TAU * fraction,
-				40, Color(c.r, c.g, c.b, 0.95), 2.5, true)
-		var glyph_r: float = cr * 0.52
-		Icons.status_icon(self, STATS[i][0], center, glyph_r, Color(1, 1, 1, 0.95))
-		var val: int = int(roundf(_get_stat(STATS[i][0])))
-		var label := str(val)
-		var fs: int = int(clampf(cr * 0.62, 13.0, 19.0))
-		var tw: float = font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		_draw_text(label, Vector2(center.x - tw * 0.5, center.y + cr + fs * 0.15), fs, col)
+	var cr:float=clampf(_vp.y*0.05,23,34)
+	var phase:float=0.4+0.6*absf(sin(Time.get_ticks_msec()*0.005))
+	for i in STATS.size():
+		if i>=_status_centers.size():break
+		var center:Vector2=_status_centers[i]
+		var value:float=clampf(_get_stat(STATS[i][0]),0,100)
+		var low:=value<=25
+		var tint:=Color(1,0.25,0.16,phase) if low else _status_bg(STATS[i][0])
+		UI_SURFACE.dial(self,center,cr,Color(1,0.2,0.12,phase) if low else UI_SURFACE.BRASS)
+		draw_arc(center,cr-3,-PI*0.5,-PI*0.5+TAU*float(_display_stats[i])/100,40,tint,3,true)
+		Icons.status_icon(self,STATS[i][0],center,cr*0.48,Color(1,1,1,phase if low else 0.95))
+		var label:="%d%%"%roundi(value)
+		draw_string(ThemeDB.fallback_font,Vector2(center.x-cr*1.3,center.y+cr+16),label,HORIZONTAL_ALIGNMENT_CENTER,cr*2.6,17,Color(1,0.4,0.3,phase) if low else Color.WHITE)
+		draw_string(ThemeDB.fallback_font,Vector2(center.x-cr*1.3,center.y+cr+31),("LOW " if low else "")+STATS[i][1],HORIZONTAL_ALIGNMENT_CENTER,cr*2.6,11,tint if low else Color(0.85,0.87,0.8))
 
 
 ## Current in-game hour (float, Sky3D.current_time). Falls back to noon while
@@ -1614,7 +1715,7 @@ func _draw_bag_panel() -> void:
 	var fs: int = int(clampf(rect.size.y * 0.028, 17.0, 25.0))
 	_draw_text("BACKPACK", Vector2(rect.position.x + rect.size.x * 0.045,
 			rect.position.y + rect.size.y * 0.062 + fs * 0.2), fs, Color(1, 1, 1, 0.95))
-	var sub: String = "DRAG TO MOVE / SWAP  -  TAP HOTBAR ROW TO USE"
+	var sub: String = "DRAG TO MOVE / SWAP  -  TAP AN ITEM FOR OPTIONS"
 	var sfs: int = int(fs * 0.5)
 	_draw_text(sub, Vector2(rect.position.x + rect.size.x * 0.045,
 			rect.position.y + rect.size.y * 0.112 + sfs * 0.2), sfs, Color(1, 1, 1, 0.55))
@@ -1664,10 +1765,13 @@ func _draw_bag_panel() -> void:
 				HORIZONTAL_ALIGNMENT_CENTER, b.size.x - 8.0, name_size, Color(0.86, 0.85, 0.77))
 
 
-	# Fixed equipment lives outside the draggable/material inventory grid.
-	var footer_center := Vector2(rect.position.x + 29.0, rect.end.y - 17.0)
-	Icons.item_icon(self, "Rope Gun", footer_center, 12.0)
-	_draw_text("ROPE GUN  •  PERMANENT", footer_center + Vector2(22.0, 4.0), 10, Color(0.76, 0.83, 0.70))
+	if _inspect_slot>=0 and not Inventory.slot_empty(_inspect_slot):
+		var inspected:=Inventory.slot_item(_inspect_slot)
+		var edible:=FOOD_RULES.edible(inspected) or inspected in ["Medkit","Can","Bandage","Solar Torch","Binoculars","Walkie Talkie"]
+		_draw_pause_button(_bag_use_rect,"USE" if inspected in ["Medkit","Can","Solar Torch","Binoculars","Walkie Talkie"] else ("USE / DRINK" if inspected=="Water" or inspected.ends_with("Water Can") else "USE / EAT"),edible)
+		_draw_pause_button(_bag_equip_rect,"HOLD TO PLANT" if PlantDB.crop_for_item(inspected)!="" else "HOLD ITEM",true)
+	else:
+		_draw_text("TAP AN ITEM FOR USE OPTIONS",Vector2(rect.position.x+24,rect.end.y-18),12,Color(0.8,0.84,0.75))
 
 
 func _draw_drag_ghost() -> void:

@@ -11,6 +11,8 @@ var target := Vector3.ZERO
 var player: Node3D
 var _tool: Node3D
 var _view_tool: Node3D
+var _left_tool: Node3D
+var _construction_idle := false
 var _held: Node3D
 var _held_item := ""
 var _label: Label
@@ -21,7 +23,9 @@ const LABELS := {"cast":"CASTING LINE", "reel":"REELING IN", "chop":"CHOPPING TI
 	"scoop":"GATHERING EARTH", "plant":"PLANTING SEED", "water":"WATERING SOIL",
 	"build":"ASSEMBLING", "craft":"CRAFTED", "eat":"EATING", "drink":"DRINKING",
 	"bandage":"BANDAGING", "strike":"SPEAR THRUST", "bow":"RELEASING ARROW", "door":"OPENING", "install":"FITTING EQUIPMENT",
-	"hook":"LAUNCHING HOOK", "fire":"TENDING FIRE"}
+	"hook":"LAUNCHING HOOK", "fire":"TENDING FIRE", "fill":"FILLING CAN",
+	"battery":"REPLACING BATTERY", "radio":"RADIO TRANSMISSION", "look":"RAISING BINOCULARS",
+	"solar":"RAISING SOLAR PANEL", "switch":"POWER SWITCH"}
 
 func _ready() -> void:
 	player=get_parent() as Node3D
@@ -48,6 +52,7 @@ func _ready() -> void:
 
 func play(action: String, seconds: float, at: Vector3) -> void:
 	if not LABELS.has(action):return
+	_construction_idle = false
 	kind=action;duration=maxf(seconds,0.15);elapsed=0;target=at
 	_label.text=LABELS[action];_bar.value=0;_panel.show()
 	_clear_tools()
@@ -56,6 +61,13 @@ func play(action: String, seconds: float, at: Vector3) -> void:
 		player.add_child(_tool);GRIP.attach(_tool,player.get_node("Body"))
 		_tool.get_node("AnimatedHandGrip").set("grip_offset",Vector3.ZERO)
 		_tool.get_node("AnimatedHandGrip").set("animated_tool",true)
+		if action == "build":
+			_left_tool = Node3D.new();_left_tool.name="ConstructionTimber"
+			ART.box(_left_tool,Vector3(0,0,-0.08),Vector3(0.12,0.07,0.44),MAT.make(MAT.Kind.WOOD,Color(0.47,0.29,0.12),0.9))
+			player.add_child(_left_tool);GRIP.attach(_left_tool,player.get_node("Body"))
+			var grip := _left_tool.get_node("AnimatedHandGrip")
+			grip.set("wrist",grip.get("skeleton").find_bone("Wrist.L"))
+			grip.set("animated_tool",true)
 	if action in ["chop","build","craft","scoop","grab","pick","harvest","plant","door"]:
 		_view_tool=_make_tool(action) if action in ["chop","build","craft","scoop"] else Node3D.new()
 		var hand := preload("res://models/human_hand.glb").instantiate() as Node3D
@@ -64,34 +76,47 @@ func play(action: String, seconds: float, at: Vector3) -> void:
 			var left := hand.duplicate() as Node3D
 			left.scale.x=-1.0;left.position.x=-0.36;left.position.z=-0.08
 			_view_tool.add_child(left)
+		if action == "build":
+			var timber := ART.box(_view_tool,Vector3(-0.36,-0.02,-0.10),Vector3(0.12,0.07,0.44),MAT.make(MAT.Kind.WOOD,Color(0.47,0.29,0.12),0.9))
+			timber.name="ConstructionTimber"
 		player.get_node("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist").add_child(_view_tool)
 		_view_tool.scale=Vector3.ONE*0.85
 
 func stop() -> void:
+	_construction_idle = false
 	kind="";_panel.hide();_clear_tools()
 	if is_instance_valid(player.get("_hand_item")):player.get("_hand_item").visible=true
 	if is_instance_valid(player.get("_third_person_launcher")):player.get("_third_person_launcher").visible=int(player.get("cam_mode"))==1
 
 func _clear_tools() -> void:
-	for tool in [_tool,_view_tool]:
+	for tool in [_tool,_view_tool,_left_tool]:
 		if is_instance_valid(tool): tool.hide();tool.queue_free()
-	_tool=null;_view_tool=null
+	_tool=null;_view_tool=null;_left_tool=null
 
 func _process(delta: float) -> void:
-	if not kind.is_empty():
+	var construction: bool = bool(player.get("build_mode")) or is_instance_valid(player.get("_editing"))
+	if (construction and kind not in ["","build"]) or (not construction and kind=="build"):stop()
+	if _construction_idle and not construction: stop()
+	if not kind.is_empty() and not _construction_idle:
 		elapsed+=delta
 		_bar.value=clampf(elapsed/duration,0,1)
 		if elapsed>=duration:stop()
+	if construction and kind.is_empty():
+		play("build",0.75,Vector3.ZERO)
+		_construction_idle = true
+		elapsed = 0.35
+		_panel.hide()
 	_sync_held()
 	var first := int(player.get("cam_mode"))==0
 	if is_instance_valid(_tool):_tool.visible=not first
+	if is_instance_valid(_left_tool):_left_tool.visible=not first
 	if is_instance_valid(_view_tool):
 		_view_tool.visible=first
 		var pose := sample_pose()
 		_view_tool.position=pose.view_pos;_view_tool.rotation=pose.view_rot
 	var hand := player.get("_hand_item") as Node3D
 	if is_instance_valid(hand):hand.visible=not is_instance_valid(_view_tool)
-	if is_instance_valid(_held):_held.visible=not first and not is_instance_valid(_tool) and not bool(player.get("build_mode"))
+	if is_instance_valid(_held):_held.visible=not first and not is_instance_valid(_tool) and not construction
 	if is_instance_valid(player.get("_third_person_launcher")) and kind in ["chop","build","craft","scoop","grab","pick","harvest","plant"]:
 		player.get("_third_person_launcher").visible=false
 
@@ -101,7 +126,7 @@ func _sync_held() -> void:
 	_held_item=item
 	if is_instance_valid(_held):_held.hide();_held.queue_free()
 	_held=null
-	if item in ["","Rope","Torch"]:return
+	if item in ["","Rope","Torch","Burning Torch"]:return
 	var hand := player.get("_hand_item") as Node3D
 	if not is_instance_valid(hand):_held_item="";return
 	_held=Node3D.new();_held.name="ThirdPersonHeldItem";player.add_child(_held)
@@ -112,7 +137,7 @@ func _sync_held() -> void:
 	_held.get_node("AnimatedHandGrip").set("grip_offset",_item_grip(item))
 	_held.get_node("AnimatedHandGrip").set("animated_tool",true)
 	# Bulky food sits against the palm; handles pass between curled fingers.
-	_held.get_node("AnimatedHandGrip").set("palm_clearance",0.065 if item in ["Stone","Coconut","Banana","Fish","Cooked Fish","Tomato","Potato","Baked Potato"] else 0.0)
+	_held.get_node("AnimatedHandGrip").set("palm_clearance",0.065 if item in ["Stone","Coconut","Banana","Fish","Cooked Fish","Tomato","Potato","Baked Potato","Onion"] else 0.0)
 
 func _item_grip(item: String) -> Vector3:
 	match item:
@@ -120,7 +145,7 @@ func _item_grip(item: String) -> Vector3:
 		"Water":return Vector3(0,-0.005,-0.20)
 		"Wood","Metal","Spear","Sail Kit":return Vector3(0,-0.01,-0.04)
 		"Plastic":return Vector3(0.02,0.01,-0.25)
-		"Carrot","Tomato","Potato","Baked Potato","Bandage":return Vector3(0,0,-0.2)
+		"Carrot","Tomato","Potato","Baked Potato","Onion","Bandage":return Vector3(0,0,-0.2)
 		"Stone":return Vector3(0,-0.02,-0.19)
 		"Sand","Soil":return Vector3(0,-0.04,-0.22)
 		"Barrel":return Vector3(0,-0.08,-0.22)
@@ -136,6 +161,20 @@ func sample_pose() -> Dictionary:
 	var view_rot := Vector3.ZERO
 	var torso := Vector3.ZERO
 	match kind:
+		"fill":
+			var dip:=sin(t*PI)
+			right=Vector3(.19,-.15-dip*.35,-.45);left=Vector3(-.17,-.15,-.38)
+			view_pos=Vector3(-.05,-.25*dip,-.15*dip);view_rot.x=.4*dip;torso.x=.25*dip
+		"battery":
+			var pull := sin(t*PI)
+			right=Vector3(0.13,0.24,-0.31)
+			left=Vector3(-0.05,0.18,-0.31).lerp(Vector3(-0.20,0.05,-0.15),pull)
+			view_pos=Vector3(-0.12,0.07,0.08);view_rot=Vector3(-0.25,0.12,0.18*pull)
+		"radio","look","solar","switch":
+			var lift := sin(t*PI)
+			right=Vector3(0.17,0.22,-0.32).lerp(Vector3(0.11,0.57,-0.22),lift)
+			left=Vector3(-0.17,0.25,-0.31)
+			view_pos=Vector3(-0.08*lift,0.16*lift,0.09*lift);view_rot.x=-0.20*lift
 		"chop":
 			var hit := smoothstep(0.32,0.57,t)
 			right=Vector3(0.34,0.58,-0.08).lerp(Vector3(0.18,-0.12,-0.59),hit)

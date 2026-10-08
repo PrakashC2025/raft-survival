@@ -20,9 +20,11 @@ func _populate() -> void:
 			break
 	var saved: Variant = _saved
 	for island in get_tree().get_nodes_in_group("island"):
-		if not island is Node3D:
+		if not is_instance_valid(island) or not island is Node3D:
 			continue
 		for index in range(4):
+			if not is_instance_valid(island):
+				break
 			if not is_inside_tree() or not is_instance_valid(player) or player.get_world_3d() == null:
 				return
 			var from := (island as Node3D).global_position + Vector3(-3 + index * 2, 35, 2.5 + index % 2 * 2)

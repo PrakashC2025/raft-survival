@@ -5,6 +5,7 @@
 [ext_resource type="Shader" path="res://shaders/wood_planks.gdshader" id="2_wood"]
 
 [ext_resource type="Script" path="res://scripts/construction_visual.gd" id="visual_details"]
+[ext_resource type="Script" path="res://scripts/roof_opening.gd" id="opening"]
 [ext_resource type="Texture2D" path="res://textures/construction/timber_photographic_atlas.png" id="timber_atlas"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_ybjjv"]
@@ -49,6 +50,7 @@ material = SubResource("mat_seam")
 size = Vector3(0.03, 0.005, 2)
 
 [node name="Roof" type="StaticBody3D" unique_id=2024638497]
+script = ExtResource("opening")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=18223137]
 shape = SubResource("BoxShape3D_ybjjv")

@@ -23,8 +23,10 @@ func _run() -> void:
 	var starting_buses := AudioServer.bus_count
 	change_scene_to_file("res://scenes/main.tscn")
 	await scene_changed
-	for frame in range(600):
-		await physics_frame
+	# Each field has a 0.5 ms share; diagnostics observed 1,720 render frames
+	# through all rays/filling on a busy desktop. Wait on actual readiness.
+	for frame in range(2400):
+		await process_frame
 		if current_scene.get_node_or_null("Island/IslandGrass/GrassField") != null:
 			break
 	for frame in range(360):
@@ -124,6 +126,8 @@ func _run() -> void:
 	var field := island.get_node_or_null("IslandGrass/GrassField") as MultiMeshInstance3D
 	check(field != null and field.multimesh.mesh.get_faces().size() == 72, "Realistic grass GLB stays within its 24-triangle tuft budget")
 	if field == null:
+		for node in current_scene.find_children("IslandGrass","",true,false):
+			print("GRASS DIAGNOSTIC: ",node.get_path()," ",node._prepare_phase," ",node._prepare_progress)
 		quit(1)
 		return
 	var grass_material := field.material_override as ShaderMaterial

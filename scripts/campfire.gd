@@ -84,6 +84,9 @@ func interact_survival(player: Node) -> void:
 	if _preview:
 		return
 	var item := str(player.get("active_item"))
+	if burning and fuel>0 and item!="Wood":
+		player.get_node("SurvivalServices").call("open_cooking",self)
+		return
 	if exposed_to_rain():
 		player.call("_hud_toast", "FIRE IS WET · BUILD A ROOF")
 	elif not burning or item == "Wood":
@@ -93,15 +96,6 @@ func interact_survival(player: Node) -> void:
 			burning = true
 			player.call("play_action","fire",0.8,global_position)
 			player.call("_hud_toast", "FIRE FUELLED · +90 SECONDS")
-	elif cook_remaining > 0.0:
-		player.call("_hud_toast", "COOKING · %d SECONDS" % ceili(cook_remaining))
-	elif COOKED.has(item) and Inventory.has(item, 1):
-		cook_item = item
-		cook_remaining = 12.0
-		player.call("play_action","fire",0.9,global_position)
-		player.call("_hud_toast", "COOKING " + item.to_upper())
-	else:
-		player.call("_hud_toast", "SELECT RAW FOOD TO COOK · WOOD TO REFUEL")
 	player.call("_queue_save")
 
 func _process(delta: float) -> void:
@@ -120,23 +114,26 @@ func _process(delta: float) -> void:
 		if cook_remaining > 0.0:
 			cook_remaining = maxf(0, cook_remaining - delta)
 			if cook_remaining <= 0.0:
-				if not Inventory.has(cook_item, 1):
-					cook_item = ""
-				elif Inventory.try_exchange({cook_item: 1}, {COOKED[cook_item]: 1}):
-					var player := get_tree().get_first_node_in_group("player")
-					if player != null:
-						player.call("_hud_toast", "MEAL COOKED · " + str(COOKED[cook_item]).to_upper())
-					cook_item = ""
+				if Inventory.has(cook_item, 1):
+					if Inventory.try_exchange({cook_item: 1}, {COOKED[cook_item]: 1}):
+						var player := get_tree().get_first_node_in_group("player")
+						if player != null:
+							player.call("_hud_toast", "MEAL COOKED · " + str(COOKED[cook_item]).to_upper())
+						cook_item = ""
+					else:
+						cook_remaining = 1.0 # full bag: retry without losing the raw food
 				else:
-					cook_remaining = 1.0 # full bag: retry without losing the raw food
+					cook_item = ""
 	if fuel <= 0.0:
 		burning = false
 	_flames.visible = burning
-	_light.visible = burning
+	_light.visible = burning and get_meta("light_allowed",true)
 	_light.light_energy = 1.15 + sin(Time.get_ticks_msec() * 0.008) * 0.13
 
 func save_survival_state() -> Dictionary:
 	return {"fuel": fuel, "burning": burning, "cook": cook_remaining, "item": cook_item}
+
+func interaction_caption() -> String:return "CLICK TO COOK" if burning and fuel>0 else "ADD FIREWOOD"
 
 func restore_survival_state(data: Dictionary) -> void:
 	fuel = clampf(float(data.get("fuel", 180)), 0, 900)

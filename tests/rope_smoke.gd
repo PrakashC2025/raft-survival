@@ -99,6 +99,7 @@ func _run() -> void:
 	var after: Vector3=rope.call("_flight_position",float(rope.get("_throw_dist"))*0.6)
 	var dt: float=float(rope.get("_flight_duration"))*0.1
 	check(absf((before.y-2.0*middle.y+after.y)/(dt*dt)+float(rope.get("hook_gravity")))<0.002,"Hook flight has constant downward gravity")
+	check(is_equal_approx(float(rope.get("hook_gravity")),9.81),"Hook uses Earth gravity at 9.81 metres per second squared")
 	for frame in range(200):
 		if int(rope.get("_state")) != 1:
 			break
@@ -158,11 +159,18 @@ func _run() -> void:
 	check(int(inventory.call("total", "Rope")) == 0 and player.get("_rope_launcher") != null, "Spending every rope material cannot remove the permanent gun")
 	player.call("select_hotbar_slot", 5)
 	controls.call("_sync_mode")
-	check(button.visible, "CAST remains available with another item selected and no rope materials")
+	check(not button.visible, "Selecting another item hides CAST without removing the gun")
+	var hud: Control = player.get_node("CanvasLayer/SurvivalHUD")
+	hud.call("_compute_layout")
+	var gun_tap := InputEventScreenTouch.new()
+	gun_tap.index=6;gun_tap.pressed=true;gun_tap.position=hud.get("_rope_slot_rect").get_center()
+	root.push_input(gun_tap,true)
+	gun_tap.pressed=false;root.push_input(gun_tap,true)
+	controls.call("_sync_mode")
 	await process_frame
 	root.push_input(down, true)
 	rope.call("_handle_idle", 0.01)
-	check(player.get("rope_gun_selected") and player.get("_rope_launcher") != null and rope.get("_is_charging"), "CAST re-equips the permanent gun and charges with zero rope")
+	check(player.get("rope_gun_selected") and player.get("_rope_launcher") != null and rope.get("_is_charging"), "First quick slot equips the permanent gun and CAST charges with zero rope")
 	root.push_input(up, true)
 	controls.call("reset_input")
 	rope.call("_force_cancel")
@@ -194,7 +202,7 @@ func _run() -> void:
 	player = get_first_node_in_group("player")
 	controls = player.get_node("CanvasLayer/MobileControls")
 	controls.call("_sync_mode")
-	check((controls.get("_btn_rope") as Button).visible and player.call("equip_rope_gun"), "Legacy saves also receive an always-available gun without changing their slots")
+	check(not (controls.get("_btn_rope") as Button).visible and player.call("equip_rope_gun"), "Legacy saves retain the permanent gun without a shortcut over other items")
 	print("ROPE SMOKE: %d checks, %d failures" % [checks, failures])
 	var ambience := current_scene.get_node_or_null("OceanAmbience") as AudioStreamPlayer
 	if ambience != null:

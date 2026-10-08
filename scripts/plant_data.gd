@@ -2,8 +2,8 @@ extends Node
 ## Autoload registered in Project Settings as: Path: res://plant_data.gd  Node Name: PlantDB
 ## Central registry of every plant type in the game.
 ## TO ADD A NEW PLANT: copy one block inside _build_defs() and edit the
-## values. Nothing else in the codebase needs to change for a normal
-## ROOT or FRUIT_TREE plant.
+## values. Register edible item aliases/nutrition and any supplied model
+## alongside the other produce when adding a new crop.
 
 const Category = {
 	ROOT = "ROOT",
@@ -24,7 +24,7 @@ func _ready() -> void:
 
 func _build_defs() -> void:
 	defs.clear()
-	for crop in ["Carrot", "Tomato"]:
+	for crop in ["Carrot", "Tomato", "Onion"]:
 		_add({"id": crop, "display_name": crop, "category": Category.ROOT,
 			"harvest_type": HarvestType.DIG, "seed_item": crop + " Seed", "yield_item": crop,
 			"yield_min": 2, "yield_max": 4, "grow_stage_time": [20.0, 35.0, 25.0],
@@ -59,9 +59,9 @@ func _build_defs() -> void:
 		"grow_stage_time": [30.0, 50.0, 40.0],
 		"fruit_regrow_time": 70.0,
 		"fruit_count": 4,
-		"trunk_height": 2.6,
-		"trunk_radius": 0.14,
-		"canopy_radius": 1.1,
+		"trunk_height": 5.8,
+		"trunk_radius": 0.22,
+		"canopy_radius": 2.0,
 		"trunk_color": Color(0.5, 0.36, 0.2),
 		"canopy_color": Color(0.16, 0.5, 0.22),
 		"fruit_color": Color(0.42, 0.3, 0.16),
@@ -100,7 +100,12 @@ func _build_defs() -> void:
 
 
 func _add(d: Dictionary) -> void:
+	d["planter_categories"].append("ground")
 	defs[d["id"]] = d
+
+func crop_for_item(item: String) -> String:
+	var id := item.trim_suffix(" Seed")
+	return id if defs.has(id) else ""
 
 
 func get_def(id: String) -> Dictionary:

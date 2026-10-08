@@ -9,6 +9,8 @@ const PICKUP: PackedScene = preload("res://scenes/food_pickup.tscn")
 var _time := 0.0
 var _birds: Array[Dictionary] = []
 var _destinations: Array[Vector3] = []
+var FADE_START_DISTANCE := 80.0
+var FADE_END_DISTANCE := 120.0
 
 func _ready() -> void:
 	for island in get_tree().get_nodes_in_group("island"):
@@ -42,7 +44,8 @@ func _ready() -> void:
 		_birds.append({"root": bird, "target": target, "left": model.find_child("WingLeft", true, false),
 			"right": model.find_child("WingRight", true, false), "phase": TAU * float(i) / float(maxi(bird_count, 1)),
 			"radius": orbit_radius + i % 2 * 2.0, "speed": 0.10 + i % 3 * 0.018,
-			"height": flight_height + i % 2 * 1.2, "state": "flying", "cooldown": 0.0, "fall_speed": 0.0})
+			"height": flight_height + i % 2 * 1.2, "state": "flying", "cooldown": 0.0, "fall_speed": 0.0,
+			"origin": global_position, "travel": 0.0})
 
 func hit_bird(index: int) -> bool:
 	if index < 0 or index >= _birds.size() or _birds[index]["state"] != "flying":
@@ -83,7 +86,24 @@ func _physics_process(delta: float) -> void:
 				data["fall_speed"] = 0.0
 			continue
 		var phase := _time * float(data["speed"]) + float(data["phase"])
-		bird.global_position = flight_position(data,_time)
+		var pos := flight_position(data,_time)
+		# Track travel distance from origin for fade-out
+		var origin := global_position
+		if data.has("origin"):
+			origin = Vector3(data["origin"])
+		var travel := (pos - origin).length()
+		data["travel"] = travel
+		# Fade out when bird travels far from origin
+		if travel > FADE_START_DISTANCE:
+			var t := clampf((travel - FADE_START_DISTANCE) / (FADE_END_DISTANCE - FADE_START_DISTANCE), 0.0, 1.0)
+			if bird is Node and bird.is_inside_tree():
+				bird.set("modulate", Color(1.0, 1.0, 1.0, 1.0 - t))
+			if t >= 1.0:
+				bird.visible = false
+		else:
+			if bird is Node and bird.is_inside_tree():
+				bird.set("modulate", Color(1.0, 1.0, 1.0, 1.0))
+		bird.global_position = pos
 		var tangent := (flight_position(data,_time+0.25)-bird.global_position).normalized()
 		bird.rotation = Vector3(0.0, atan2(-tangent.x, -tangent.z), sin(phase * 2.0) * 0.10)
 		var flap := sin(_time * 6.4 + float(data["phase"])) * 0.42

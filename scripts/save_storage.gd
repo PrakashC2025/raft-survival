@@ -5,7 +5,61 @@ extends RefCounted
 const KEY_PATH := "user://raft_save.key"
 const FORMAT := "RAFT-AES256-1"
 const MAX_BYTES := 16 * 1024 * 1024
+const NUMBER_FIELDS := ["version","health","hunger","thirst","oxygen","game_time","game_day","active_slot","calendar_day","calendar_month","calendar_year","raft_upgrade_tier","island_layout","level","stamina","wetness","torch_fuel","torch_end_time","fuel","end_time","cook","water","seconds","transmissions","moisture","stage","timer","r","g","e","cycle","growth","wait","size","yaw","count","remaining","duration","saved_at","rain_remaining","dry_remaining","respawn","next_check"]
+const OBJECT_FIELDS := ["progression","electronics","survival_services","wild_plants","island_groves","wildlife","events","cost","survival","station_job","plant","weather"]
+const ARRAY_FIELDS := ["slots","built","ground_crops","drops","contents","records","fruits","p","at","x"]
 static var last_error := ""
+
+static func _number(value: Variant) -> bool:
+	return (value is int or value is float) and is_finite(float(value)) and absf(float(value))<1.0e12
+
+static func _valid_tree(value: Variant,depth: int=0) -> bool:
+	if depth>16:return false
+	if value is float:return _number(value)
+	if value is String:return value.length()<=512
+	if value is Array:
+		if value.size()>8192:return false
+		for entry in value:
+			if not _valid_tree(entry,depth+1):return false
+	elif value is Dictionary:
+		if value.size()>8192:return false
+		for key in value:
+			if not key is String or key.length()>512:return false
+			var child: Variant=value[key]
+			if key in NUMBER_FIELDS and not _number(child):return false
+			if key in OBJECT_FIELDS and not child is Dictionary:return false
+			if key in ARRAY_FIELDS and not child is Array:return false
+			if key=="kind" and not (child is String or _number(child)):return false
+			if key=="charge" and not (_number(child) or (child is Dictionary and value.get("installed") is Dictionary)):return false
+			if key in ["p","at","x"]:
+				for coordinate in child:
+					if not _number(coordinate):return false
+			if key in ["cost","events"]:
+				for amount in child.values():
+					if not _number(amount):return false
+			if not _valid_tree(child,depth+1):return false
+	return true
+
+static func _valid_save(data: Dictionary) -> bool:
+	if not _valid_tree(data) or not data.get("slots") is Array:return false
+	if data.get("version",1)!=1 or data.slots.size()>30:return false
+	for field in ["calendar_year","calendar_month","calendar_day","game_day"]:
+		var maximum:=9999 if field=="calendar_year" else (12 if field=="calendar_month" else (31 if field=="calendar_day" else 9999999))
+		if data.has(field) and (float(data[field])<1 or float(data[field])>maximum):return false
+	for field in ["island_groves","wild_plants"]:
+		for island in data.get(field,{}).values():
+			if not island is Dictionary:return false
+			if field=="island_groves":
+				for plant in island.values():
+					if not plant is Dictionary:return false
+	for animal in data.get("wildlife",{}).values():
+		if not animal is Dictionary:return false
+	var electronics: Dictionary=data.get("electronics",{})
+	for field in ["charge","installed","enabled"]:
+		if not electronics.get(field,{}) is Dictionary:return false
+	for amount in electronics.get("charge",{}).values():
+		if not _number(amount):return false
+	return true
 
 static func _authentication_key(key: PackedByteArray) -> PackedByteArray:
 	return ("raft-save-auth:" + Marshalls.raw_to_base64(key)).sha256_buffer()
@@ -65,7 +119,7 @@ static func read_one(path: String) -> Dictionary:
 				return {}
 		plain.resize(plain.size() - padding)
 		parsed = JSON.parse_string(plain.get_string_from_utf8())
-	if not parsed is Dictionary or not parsed.get("slots", null) is Array:
+	if not parsed is Dictionary or not _valid_save(parsed):
 		return {}
 	if parsed.has("built") and not parsed.built is Array:
 		return {}

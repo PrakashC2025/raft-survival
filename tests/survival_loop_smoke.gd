@@ -40,13 +40,13 @@ func _run() -> void:
 	player.set_process(false)
 	player.set_physics_process(false)
 	check(int(inv.call("total", "Carrot Seed")) == 4 and int(inv.call("total", "Tomato Seed")) == 4, "New Game grants the new crop seeds")
-	check(player.BUILD_RECIPE_NAMES.size() == 20 and player.BUILD_RECIPE_NAMES[3] == "Stairs" and player.BUILD_RECIPE_NAMES[16] == "HalfWall" and player.BUILD_RECIPE_NAMES[18] == "WallTorch" and player.BUILD_RECIPE_NAMES[19] == "SandFilter", "New structures preserve legacy build indexes")
+	check(player.BUILD_RECIPE_NAMES.size() == 22 and player.BUILD_RECIPE_NAMES[3] == "Stairs" and player.BUILD_RECIPE_NAMES[16] == "HalfWall" and player.BUILD_RECIPE_NAMES[18] == "WallTorch" and player.BUILD_RECIPE_NAMES[19] == "SandFilter" and player.BUILD_RECIPE_NAMES[20]=="StorageBox" and player.BUILD_RECIPE_NAMES[21]=="CookingSetup", "New structures append without changing legacy build indexes")
 	var hud := player.get_node("CanvasLayer/SurvivalHUD")
 	hud.set("_craft_open", true)
 	hud.call("_compute_layout")
 	var cards: Array = hud.get("_craft_card_rects")
 	var panel: Rect2 = hud.get("_craft_panel_rect")
-	check(cards.size() == 10 and panel.encloses(cards[9]), "Portable survival crafting cards fit inside the panel")
+	check(cards.size() == hud.CRAFT_PAGE_SIZE and panel.encloses(cards[-1]), "Paged crafting cards fit inside the panel with room for material confirmation")
 	hud.set("_craft_open", false)
 	hud.call("_compute_layout")
 	# Exercise real placement and saved state, rather than only instantiating props.
@@ -186,7 +186,7 @@ func _run() -> void:
 	var seeds_before := int(inv.call("total", "Tomato Seed"))
 	plant.call("_do_dig")
 	await create_timer(0.5).timeout
-	check(int(inv.call("total", "Tomato")) >= 2 and int(inv.call("total", "Tomato Seed")) == seeds_before + 2, "Harvest delivers food and renewable seeds")
+	check(int(inv.call("total", "Tomato")) >= seeds_before+4 and int(inv.call("total", "Tomato")) <= seeds_before+6, "Harvest delivers edible tomatoes that can also be replanted")
 	var fire := (load("res://scenes/bonfire.tscn") as PackedScene).instantiate()
 	current_scene.add_child(fire)
 	fire.position = Vector3(1005, 4.0, 1005)
@@ -207,9 +207,11 @@ func _run() -> void:
 	fire.burning = true
 	inv.call("add", "Fish", 2)
 	player.set("active_item", "Fish")
+	player.global_position=fire.global_position+Vector3(0,1,1.5)
 	fire.call("interact_survival", player)
-	check(fire.cook_remaining > 0, "Selected raw fish starts cooking")
-	fire.call("_process", 12.1)
+	var service:=player.get_node("SurvivalServices")
+	check(service.menu_open and service.start_cooking("Cooked Fish"), "Campfire opens recipes and starts selected fish cooking")
+	fire.get_node("StationJob").call("advance",12.1)
 	check(int(inv.call("total", "Cooked Fish")) == 1 and int(inv.call("total", "Fish")) == 1, "Cooking exchanges exactly one raw fish for a cooked meal")
 	var fire_state: Dictionary = fire.call("save_survival_state")
 	fire.fuel = 0

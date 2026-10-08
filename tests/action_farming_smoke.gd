@@ -26,6 +26,7 @@ func _run() -> void:
 	player.get_node("RopeSystem").set_physics_process(false)
 	await frames(100)
 	inventory.infinite=false
+	inventory.call("remove","Soil",inventory.call("total","Soil"))
 	check(not inventory.call("can_afford","PlanterPot"),"Wood alone cannot build a soil-less planter")
 	inventory.call("add","Soil",2)
 	var wood: int=inventory.call("total","Wood")

@@ -48,4 +48,13 @@ models/*.glb
 !models/diving_tank.glb
 
 !models/survivalist.glb
+!models/banana_plant.glb
+!models/carrot_plant.glb
+!models/onion_sprout.glb
+!models/onion_young.glb
+!models/onion_growing.glb
+!models/onion_plant.glb
+!models/onion_bulb.glb
+!models/island_lowpoly_plants.glb
+!models/portable_electronics.glb
 __pycache__/

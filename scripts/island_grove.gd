@@ -70,6 +70,7 @@ func _plant() -> void:
 			tree.name = "Banana%d" % index if index < 2 else "Coconut%d" % index
 		else:
 			tree = VISUAL.create(1 if index%2 == 0 else 2)
+			tree.name = "WildTree%d" % index
 		add_child(tree)
 		tree.global_position = Vector3(hit.position)
 		tree.rotation.y = float(index)*2.4

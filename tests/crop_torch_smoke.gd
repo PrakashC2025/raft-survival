@@ -70,7 +70,7 @@ func _run() -> void:
 	inventory.call("add","Torch",1)
 	player.active_item="Torch"
 	var progress:=player.get_node("SurvivalProgression")
-	progress.set_process(false);progress.torch_fuel=150.0
+	progress.set_process(false);progress.restore_state({"torch_fuel":150.0})
 	var owned: int=inventory.call("total","Torch")
 	progress.call("use_torch")
 	var mounted:=built.find_child("WallTorch_*",false,false) as Node3D
@@ -99,7 +99,7 @@ func _run() -> void:
 	check(mounted.burning and mounted.fuel==150.0,"Mounted light/fuel restores from saved state")
 	player.active_item=""
 	mounted.call("interact_survival",player)
-	check(int(inventory.call("total","Torch"))==owned and progress.torch_fuel==150.0,"Taking wall torch returns inventory item and its flame")
+	check(int(inventory.call("total","Torch"))+int(inventory.call("total","Burning Torch"))==owned and progress.torch_fuel==150.0,"Taking wall torch returns a Burning Torch and its flame")
 	await frames()
 	inventory.loaded_meta["built"]=[torch_saved]
 	player.call("_restore_built_pieces")
@@ -108,6 +108,7 @@ func _run() -> void:
 	check(restored!=null and restored.burning and restored.fuel>149.0,"Continue rebuilds the mounted torch with its saved flame and fuel")
 	progress.torch_fuel=0.0
 	inventory.call("remove","Torch",int(inventory.call("total","Torch")))
+	inventory.call("remove","Burning Torch",int(inventory.call("total","Burning Torch")))
 	inventory.call("add","Stone",60000)
 	var remaining: float=restored.fuel
 	player.active_item=""

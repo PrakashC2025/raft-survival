@@ -7,7 +7,8 @@ var aiming := false
 var _normal_fov := 75.0
 var cooldown := 0.0
 var _arrows: Array[Dictionary] = []
-var _arrow_mesh: CylinderMesh
+var _arrow_glb: PackedScene = preload("res://3d models/Wooded_arrow/cc0_-_wooden_arrow.glb")
+var _arrow_mesh: Node3D
 var _arrow_material: StandardMaterial3D
 var _bobber: MeshInstance3D
 var _line: MeshInstance3D
@@ -19,11 +20,7 @@ var _catch_visual: Node3D
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	player = get_parent() as CharacterBody3D
-	_arrow_mesh = CylinderMesh.new()
-	_arrow_mesh.top_radius = 0.006
-	_arrow_mesh.bottom_radius = 0.006
-	_arrow_mesh.height = 0.65
-	_arrow_mesh.radial_segments = 6
+	_arrow_mesh = _arrow_glb.instantiate() as Node3D
 	_arrow_material = StandardMaterial3D.new()
 	_arrow_material.albedo_color = Color(0.40, 0.24, 0.10)
 	_arrow_material.roughness = 0.9
@@ -86,51 +83,46 @@ func _physics_process(delta: float) -> void:
 			_fire()
 	_update_cast()
 	for i in range(_arrows.size() - 1, -1, -1):
-		var arrow: Dictionary = _arrows[i]
-		var node := arrow["node"] as Node3D
-		arrow["life"] = float(arrow["life"]) - delta
-		var velocity: Vector3 = arrow["velocity"]
-		velocity += Vector3.DOWN * 9.8 * delta
-		arrow["velocity"] = velocity
-		var end := node.global_position + velocity * delta
-		var query := PhysicsRayQueryParameters3D.create(node.global_position, end, 3, [player.get_rid()])
-		query.collide_with_areas = true
-		var hit := player.get_world_3d().direct_space_state.intersect_ray(query)
-		if not hit.is_empty():
-			var target: Node = hit["collider"]
-			if target.is_in_group("huntable_bird"):
-				var flock: Node = target.get_meta("flock")
-				if flock.call("hit_bird", int(target.get_meta("bird_index"))):
-					player.call("_hud_toast", "BIRD HIT  •  COLLECT IT WHERE IT LANDS")
-			elif target.has_method("take_damage"):
-				target.call("take_damage", 30.0, player)
-			node.queue_free()
-			_arrows.remove_at(i)
-			continue
-		node.global_position = end
-		if velocity.length_squared() > 0.1:
-			node.look_at(end + velocity, Vector3.UP)
-		if float(arrow["life"]) <= 0.0 or end.y < -3.0:
-			node.queue_free()
-			_arrows.remove_at(i)
+			var arrow: Dictionary = _arrows[i]
+			var node := arrow["node"] as Node3D
+			arrow["life"] = float(arrow["life"]) - delta
+			var velocity: Vector3 = arrow["velocity"]
+			velocity += Vector3.DOWN * 9.8 * delta
+			arrow["velocity"] = velocity
+			var end := node.global_position + velocity * delta
+			var query := PhysicsRayQueryParameters3D.create(node.global_position, end, 3, [player.get_rid()])
+			query.collide_with_areas = true
+			var hit := player.get_world_3d().direct_space_state.intersect_ray(query)
+			if not hit.is_empty():
+				var target: Node = hit["collider"]
+				if target.is_in_group("huntable_bird"):
+					var flock: Node = target.get_meta("flock")
+					if flock.call("hit_bird", int(target.get_meta("bird_index"))):
+						player.call("_hud_toast", "BIRD HIT  •  COLLECT IT WHERE IT LANDS")
+				elif target.has_method("take_damage"):
+					target.call("take_damage", 30.0, player)
+				node.queue_free()
+				_arrows.remove_at(i)
+				continue
+			node.global_position = end
+			if velocity.length_squared() > 0.1:
+				node.look_at(end + velocity, Vector3.UP)
+			if float(arrow["life"]) <= 0.0 or end.y < -3.0:
+				node.queue_free()
+				_arrows.remove_at(i)
 
 func _fire() -> void:
 	var fraction := get_draw_fraction()
 	drawing = false
-	if not Inventory.has("Arrow", 1) or _arrows.size() >= 12:
+	if cooldown>0 or player.get("active_item")!="Bow" or Stats.health<=0 or _arrows.size() >= 12:
 		return
+	if not Inventory.try_exchange({"Arrow":1},{}):return
+	cooldown=.55
 	player.call("play_action","bow",0.45)
-	Inventory.remove("Arrow", 1)
-	cooldown = 0.45
 	var camera := player.get_node("CamPivot/SpringArm3D/Camera3D") as Camera3D
 	var root := Node3D.new()
 	root.name = "FlyingArrow"
-	var shaft := MeshInstance3D.new()
-	shaft.mesh = _arrow_mesh
-	shaft.material_override = _arrow_material
-	shaft.rotation.x = PI / 2.0
-	shaft.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	root.add_child(shaft)
+	root.add_child(_arrow_mesh.duplicate())
 	get_tree().current_scene.add_child(root)
 	root.global_position = camera.global_position - camera.global_basis.z * 0.35
 	_arrows.append({"node": root, "velocity": -camera.global_basis.z * lerpf(18.0, 38.0, fraction), "life": 4.0})
@@ -200,6 +192,7 @@ func _update_cast() -> void:
 	_line.mesh = surface.commit()
 
 func _exit_tree() -> void:
+	if is_instance_valid(_arrow_mesh):_arrow_mesh.free()
 	if is_instance_valid(_catch_visual):_catch_visual.queue_free()
 	if is_instance_valid(_bobber):
 		_bobber.queue_free()

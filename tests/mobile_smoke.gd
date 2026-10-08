@@ -72,6 +72,11 @@ func _run() -> void:
 	menu.call("_activate", 0)
 	await scene_changed
 	await process_frame
+	# New Game/Continue now hold gameplay input through actual restoration and
+	# setup. Exercise controls only after the real handoff releases them.
+	for frame in range(600):
+		if root.get_node_or_null("WakeHandoff")==null: break
+		await process_frame
 	var player := get_first_node_in_group("player")
 	check(player != null, "New Game enters playable world")
 	if player == null:
@@ -112,7 +117,7 @@ func _run() -> void:
 	check(Input.is_action_pressed("move_forward"), "Mobile preview preserves keyboard movement")
 	Input.action_release("move_forward")
 	check(player.call("_get_movement_direction", Vector2(0.0, 0.4)).length() < 0.5, "Joystick strength produces analog walking speed")
-	var action_pairs := [["_btn_jump", "jump"], ["_btn_run", "sprint"], ["_btn_use", "interact"], ["_btn_dive", "move_down"], ["_btn_rope", "rope_throw"], ["_btn_recall", "rope_cancel"], ["_btn_build", "build"], ["_btn_place", "place_build"], ["_btn_rotate", "rotate_build"], ["_btn_next", "cycle_build"], ["_btn_remove", "remove_build"]]
+	var action_pairs := [["_btn_jump", "jump"], ["_btn_run", "sprint"], ["_btn_use", "interact"], ["_btn_dive", "move_down"], ["_btn_rope", "rope_throw"], ["_btn_build", "build"], ["_btn_place", "place_build"], ["_btn_rotate", "rotate_build"], ["_btn_next", "cycle_build"], ["_btn_remove", "remove_build"]]
 	for pair in action_pairs:
 		for button in controls.get("_all_buttons"):
 			button.visible = false
@@ -232,7 +237,10 @@ func _run() -> void:
 	menu.call("_activate", 0)
 	await scene_changed
 	await process_frame
-	check(get_first_node_in_group("player") != null, "Continue enters the saved world")
+	for frame in range(600):
+		if root.get_node_or_null("WakeHandoff")==null: break
+		await process_frame
+	check(get_first_node_in_group("player") != null and get_first_node_in_group("player").is_physics_processing(), "Continue enters the saved playable world")
 	print("MOBILE SMOKE: %d checks, %d failures" % [checks, failures])
 	var ambience := current_scene.get_node_or_null("OceanAmbience") as AudioStreamPlayer
 	if ambience != null:

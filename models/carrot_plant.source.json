@@ -1,0 +1,11 @@
+{
+  "source": "3d models/carrot/carrot_plant.blend",
+  "sha256": "58ac210cd6ab666bcc1614a32e707eab4a65e2e5f5c5bc7d4f7e4c76ef0e07af",
+  "selected": "STAGE_5_ROOT botanical foliage and underground carrot; continuously scaled at runtime",
+  "triangles": 15034,
+  "surfaces": 9,
+  "materials": "Owner supplied flat botanical colours retained",
+  "excluded": "Preview soil, presentation lights/camera, earlier duplicate stage geometry and source animation",
+  "license": "Owner supplied blend; no license supplied and no CC0 claim",
+  "security": "Embedded text was inspected but never executed"
+}

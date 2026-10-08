@@ -1,0 +1,10 @@
+{
+  "source": "3d models/banana tree/Banana_Plant_01.fbx",
+  "sha256": "5665c7622b9e4e4b7697139cb0f5ca843f3b9573aed2239d5be09380a64a8dde",
+  "selected": "Banana_Plant_01_LOD1",
+  "triangles": 1998,
+  "surfaces": 2,
+  "materials": "Original botanical vertex colours; owner FBX referenced absent texture maps",
+  "excluded": "LOD0, LOD2, LOD3 billboard, UCX collider and missing external texture references",
+  "license": "Owner-supplied geometry; no license file supplied and no CC0 claim"
+}

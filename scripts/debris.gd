@@ -39,19 +39,21 @@ const BUOY_DAMPING: float = 3.0
 const WOOD_LOG_SCENE: PackedScene = preload("res://models/kenney_log.glb")
 const BARREL_SCENE: PackedScene = preload("res://models/kenney_barrel.glb")
 const STONE_SCENE: PackedScene = preload("res://models/kenney_rock_small.glb")
+const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
 var _visual_geometry: Array[GeometryInstance3D] = []
 
 # Each entry controls how "floaty" that item looks (rides higher/lower).
 const ITEM_PROFILES := {
-	"Wood":    {"mass": 2.0, "freeboard": 0.20, "color": Color(0.85, 0.65, 0.35)},
-	"Rope":    {"mass": 1.0, "freeboard": 0.05, "color": Color(0.75, 0.60, 0.35)},
-	"Plastic": {"mass": 0.6, "freeboard": 0.25, "color": Color(0.3, 0.7, 1.0)},
-	"Barrel":  {"mass": 6.0, "freeboard": 0.30, "color": Color(0.70, 0.45, 0.20)},
+	"Wood":    {"mass": 2.0, "freeboard": 0.07, "color": Color(0.85, 0.65, 0.35)},
+	"Rope":    {"mass": 1.0, "freeboard": 0.01, "color": Color(0.75, 0.60, 0.35)},
+	"Plastic": {"mass": 0.6, "freeboard": 0.08, "color": Color(0.3, 0.7, 1.0)},
+	"Barrel":  {"mass": 6.0, "freeboard": 0.08, "color": Color(0.70, 0.45, 0.20)},
 	"Stone":   {"mass": 4.0, "freeboard": 0.10, "color": Color(0.65, 0.65, 0.65)},
 	"Sponge":  {"mass": 0.3, "freeboard": 0.09, "color": Color(0.53,0.41,0.17)},
-	"Metal":   {"mass": 5.0, "freeboard": 0.15, "color": Color(0.80, 0.80, 0.85)},
+	"Metal":   {"mass": 5.0, "freeboard": 0.02, "color": Color(0.80, 0.80, 0.85)},
+	"Soil":    {"mass": 1.5, "freeboard": 0.08, "color": Color(0.32,0.22,0.12)},
 }
 
 func _ready() -> void:
@@ -66,6 +68,7 @@ func _ready() -> void:
 	_rot_speed = randf_range(-1.0, 1.0)
 
 	_apply_profile()
+	if is_instance_valid(_model_visual):RESOURCE_VISUAL.weather(_model_visual,item_name)
 
 	mass = mass_kg
 	linear_damp = 2.5
@@ -97,8 +100,17 @@ func is_fade_done() -> bool:
 func _apply_profile() -> void:
 	if not ITEM_PROFILES.has(item_name):
 		if item_name.ends_with(" Seed"):
-			_model_visual = RESOURCE_VISUAL.create(item_name)
-			add_child(_model_visual)
+			var crop:=item_name.trim_suffix(" Seed")
+			if crop in ["Potato","Tomato","Banana"]:
+				freeboard=0.025
+				_model_visual=preload("res://scripts/produce_visual.gd").create(crop)
+				_model_visual.scale=Vector3.ONE*1.7;add_child(_model_visual)
+			elif crop=="Coconut":
+				freeboard=0.10
+				_model_visual=_create_model_visual(COCONUT_SCENE,0.42)
+			else:
+				_model_visual = RESOURCE_VISUAL.create(item_name)
+				add_child(_model_visual)
 			(get_node("MeshInstance3D") as MeshInstance3D).visible = false
 			_cache_visual_geometry()
 			_set_visual_alpha(0.0)
@@ -118,10 +130,6 @@ func _apply_profile() -> void:
 			model_scene = BARREL_SCENE
 			target_size = 0.5
 			_set_collision_box_size(Vector3(0.46, 0.44, 0.46))
-		"Stone":
-			model_scene = STONE_SCENE
-			target_size = 0.48
-			_set_collision_box_size(Vector3(0.44, 0.24, 0.44))
 
 	if model_scene != null and mesh_instance != null:
 		_model_visual = _create_model_visual(model_scene, target_size)
@@ -130,7 +138,7 @@ func _apply_profile() -> void:
 			_cache_visual_geometry()
 			_set_visual_alpha(0.0)
 			return
-	if item_name in ["Rope", "Plastic", "Metal", "Sponge"] and mesh_instance != null:
+	if item_name in ["Rope", "Plastic", "Metal", "Sponge", "Soil", "Stone"] and mesh_instance != null:
 		_model_visual = RESOURCE_VISUAL.create(item_name)
 		add_child(_model_visual)
 		mesh_instance.visible = false
@@ -233,20 +241,23 @@ func _physics_process(delta: float) -> void:
 		return
 	if ocean != null:
 		var water_y: float = float(ocean.get_height(global_position))
+		var drift_velocity := linear_velocity
 
 		# ---- Vertical buoyancy: rest at the surface, follow the waves gently ----
 		var rest_y: float = water_y + freeboard
 		var y_error: float = rest_y - global_position.y
-		linear_velocity.y += (buoyancy * y_error - BUOY_DAMPING * linear_velocity.y) * delta
-		linear_velocity.y = clamp(linear_velocity.y, -max_vertical_speed, max_vertical_speed)
+		drift_velocity.y += (buoyancy * y_error - BUOY_DAMPING * drift_velocity.y) * delta
+		drift_velocity.y = clampf(drift_velocity.y, -max_vertical_speed, max_vertical_speed)
 
 		# ---- Horizontal current: one dominant direction + small variation ----
 		var dir: Vector3 = Vector3(current_direction.x, 0.0, current_direction.z).normalized()
 		var side: Vector3 = Vector3(-dir.z, 0.0, dir.x).normalized()
 		var target_velocity: Vector3 = dir * current_speed * _speed_variation + side * _side_drift
 		var k: float = 1.0 - exp(-3.0 * delta)
-		linear_velocity.x = lerpf(linear_velocity.x, target_velocity.x, k)
-		linear_velocity.z = lerpf(linear_velocity.z, target_velocity.z, k)
+		drift_velocity.x = lerpf(drift_velocity.x, target_velocity.x, k)
+		drift_velocity.z = lerpf(drift_velocity.z, target_velocity.z, k)
+		# Commit once rather than synchronizing the physics body four times.
+		linear_velocity = drift_velocity
 
 		# ---- Gentle natural tumble ----
 		var t: float = Time.get_ticks_msec() / 1000.0 + _wander_seed

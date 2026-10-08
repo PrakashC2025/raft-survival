@@ -35,6 +35,7 @@ func press_p() -> void:
 	event.pressed = true
 	Input.parse_input_event(event)
 	player.call("_poll_gameplay_actions")
+	player.call("_tick_build_action",0.8)
 	var release := event.duplicate() as InputEventKey
 	release.pressed = false
 	Input.parse_input_event(release)
@@ -58,10 +59,18 @@ func _run() -> void:
 	player.set_process(false)
 	player.set_physics_process(false)
 	raft.set_physics_process(false)
+	raft.rotation=Vector3(0,raft.rotation.y,0)
+	await physics_frame
+	await process_frame
 	camera = player.get("camera") as Camera3D
 	inventory.call("remove", "Wood", inventory.call("total", "Wood"))
 	inventory.call("add", "Wood", 15)
 	player.call("_toggle_build")
+	raft.set_physics_process(true)
+	for unused in range(3):await physics_frame
+	raft.set_physics_process(false)
+	await physics_frame
+	await process_frame
 	var container := raft.get_node("BuiltPieces")
 	var before_count := container.get_child_count()
 	# Reproduce legacy/custom support with valid grid support and no edge socket.
@@ -106,6 +115,7 @@ func _run() -> void:
 	var up := down.duplicate() as InputEventScreenTouch
 	up.pressed = false
 	root.push_input(up, true)
+	player.call("_tick_build_action",0.8)
 	check(container.get_child_count() == before_count + 2, "Mobile PLACE builds a foundation through viewport touch routing")
 	check(inventory.call("total", "Wood") == 5, "Mobile PLACE spends exactly five wood")
 	if container.get_child_count() != before_count + 2:

@@ -22,6 +22,7 @@ const BAG_START := HOTBAR_COUNT  # first bag-only slot index
 
 signal changed
 signal bag_full(amount: int)  # amount that could not be stored anywhere
+signal pickup_received(item: String, amount: int)
 
 const SAVE_PATH := "user://raft_save.json"        # autosave (written on change/quit)
 const QUICK_SAVE_PATH := "user://raft_quicksave.json"  # manual quick-save slot
@@ -43,10 +44,13 @@ var collected_island_pickups: Dictionary = {}
 # trying out the building system). Flip it with the debug key in Player.
 var infinite: bool = false
 var testing_resources_granted: bool = false
+var testing_soil_granted: bool = false
 
 # What each craftable/placeable thing costs.
 const RECIPES := {
 	"WallTorch": {"Wood": 2, "Rope": 1},
+	"StorageBox": {"Wood":6,"Rope":2,"Metal":1},
+	"CookingSetup": {"Wood":8,"Stone":4,"Metal":2},
 	"HalfWall": {"Wood": 4, "Rope": 1},
 	"CargoCrate": {"Wood": 6, "Rope": 2, "Metal": 1},
 	"Foundation":      {"Wood": 5},
@@ -82,6 +86,12 @@ const ITEM_RECIPES := {
 	"Diving Tank": {"Metal": 6, "Plastic": 4, "Rope": 2},
 	"Bandage": {"Rope": 2},
 	"Torch": {"Wood": 2, "Rope": 1},
+	"Solar Torch": {"Metal":2,"Plastic":2},
+	"Binoculars": {"Metal":2,"Plastic":3},
+	"Walkie Talkie": {"Metal":4,"Plastic":3,"Rope":1},
+	"Battery": {"Metal":1,"Plastic":1},
+	"Medkit": {"Rope":4,"Plastic":2},
+	"Can": {"Metal":1},
 }
 
 
@@ -99,8 +109,13 @@ func _ensure_slots() -> void:
 ## Grant test materials once per save, including an existing Continue save.
 ## Real crafting costs still apply; Continue does not refill spent materials.
 func grant_testing_resources() -> void:
-	if not TESTING_RESOURCES_ENABLED or testing_resources_granted:
+	if not TESTING_RESOURCES_ENABLED:
 		return
+	# Separate migration flag grants soil to existing saves without refilling wood etc.
+	if not testing_soil_granted:
+		var soil_needed := maxi(0,TESTING_RESOURCE_AMOUNT-total("Soil"))
+		testing_soil_granted = soil_needed == 0 or add("Soil",soil_needed) == 0
+	if testing_resources_granted:return
 	var complete := true
 	for material in TESTING_RESOURCE_ITEMS:
 		var needed: int = maxi(0, TESTING_RESOURCE_AMOUNT - total(material))
@@ -147,7 +162,12 @@ func total_count() -> int:
 	return t
 
 
+static func canonical_item(item: String) -> String:
+	var crop := item.trim_suffix(" Seed")
+	return crop if crop in ["Potato","Coconut","Banana","Carrot","Tomato","Onion"] else item
+
 func total(item: String) -> int:
+	item = canonical_item(item)
 	var t := 0
 	for i in range(slots.size()):
 		if not slot_empty(i) and slot_item(i) == item:
@@ -158,6 +178,7 @@ func total(item: String) -> int:
 ## Place an item directly into a specific slot (used for the fresh-game Rope
 ## in slot 1). Overwrites nothing — only writes when the slot is empty.
 func place_at(idx: int, item: String, count: int) -> bool:
+	item = canonical_item(item)
 	_ensure_slots()
 	if idx < 0 or idx >= slots.size() or not slot_empty(idx) or count <= 0:
 		return false
@@ -212,6 +233,7 @@ func swap_slots(a: int, b: int) -> void:
 ## into an empty hotbar slot. Whatever cannot be stored is reported via
 ## bag_full() and returned — nothing is ever silently deleted.
 func add(item: String, amount: int = 1) -> int:
+	item = canonical_item(item)
 	_ensure_slots()
 	if amount <= 0:
 		return 0
@@ -261,6 +283,7 @@ func _fill_empty_stacks(item: String, amount: int, from: int, to: int) -> int:
 
 ## Remove `amount` of an item, consuming bag stacks before hotbar stacks.
 func remove(item: String, amount: int) -> void:
+	item = canonical_item(item)
 	_ensure_slots()
 	var remaining: int = amount
 	for i in range(SLOT_COUNT - 1, -1, -1):
@@ -377,6 +400,7 @@ func can_store_rewards(rewards: Dictionary) -> bool:
 
 
 func _simulate_add(simulated: Array, item_name: String, amount: int) -> int:
+	item_name = canonical_item(item_name)
 	var remaining := maxi(0, amount)
 	remaining = _simulate_fill_partial(simulated, item_name, remaining, BAG_START, SLOT_COUNT - 1)
 	remaining = _simulate_fill_partial(simulated, item_name, remaining, 0, BAG_START - 1)
@@ -420,6 +444,7 @@ func _simulate_fill_empty(simulated: Array, item_name: String, amount: int,
 
 
 func _simulate_remove(simulated: Array, item_name: String, amount: int) -> int:
+	item_name = canonical_item(item_name)
 	var remaining := maxi(0, amount)
 	for i in range(simulated.size() - 1, -1, -1):
 		if remaining <= 0:
@@ -517,6 +542,7 @@ func save_game(extra: Dictionary = {}, slot: String = "main") -> bool:
 	var data := {
 		"version": SAVE_VERSION,
 		"testing_resources_granted": testing_resources_granted,
+		"testing_soil_granted": testing_soil_granted,
 		"slots": slot_data,
 		"saved_at": Time.get_unix_time_from_system(),
 		"collected_island_pickups": collected_island_pickups.keys(),
@@ -549,6 +575,7 @@ func load_game(slot: String = "main") -> Dictionary:
 	loaded_meta = {}
 	collected_island_pickups.clear()
 	testing_resources_granted = bool(data.get("testing_resources_granted", false))
+	testing_soil_granted = bool(data.get("testing_soil_granted", false))
 	var saved_pickups: Variant = data.get("collected_island_pickups", [])
 	if saved_pickups is Array:
 		for pickup_id in saved_pickups:
@@ -564,7 +591,7 @@ func load_game(slot: String = "main") -> Dictionary:
 	for i in range(mini(stored.size(), SLOT_COUNT)):
 		var entry = stored[i]
 		if entry is Array and entry.size() >= 2 and entry[0] is String and entry[0] != "" and (entry[1] is int or entry[1] is float) and is_finite(float(entry[1])) and float(entry[1]) > 0:
-			slots[i] = {"item": str(entry[0]), "count": clampi(int(entry[1]),1,MAX_STACK)}
+			slots[i] = {"item": canonical_item(str(entry[0])), "count": clampi(int(entry[1]),1,MAX_STACK)}
 	loaded_meta = data.duplicate()
 	loaded_meta.erase("version")
 	loaded_meta.erase("slots")
@@ -580,6 +607,7 @@ func load_game(slot: String = "main") -> Dictionary:
 func new_game_reset(clear_save_files: bool = true) -> void:
 	_ensure_slots()
 	testing_resources_granted = false
+	testing_soil_granted = false
 	for i in range(slots.size()):
 		slots[i] = {}
 	loaded_meta = {}

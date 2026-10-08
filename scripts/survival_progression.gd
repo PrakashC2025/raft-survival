@@ -17,6 +17,11 @@ var oxygen := 100.0
 var stamina := 100.0
 var wetness := 0.0
 var torch_fuel := 0.0
+var torch_end_time := 0.0
+var legacy_torch := false
+const TORCH_CYCLE := preload("res://scripts/torch_cycle.gd")
+var _mount_preview: MeshInstance3D
+var _preview_tick := 0.0
 var _torch_light: OmniLight3D
 var _third_torch: Node3D
 var _crackle: AudioStreamPlayer3D
@@ -52,6 +57,11 @@ func _ready() -> void:
 	_crackle.volume_db = -28
 	_crackle.max_distance = 8
 	add_child(_crackle)
+	_mount_preview=MeshInstance3D.new()
+	var ghost:=CylinderMesh.new();ghost.top_radius=.04;ghost.bottom_radius=.02;ghost.height=.72;ghost.radial_segments=8;_mount_preview.mesh=ghost
+	var material:=StandardMaterial3D.new();material.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA;material.albedo_color=Color(.2,1,.4,.45);material.shading_mode=BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mount_preview.material_override=material;_mount_preview.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_mount_preview);_mount_preview.hide()
 
 func _recover_existing_camp() -> void:
 	await get_tree().physics_frame
@@ -102,16 +112,25 @@ func objective() -> String:
 	return str(CHAPTERS[level - 1][1])
 
 func _process(delta: float) -> void:
-	var equipped := str(player.get("active_item")) == "Torch"
-	var lit := equipped and torch_fuel > 0.0 and Stats.health > 0
+	var equipped := str(player.get("active_item")) in ["Torch","Burning Torch"]
+	var construction: bool = bool(player.get("build_mode")) or is_instance_valid(player.get("_editing"))
+	if torch_fuel>0 or torch_end_time>0:
+		if torch_end_time<=0:torch_end_time=TORCH_CYCLE.next_dawn(player)
+		var remaining:=TORCH_CYCLE.seconds_left(player,torch_end_time)
+		if remaining<=0:extinguish_torch()
+		elif torch_fuel>0 or Inventory.has("Burning Torch",1):torch_fuel=remaining
+	if str(player.get("active_item"))=="Burning Torch" and torch_fuel<=0:extinguish_torch()
+	var lit := is_held_lit() and Stats.health > 0
 	if lit and not _crackle.playing: _crackle.play()
 	elif not lit and _crackle.playing: _crackle.stop()
-	_torch_light.visible = lit
-	_third_torch.visible = equipped and int(player.get("cam_mode")) == 1
+	_torch_light.visible = lit and not construction
+	_third_torch.visible = equipped and int(player.get("cam_mode")) == 1 and not construction
 	_third_torch.call("set_burning",lit)
 	var held := player.get_node_or_null("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist/HandItem/Torch")
 	if held != null: held.call("set_burning",lit)
-	if lit: torch_fuel = maxf(0,torch_fuel-delta)
+	_preview_tick+=delta
+	if _preview_tick>=.1:
+		_preview_tick=0.0;_update_mount_preview(equipped and lit and not construction)
 	if Stats.health <= 0.0:
 		return
 	_tick += delta
@@ -127,8 +146,8 @@ func _process(delta: float) -> void:
 		var start := player.global_position+Vector3.UP*1.8
 		var ray := PhysicsRayQueryParameters3D.create(start,start+Vector3.UP*8,1,[player.get_rid()])
 		exposed = player.get_world_3d().direct_space_state.intersect_ray(ray).is_empty()
-	if equipped and torch_fuel > 0 and (swimming or exposed):
-		torch_fuel = 0
+	if lit and (swimming or exposed):
+		extinguish_torch()
 		player.call("_hud_toast","TORCH WET · RELIGHT AT A SHELTERED CAMPFIRE")
 	stamina = clampf(stamina + (-5.0 if swimming and moving > 1.8 else (-3.0 if moving > 4.0 else 7.0)) * step, 0, 100)
 	wetness = clampf(wetness + (12.0 if swimming else (3.0 if exposed else (-3.0 if lit else -0.8))) * step, 0, 100)
@@ -142,7 +161,7 @@ func _process(delta: float) -> void:
 
 func save_state() -> Dictionary:
 	return {"level": level, "events": events.duplicate(), "diving_tank": diving_tank,
-		"oxygen": oxygen, "stamina": stamina, "wetness": wetness, "torch_fuel": torch_fuel}
+		"oxygen": oxygen, "stamina": stamina, "wetness": wetness, "torch_fuel": torch_fuel,"torch_end_time":torch_end_time,"legacy_torch":legacy_torch}
 
 func restore_state(data: Dictionary) -> void:
 	level = clampi(int(data.get("level", 1)), 1, CHAPTERS.size())
@@ -155,26 +174,60 @@ func restore_state(data: Dictionary) -> void:
 	oxygen = clampf(float(data.get("oxygen", 100)), 10, 100)
 	stamina = clampf(float(data.get("stamina", 100)), 10, 100)
 	wetness = clampf(float(data.get("wetness", 0)), 0, 100)
-	torch_fuel = clampf(float(data.get("torch_fuel",0)),0,900)
+	torch_fuel = clampf(float(data.get("torch_fuel",0)),0,86400)
+	torch_end_time=clampf(float(data.get("torch_end_time",0)),0,240000000.0)
+	legacy_torch=bool(data.get("legacy_torch",torch_fuel>0 and torch_end_time<=0))
+
+func is_held_lit() -> bool:
+	return torch_fuel>0 and (str(player.active_item)=="Burning Torch" or (legacy_torch and str(player.active_item)=="Torch"))
 
 func use_torch() -> void:
+	var selected:=str(player.get("active_item"))
+	if selected not in ["Torch","Burning Torch"] or not Inventory.has(selected,1):return
+	if player.get_node("SurvivalServices")._blocked() or player.get_node("SurvivalServices").is_modal():return
 	if bool(player.get("aim_valid")) and player.get("aim_collider") != null:
 		var target := player.get("aim_collider") as Node3D
 		if str(player.call("_find_piece_name",target)) == "WallTorch" and player.global_position.distance_to(target.global_position) <= 3.2:
 			target.call("interact_survival",player)
 			return
-	if bool(player.call("mount_held_torch")): return
-	if torch_fuel > 0:
-		torch_fuel = 0
+	if is_held_lit() and bool(player.call("mount_held_torch")): return
+	if is_held_lit():
+		extinguish_torch()
 		player.call("_hud_toast","TORCH EXTINGUISHED")
 	else:
-		for fire in get_tree().get_nodes_in_group("campfire"):
-			if fire.global_position.distance_to(player.global_position) < 3 and fire.get("burning") and fire.get("fuel") > 0:
-				if Inventory.has("Wood",1):
-					Inventory.remove("Wood",1)
-					torch_fuel = 180
-					player.call("_hud_toast","TORCH LIT · THREE MINUTES OF LIGHT")
-					player.call("_queue_save")
-					return
-		player.call("_hud_toast","LIGHT AT A BURNING CAMPFIRE · NEED 1 WOOD")
+		var fire:=player.get("aim_collider") as Node3D
+		if bool(player.get("aim_valid")) and fire!=null and fire.is_in_group("campfire") \
+			and fire.global_position.distance_to(player.global_position)<=3.5 and fire.get("burning")==true \
+			and float(fire.get("fuel"))>0 and not fire.call("exposed_to_rain"):
+			if Inventory.try_exchange({"Torch":1},{"Burning Torch":1}):
+				legacy_torch=false
+				torch_end_time=TORCH_CYCLE.next_dawn(player);torch_fuel=TORCH_CYCLE.seconds_left(player,torch_end_time)
+				player.get_node("SurvivalServices").equip_owned("Burning Torch")
+				player.call("play_action","fire",.8,fire.global_position)
+				player.call("_hud_toast","BURNING TORCH · LASTS UNTIL DAWN")
+			else:player.call("_hud_toast","BAG FULL · CLEAR A SLOT FOR THE BURNING TORCH")
+		else:player.call("_hud_toast","AIM AT A BURNING BONFIRE OR COOKING SETUP TO LIGHT")
 	player.call("_queue_save")
+
+func extinguish_torch() -> void:
+	torch_fuel=0;torch_end_time=0;legacy_torch=false
+	var count_value:=Inventory.total("Burning Torch")
+	if count_value>0:Inventory.try_exchange({"Burning Torch":count_value},{"Torch":count_value})
+	for box in get_tree().get_nodes_in_group("storage_box"):
+		var changed:=false
+		for entry in box.contents:
+			if entry.get("item","")=="Burning Torch":entry.item="Torch";changed=true
+		if changed:box.contents_changed.emit()
+
+func _update_mount_preview(lit: bool) -> void:
+	_mount_preview.hide()
+	if not lit or player.get_node("SurvivalServices")._blocked() or player.get_node("SurvivalServices").is_modal():return
+	var target:=player.get("aim_collider") as Node3D
+	if not is_instance_valid(target) or not player.aim_valid or player.aim_distance>5:return
+	if str(player.call("_find_piece_name",target)) not in ["Wall","Window","Door"]:return
+	var placement: Dictionary=player.call("_resolve_wall_torch")
+	var valid:=bool(placement.get("valid",false))
+	if valid:_mount_preview.global_transform=placement.transform;_mount_preview.global_position+=_mount_preview.global_basis.y*.13
+	else:_mount_preview.global_position=player.aim_point+player.aim_normal*.2
+	(_mount_preview.material_override as StandardMaterial3D).albedo_color=Color(.2,1,.4,.45) if valid else Color(1,.15,.1,.45)
+	_mount_preview.show()

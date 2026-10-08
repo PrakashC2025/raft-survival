@@ -129,6 +129,9 @@ func _ready() -> void:
 		splashes_per_second = minf(splashes_per_second, 10.0)
 		_cover_check_interval = 0.4
 	_find_refs()
+	if GameSettings.mobile_effects_profile():
+		toggle_fog_during_rain = false
+		_disable_mobile_fog()
 	_build_particles()
 	_build_splash_pool()
 	_build_audio()
@@ -341,8 +344,21 @@ func start_rain(duration_seconds: float) -> void:
 	if _lightning_timer != null:
 		_lightning_timer.start()
 	_cache_environment_originals()
-	if toggle_fog_during_rain and _sky != null:
+	if GameSettings.mobile_effects_profile():
+		_disable_mobile_fog()
+	elif toggle_fog_during_rain and _sky != null:
 		_sky.set("fog_visible", true)
+
+
+func _disable_mobile_fog() -> void:
+	if _sky != null:
+		_sky.set("fog_visible",false)
+		_sky.set("fog_density",0.0)
+	if _sky3d != null:_sky3d.set("fog_enabled",false)
+	if _env != null:
+		_env.fog_enabled = false
+		_env.volumetric_fog_enabled = false
+		_env.fog_density = 0.0
 
 
 func stop_rain() -> void:
@@ -401,7 +417,6 @@ func _update_cover_state(delta: float) -> void:
 	if _cover_timer > 0.0:
 		return
 	_cover_timer = _cover_check_interval
-	_refresh_shelter_masks()
 	if not _is_raining:
 		# No rain: skip the raycasts entirely, and make sure the emitter is
 		# back in full-box mode for the next downpour.
@@ -410,6 +425,7 @@ func _update_cover_state(delta: float) -> void:
 			_box_top = rain_area_size.y * 0.5
 			_apply_cover_mode()
 		return
+	_refresh_shelter_masks()
 	var was := _covered
 	var was_top := _box_top
 	_covered = false
@@ -566,7 +582,9 @@ func _update_intensity(delta: float) -> void:
 		var shelter_db := -8.0 if _covered else 0.0
 		_audio.volume_db = move_toward(_audio.volume_db, linear_to_db(maxf(db_to_linear(rain_volume_db+shelter_db) * _intensity, 0.0001)),delta*24.0)
 
-	if _sky != null and _orig_fog_density >= 0.0:
+	if GameSettings.mobile_effects_profile():
+		_disable_mobile_fog()
+	elif _sky != null and _orig_fog_density >= 0.0:
 		_sky.set("fog_density", lerpf(_orig_fog_density, _orig_fog_density + 0.01, _intensity))
 	if _env != null and _orig_ambient_energy >= 0.0:
 		_env.ambient_light_energy = lerpf(_orig_ambient_energy, _orig_ambient_energy * 0.7, _intensity)
@@ -633,7 +651,7 @@ func _spawn_one_splash() -> void:
 	var hit := space_state.intersect_ray(q)
 
 	if hit:
-		_fire_splash(hit.position, true)
+		if rain_visible_at(hit.position + Vector3.UP * 0.12): _fire_splash(hit.position, true)
 		return
 
 	if water_splash_enabled and _ocean != null:
@@ -695,6 +713,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _refresh_shelter_masks() -> void:
 	_mask_boxes.clear()
 	_mask_levels.clear()
+	if _rain_mat != null: _rain_mat.set_shader_parameter("cover_count", 0)
 	_mask_raft = get_tree().get_first_node_in_group("raft") as Node3D
 	if _mask_raft == null or _rain_mat == null: return
 	var pieces := _mask_raft.get_node_or_null("BuiltPieces")
@@ -706,7 +725,9 @@ func _refresh_shelter_masks() -> void:
 		var roof: bool = piece.name.begins_with("Roof")
 		var deck: bool = piece.name.begins_with("Foundation") and piece.position.y > 0.3
 		var stair: bool = piece.name.begins_with("Stairs")
-		if not roof and not deck and not stair: continue
+		var wall: bool = piece.name.begins_with("Wall") or piece.name.begins_with("Window") or piece.name.begins_with("Door") or piece.name.begins_with("HalfWall")
+		if piece.name.begins_with("WallTorch"): continue
+		if not roof and not deck and not stair and not wall: continue
 		for col: CollisionShape3D in piece.find_children("*","CollisionShape3D",true,false):
 			if col.disabled or not col.shape is BoxShape3D: continue
 			if stair and col.name != "CollisionLanding": continue
@@ -715,7 +736,8 @@ func _refresh_shelter_masks() -> void:
 			var distance := Vector2(xf.origin.x-camera_local.x,xf.origin.z-camera_local.z).length_squared()
 			if distance > 26.0*26.0: continue
 			var yaw := xf.basis.get_euler().y
-			candidates.append({"distance":distance,"box":Vector4(xf.origin.x,xf.origin.z,half.x+0.025,half.z+0.025),"level":Vector4(xf.origin.y+half.y,-30.0,sin(yaw),cos(yaw))})
+			var bottom := xf.origin.y-half.y-0.08 if wall else -30.0
+			candidates.append({"distance":distance + (800.0 if wall else 0.0),"box":Vector4(xf.origin.x,xf.origin.z,half.x+0.08,half.z+0.08),"level":Vector4(xf.origin.y+half.y+0.04,bottom,sin(yaw),cos(yaw))})
 	candidates.sort_custom(func(a: Dictionary,b: Dictionary)->bool: return a.distance<b.distance)
 	for index in mini(candidates.size(),64):
 		_mask_boxes.append(candidates[index].box)

@@ -3,7 +3,7 @@ extends RefCounted
 ## rather than blindly slicing the sheet and clipping long weapons or leaves.
 const ATLAS := preload("res://textures/ui/survival_items.png")
 const ROPE_LAUNCHER := preload("res://textures/ui/rope_launcher.png")
-const ADVANCED_IMAGES := {"Raw Meat":"raw_meat", "Cooked Meat":"cooked_meat", "Raw Crab":"raw_crab", "Cooked Crab":"cooked_crab", "Diving Tank":"diving_tank", "Bandage":"bandage", "Torch":"torch"}
+const ADVANCED_IMAGES := {"Raw Meat":"raw_meat", "Cooked Meat":"cooked_meat", "Raw Crab":"raw_crab", "Cooked Crab":"cooked_crab", "Diving Tank":"diving_tank", "Bandage":"bandage", "Torch":"torch", "Onion":"onion", "Potato":"potato", "Tomato":"tomato", "Banana":"banana"}
 static var _pictures: Dictionary = {}
 const REGIONS := {
 	"Wood": Rect2(0.000, 0.002, 0.207, 0.176),
@@ -46,6 +46,7 @@ static var _outlines := {
 }
 
 static func draw(canvas: CanvasItem, item: String, center: Vector2, radius: float) -> bool:
+	if item.ends_with(" Seed"): item = item.trim_suffix(" Seed")
 	if ADVANCED_IMAGES.has(item):
 		var texture := _pictures.get(item) as Texture2D
 		var path := "res://textures/ui/advanced_"+str(ADVANCED_IMAGES[item])+".png"

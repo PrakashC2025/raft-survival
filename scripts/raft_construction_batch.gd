@@ -15,6 +15,7 @@ func _process(delta: float) -> void:
 func refresh() -> void:
 	var container := get_parent().get_node_or_null("BuiltPieces")
 	if container == null: return
+	if container.get_meta("restoring",false): return
 	var player := get_tree().get_first_node_in_group("player")
 	var editing: Node = player.get("_editing") if player != null else null
 	var signature := hash(editing)
@@ -26,13 +27,19 @@ func refresh() -> void:
 		if child.name.begins_with("WallTorch"): continue
 		if not (child.name.begins_with("Foundation") or child.name.begins_with("Wall") or child.name.begins_with("HalfWall") or child.name.begins_with("Roof")): continue
 		pieces.append(child)
-		signature = hash([signature,child.get_instance_id(),child.transform])
+		signature = hash([signature,child.get_instance_id(),child.transform,child.get_meta("geometry_revision",0)])
 	if signature == _signature: return
 	_signature = signature
 	var groups := {}
 	for piece in pieces:
 		var highlighted := piece == editing
 		for node in piece.find_children("*", "GeometryInstance3D", true, false):
+			var hidden := false
+			var ancestor: Node = node
+			while ancestor != piece:
+				if ancestor.get_meta("stair_hidden",false): hidden=true;break
+				ancestor=ancestor.get_parent()
+			if hidden:node.visible=false;continue
 			if node.has_meta("structural_proxy"):
 				node.visible = false
 				continue

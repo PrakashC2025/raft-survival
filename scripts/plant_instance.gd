@@ -1,9 +1,8 @@
 extends StaticBody3D
 class_name PlantInstance
 
-## Generic growing-plant node. Works for every entry in PlantDB — nothing
-## here is specific to potato/coconut/banana; all the differences come from
-## the Dictionary returned by PlantDB.get_def(id).
+## Shared growth/harvest behavior reads PlantDB definitions. Supplied crop
+## geometry is selected in the visual builders below.
 ##
 ## Stages: SEED -> SPROUT -> GROWING -> MATURE
 ##   ROOT plants:  MATURE = ready to dig (hold E). Digging removes the plant.
@@ -24,6 +23,9 @@ const CAT_FRUIT := "FRUIT_TREE"
 const PALM_TALL_SCENE: PackedScene = preload("res://models/coconut_palm.glb")
 const TOMATO_SCENE: PackedScene = preload("res://models/tomato_plant.glb")
 const POTATO_SCENE: PackedScene = preload("res://models/potato_plant.glb")
+const CARROT_SCENE: PackedScene = preload("res://models/carrot_plant.glb")
+const ONION_STAGES := [preload("res://models/onion_sprout.glb"),preload("res://models/onion_young.glb"),preload("res://models/onion_growing.glb"),preload("res://models/onion_plant.glb")]
+const BANANA_PLANT_SCENE: PackedScene = preload("res://models/banana_plant.glb")
 const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
@@ -32,7 +34,7 @@ const CHOP_SOUND: AudioStream = preload("res://audio/chop.ogg")
 const HARVEST_SOUND: AudioStream = preload("res://audio/pickup_rustle.ogg")
 const ITEM_PICKUP_SCENE: PackedScene = preload("res://scenes/food_pickup.tscn")
 # Height fraction reached at the END of each stage (indexed by Stage.SEED..MATURE)
-const STAGE_FRAC := [0.06, 0.22, 0.55, 1.0]
+const STAGE_FRAC := [0.16, 0.30, 0.62, 1.0]
 
 @export var plant_id: String = ""
 
@@ -123,6 +125,10 @@ func _ready() -> void:
 	_build_progress_ui()
 
 
+func _exit_tree() -> void:
+	if is_instance_valid(_progress_ui):_progress_ui.queue_free()
+
+
 func save_state() -> Dictionary:
 	var saved_stage := _stage
 	var saved_health := _health
@@ -145,6 +151,7 @@ func save_state() -> Dictionary:
 		"timer": _stage_timer,
 		"health": saved_health,
 		"fruits": fruit_states,
+		"fruit_layout": 1 if plant_id == "Coconut" else 0,
 	}
 
 
@@ -171,6 +178,7 @@ func restore_state(state: Dictionary) -> void:
 	else:
 		_grow = 1.0
 	_container.scale = Vector3.ONE * _grow
+	_update_collision()
 	if _stage == Stage.STUMP:
 		_container.scale = Vector3.ONE
 		return
@@ -184,7 +192,9 @@ func restore_state(state: Dictionary) -> void:
 				continue
 			var fruit: Dictionary = _fruits[i]
 			var coordinates: Array = saved_fruit.get("p", [])
-			if coordinates.size() >= 3:
+			# Legacy coconut positions belong to the former 3.37m tree. Keep
+			# ripeness/timers, using new crown sockets rather than floating fruit.
+			if coordinates.size() >= 3 and (plant_id != "Coconut" or int(state.get("fruit_layout",0)) == 1):
 				fruit["pos"] = Vector3(float(coordinates[0]), float(coordinates[1]), float(coordinates[2]))
 			fruit["rotation_y"] = float(saved_fruit.get("r", fruit.get("rotation_y", 0.0)))
 			fruit["regrow"] = maxf(0.1, float(saved_fruit.get("g", fruit.get("regrow", 60.0))))
@@ -201,6 +211,21 @@ func _stage_time(idx: int) -> float:
 	if idx < 0 or idx >= arr.size():
 		return 20.0
 	return float(arr[idx])
+
+
+func growth_seconds_remaining() -> float:
+	if _stage >= Stage.MATURE:return 0.0
+	var remaining := maxf(0.0,_stage_time(_stage)-_stage_timer)
+	for stage_index in range(_stage+1,Stage.MATURE):remaining += _stage_time(stage_index)
+	var planter := get_parent().get_parent() as Planter
+	return remaining / (planter.growth_factor() if planter != null else 1.0)
+
+
+func growth_caption() -> String:
+	var seconds := ceili(growth_seconds_remaining())
+	var timer := "%d:%02d" % [floori(seconds/60.0),seconds%60]
+	var planter := get_parent().get_parent() as Planter
+	return plant_id+" · "+timer+" until grown"+(" · DRY SOIL — WATER" if planter != null and planter.moisture<0.15 else "")
 
 
 func _process(delta: float) -> void:
@@ -232,6 +257,7 @@ func _process(delta: float) -> void:
 			var to: float = STAGE_FRAC[clampi(_stage + 1, 0, 3)]
 			_grow = lerpf(from, to, clampf(_stage_timer / needed, 0.0, 1.0))
 			_container.scale = Vector3(_grow, _grow, _grow)
+		_update_collision()
 	elif _def.get("category", "") == CAT_FRUIT:
 		_update_fruits(delta)
 
@@ -260,6 +286,9 @@ func _rebuild_visual() -> void:
 	for c in _container.get_children():
 		_container.remove_child(c)
 		c.queue_free()
+	for fruit in _fruits:
+		var hit: CollisionShape3D = fruit.get("hit_shape")
+		if is_instance_valid(hit):remove_child(hit);hit.queue_free()
 	_fruits.clear()
 	var cat: String = _def.get("category", "")
 	if _stage >= Stage.FALLING:
@@ -282,6 +311,8 @@ func _grow_y(v: float) -> float:
 
 func _root_leaf_count(stage: int) -> int:
 	match stage:
+		Stage.SEED:
+			return 2
 		Stage.SPROUT:
 			return 3
 		Stage.GROWING:
@@ -293,25 +324,20 @@ func _root_leaf_count(stage: int) -> int:
 
 
 func _build_root_visual(stage: int) -> void:
-	# SEED: a tiny seed bump half-sunk in the soil (no above-ground leaves).
-	if stage == Stage.SEED:
-		var seed_mesh := MeshInstance3D.new()
-		var sph := SphereMesh.new()
-		sph.radius = 0.035
-		sph.height = sph.radius * 2.0
-		seed_mesh.mesh = sph
-		seed_mesh.position = Vector3(0, 0.015, 0)
-		var smat := StandardMaterial3D.new()
-		smat.albedo_color = Color(0.42, 0.32, 0.16)
-		seed_mesh.material_override = smat
-		_container.add_child(seed_mesh)
+	if plant_id == "Onion":
+		var onion := ONION_STAGES[clampi(stage,Stage.SEED,Stage.MATURE)].instantiate() as Node3D
+		onion.name = "OnionPlantModel"
+		onion.scale = Vector3.ONE * _hvar
+		_container.add_child(onion)
 		return
-	if plant_id in ["Tomato", "Potato"]:
-		var crop := (TOMATO_SCENE if plant_id == "Tomato" else POTATO_SCENE).instantiate() as Node3D
+	# A recognisable small plant is visible from planting onward.
+	if plant_id in ["Tomato", "Potato", "Carrot"]:
+		var scene := TOMATO_SCENE if plant_id == "Tomato" else (POTATO_SCENE if plant_id=="Potato" else CARROT_SCENE)
+		var crop := scene.instantiate() as Node3D
 		crop.name = plant_id + "PlantModel"
 		_container.add_child(crop)
 		# Import roots are at the soil line; tubers stay underneath until pulled.
-		crop.scale = Vector3.ONE * (0.55 if plant_id == "Tomato" else 0.85) * _hvar
+		crop.scale = Vector3.ONE * (0.55 if plant_id == "Tomato" else (0.85 if plant_id=="Potato" else 1.0)) * _hvar
 		for part in crop.find_children("*", "MeshInstance3D", true, false):
 			var part_name := str(part.name)
 			if part_name == "PotatoTuber":
@@ -376,11 +402,20 @@ func _build_tree_visual(stage: int) -> void:
 	if plant_id == "Coconut":
 		_build_coconut_palm_visual(stage)
 		return
-	if plant_id == "Banana" and stage != Stage.SEED:
-		var banana := preload("res://scripts/coastal_tree_visual.gd").create(0)
+	if plant_id == "Banana":
+		var banana := BANANA_PLANT_SCENE.instantiate() as Node3D
+		banana.name = "BananaPlantModel"
 		_container.add_child(banana)
+		for candidate in banana.find_children("*","MeshInstance3D",true,false):
+			var mesh := candidate as MeshInstance3D
+			for surface in mesh.mesh.get_surface_count():
+				var material := mesh.get_active_material(surface) as StandardMaterial3D
+				if material != null:material.vertex_color_use_as_albedo=true
 		var target_height: float = _grow_y(float(_def.get("trunk_height",2.2)))
-		banana.scale = Vector3.ONE*target_height/2.25
+		var bounds := _node_local_aabb(banana)
+		var model_scale := target_height/maxf(bounds.size.y,0.01)
+		banana.scale = Vector3.ONE*model_scale
+		banana.position = Vector3(-bounds.get_center().x,-bounds.position.y,-bounds.get_center().z)*model_scale
 		if stage >= Stage.MATURE:
 			var crown := Node3D.new()
 			crown.name = "Canopy"
@@ -421,20 +456,6 @@ func _build_tree_visual(stage: int) -> void:
 
 
 func _build_coconut_palm_visual(stage: int) -> void:
-	if stage == Stage.SEED:
-		var seed_mesh := MeshInstance3D.new()
-		var seed_shape := SphereMesh.new()
-		seed_shape.radius = 0.035
-		seed_shape.height = 0.07
-		seed_mesh.mesh = seed_shape
-		seed_mesh.position = Vector3(0.0, 0.02, 0.0)
-		var seed_material := StandardMaterial3D.new()
-		seed_material.albedo_color = Color(0.36, 0.24, 0.12)
-		seed_material.roughness = 0.95
-		seed_mesh.material_override = seed_material
-		_container.add_child(seed_mesh)
-		return
-
 	var palm := PALM_TALL_SCENE.instantiate() as Node3D
 	if palm == null:
 		push_warning("[Plant] Could not instance coconut palm model")
@@ -468,32 +489,7 @@ func _build_coconut_palm_visual(stage: int) -> void:
 
 
 func _node_local_aabb(root: Node3D) -> AABB:
-	var found := false
-	var lower := Vector3.ZERO
-	var upper := Vector3.ZERO
-	for candidate in root.find_children("*", "MeshInstance3D", true, false):
-		var mesh_instance := candidate as MeshInstance3D
-		if mesh_instance == null or mesh_instance.mesh == null:
-			continue
-		var relative := mesh_instance.transform
-		var ancestor := mesh_instance.get_parent()
-		while ancestor != null and ancestor != root:
-			if ancestor is Node3D:
-				relative = (ancestor as Node3D).transform * relative
-			ancestor = ancestor.get_parent()
-		if ancestor != root:
-			continue
-		var mesh_bounds := mesh_instance.mesh.get_aabb()
-		for corner in range(8):
-			var point: Vector3 = relative * mesh_bounds.get_endpoint(corner)
-			if not found:
-				lower = point
-				upper = point
-				found = true
-			else:
-				lower = lower.min(point)
-				upper = upper.max(point)
-	return AABB(lower, upper - lower) if found else AABB()
+	return VEGETATION_VISUAL.local_bounds(root)
 
 
 func _update_collision() -> void:
@@ -504,9 +500,12 @@ func _update_collision() -> void:
 		box.size = Vector3(0.4, 0.3, 0.4)
 		_col_shape.position = Vector3(0, 0.15, 0)
 		return
-	var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.2)))
-	var canopy_r: float = _grow_y(float(_def.get("canopy_radius", 0.9)))
-	box.size = Vector3(maxf(canopy_r * 1.5, 0.4), maxf(trunk_h + canopy_r, 0.5), maxf(canopy_r * 1.5, 0.4))
+	if _def.get("category","")==CAT_ROOT:
+		box.size = Vector3(0.30,maxf(0.16,0.6*_grow),0.30)
+	else:
+		var trunk_h: float = _grow_y(float(_def.get("trunk_height", 2.2)))
+		# Only the stem is solid; broad invisible canopy boxes blocked walking.
+		box.size = Vector3(maxf(0.18,float(_def.get("trunk_radius",0.13))*2.0*_grow),maxf(0.25,trunk_h*_grow),maxf(0.18,float(_def.get("trunk_radius",0.13))*2.0*_grow))
 	_col_shape.position = Vector3(0, box.size.y * 0.5, 0)
 
 
@@ -555,12 +554,17 @@ func _init_fruit_slots() -> void:
 			+ Vector3(cos(ang) * canopy_r * jitter, -canopy_r * _rng.randf_range(0.1, 0.25), sin(ang) * canopy_r * jitter)
 		# Staggered start so fruits reach ripeness at different times.
 		var slot_regrow: float = regrow * _rng.randf_range(0.9, 1.1)
+		var fruit_hit := CollisionShape3D.new()
+		var sphere := SphereShape3D.new();sphere.radius = maxf(0.13,float(_def.get("fruit_radius",0.1))*1.3)
+		fruit_hit.shape = sphere;fruit_hit.position = local_pos;fruit_hit.disabled = true
+		add_child(fruit_hit)
 		_fruits.append({
 			"pos": local_pos,
 			"rotation_y": ang + _rng.randf_range(-0.6, 0.6),
 			"elapsed": _rng.randf_range(0.0, regrow * 0.5),
 			"regrow": slot_regrow,
 			"mesh": null,
+			"hit_shape": fruit_hit,
 		})
 
 
@@ -569,6 +573,10 @@ func _update_fruits(delta: float) -> void:
 		f["elapsed"] = float(f["elapsed"]) + delta
 		var regrow: float = float(f["regrow"])
 		var prog: float = clampf(float(f["elapsed"]) / regrow, 0.0, 1.0)
+		var fruit_hit: CollisionShape3D = f.get("hit_shape")
+		if is_instance_valid(fruit_hit):
+			fruit_hit.position = f["pos"]
+			fruit_hit.set_deferred("disabled",prog<1.0)
 		var m := f.get("mesh") as Node3D
 		if prog < 0.06:
 			if m != null and is_instance_valid(m):
@@ -587,6 +595,8 @@ func _update_fruits(delta: float) -> void:
 
 
 func _make_fruit_mesh() -> Node3D:
+	if plant_id == "Banana":
+		return preload("res://scripts/produce_visual.gd").create("Banana")
 	var root := Node3D.new()
 	root.name = "FruitVisual"
 	var fruit_scene: PackedScene = null
@@ -718,9 +728,12 @@ func _is_player_aiming_here() -> bool:
 		return false
 	if p.get("build_mode") == true or p.get("_editing") != null:
 		return false
+	var hud := p.get_node_or_null("CanvasLayer/SurvivalHUD")
+	if hud != null and hud.call("gameplay_input_blocked"):return false
 	if p.get("aim_valid") != true:
 		return false
-	if p.get("aim_collider") != self:
+	var planter := get_parent().get_parent() as Planter
+	if p.get("aim_collider") != self and (planter == null or p.get("aim_collider") != planter):
 		return false
 	var dist = p.get("aim_distance")
 	return dist != null and float(dist) <= 3.5
@@ -775,6 +788,13 @@ func _update_interaction(delta: float) -> void:
 
 	if _stage == Stage.FALLING:
 		return
+	if _stage < Stage.MATURE:
+		_show_prompt(growth_caption())
+		return
+	# Aiming soil also shows progress, but harvesting/chopping belongs to the plant.
+	if p.get("aim_collider") != self:
+		_show_prompt(plant_id+" · Ready — aim at plant to harvest")
+		return
 
 	if cat == CAT_FRUIT and _stage == Stage.MATURE:
 		var near := _nearest_ripe_fruit()
@@ -789,14 +809,14 @@ func _update_interaction(delta: float) -> void:
 
 	if cat == CAT_ROOT:
 		if _stage != Stage.MATURE:
-			_show_prompt("Growing...")
+			_show_prompt(growth_caption())
 			return
 		_show_prompt("Hold E — Harvest " + str(_def.get("display_name", "Plant")))
 		_run_hold("dig", float(_def.get("dig_time", 1.5)), delta)
 		return
 
 	if cat == CAT_FRUIT:
-		_show_prompt("Growing...")
+		_show_prompt(growth_caption())
 		return
 
 
@@ -857,6 +877,8 @@ func _pick_fruit(fruit) -> void:
 	var actor := _get_player()
 	if actor!=null:actor.call("play_action","pick",0.6,global_position)
 	fruit["elapsed"] = 0.0
+	var fruit_hit: CollisionShape3D = fruit.get("hit_shape")
+	if is_instance_valid(fruit_hit):fruit_hit.set_deferred("disabled",true)
 	var m = fruit.get("mesh")
 	if m != null and is_instance_valid(m):
 		m.queue_free()
@@ -898,13 +920,14 @@ func _do_dig() -> void:
 		_notify_bag_full()
 		return
 	_harvesting = true
+	if is_instance_valid(_progress_ui):_progress_ui.visible=false
 	var actor := _get_player()
-	if actor!=null:actor.call("play_action","harvest",1.7 if plant_id=="Potato" else 0.65,global_position)
+	if actor!=null:actor.call("play_action","harvest",1.7 if plant_id in ["Potato","Carrot","Onion"] else 0.65,global_position)
 	var tw := create_tween()
-	if plant_id == "Potato":
+	if plant_id in ["Potato","Carrot","Onion"]:
 		# Lift the complete root system out of the soil before collecting it.
 		# Keep foliage/tubers full size during the readable reveal.
-		tw.tween_property(_container, "position:y", 0.38, 0.42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_container, "position:y", 0.45 if plant_id=="Carrot" else 0.38, 0.42).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		tw.tween_interval(1.0)
 	tw.tween_property(_container, "scale", Vector3.ONE * 0.04, 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
@@ -1023,6 +1046,9 @@ func _finish_fell() -> void:
 	_stage = Stage.STUMP
 	for c in _container.get_children():
 		c.queue_free()
+	for fruit in _fruits:
+		var fruit_hit: CollisionShape3D = fruit.get("hit_shape")
+		if is_instance_valid(fruit_hit):fruit_hit.queue_free()
 	_fruits.clear()
 	_build_stump_visual()
 	_container.scale = Vector3.ONE
