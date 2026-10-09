@@ -49,7 +49,7 @@ func _run() -> void:
 	check(not tools.zoomed and player.camera.fov==original_fov,"Changing items releases binocular zoom")
 	tools.call("toggle_power");tools.call("_process",0.0)
 	check(tools.beam.visible and tools.beam is SpotLight3D and tools.beam.spot_range==32.0,"Solar flashlight gives a real forward light beam")
-	check(tools._audio.stream==load("res://scripts/survival_audio.gd").electronic_stream("switch"),"Flashlight switch plays its cached click sound")
+	check(load("res://scripts/contact_audio.gd").BANK.casing.has(tools._audio.stream),"Flashlight switch plays a preloaded recorded casing contact")
 	tools.call("toggle_power");tools.call("_process",0.0)
 	check(not tools.beam.visible,"Flashlight switches fully off")
 	hold("Walkie Talkie")

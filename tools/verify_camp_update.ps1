@@ -1,0 +1,2 @@
+param([string]$GodotPath='C:\Program Files\Godot\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64_console.exe')
+& (Join-Path $PSScriptRoot 'verify_source.ps1') -GodotPath $GodotPath -Tests @('camp_fire_smoke.gd','survival_services_smoke.gd','crop_torch_smoke.gd','advanced_survival_smoke.gd','tumbler_smoke.gd','foundation_smoke.gd','mobile_smoke.gd','realism_polish_smoke.gd','construction_weather_smoke.gd','edit_tree_smoke.gd','menu_loading_smoke.gd','mobile_bag_rain_smoke.gd') -GodotUserArgs @('--mobile-effects')

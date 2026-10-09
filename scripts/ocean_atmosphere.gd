@@ -7,10 +7,48 @@ var _mist: GPUParticles3D
 var _fireflies: Array[GPUParticles3D] = []
 var _sample := 0.0
 static var _occluders: Dictionary = {}
+const SKY_DAYS := [
+	{"day":Color(.79,.91,1),"horizon":Color(1,.66,.44),"cirrus":.22,"cloud":.32,"size":.8},
+	{"day":Color(.85,.94,1),"horizon":Color(1,.72,.53),"cirrus":.52,"cloud":.44,"size":1.35},
+	{"day":Color(.76,.89,1),"horizon":Color(.98,.58,.41),"cirrus":.34,"cloud":.57,"size":1.05},
+	{"day":Color(.92,.94,.98),"horizon":Color(.94,.76,.64),"cirrus":.63,"cloud":.68,"size":1.6},
+	{"day":Color(.82,.91,.98),"horizon":Color(1,.76,.48),"cirrus":.41,"cloud":.38,"size":.95}]
+
+static func sky_profile_for_day(date: int) -> Dictionary:
+	# Adjacent dates always differ; longer seasons vary their order. No save RNG.
+	var index:=posmod(date+floori(float(date)/5.0)*2,SKY_DAYS.size())
+	return SKY_DAYS[index].duplicate()
+
+func _daily_sky(hour: float) -> void:
+	var date:=floori(Time.get_unix_time_from_datetime_dict({"year":int(_clock.get("year")),"month":int(_clock.get("month")),"day":int(_clock.get("day")),"hour":0,"minute":0,"second":0})/86400.0)
+	var previous:=sky_profile_for_day(date-1);var today:=sky_profile_for_day(date)
+	var blend:=smoothstep(0,2,hour)
+	var dome:=_sky.get_node("SkyDome")
+	dome.set("atm_day_tint",Color(previous.day).lerp(today.day,blend))
+	dome.set("atm_horizon_light_tint",Color(previous.horizon).lerp(today.horizon,blend))
+	dome.set("cirrus_coverage",lerpf(previous.cirrus,today.cirrus,blend))
+	dome.set("cumulus_coverage",lerpf(previous.cloud,today.cloud,blend))
+	dome.set("cirrus_size",lerpf(previous.size,today.size,blend))
+	var clouds:=lerpf(previous.cloud,today.cloud,blend)
+	dome.set("atm_night_tint",Color(.032,.047,.080,.23).lerp(Color(.044,.052,.076,.28),clouds))
 
 func _ready() -> void:
 	_sky = get_parent().get_node("Sky3D")
 	_clock = _sky.get_node("TimeOfDay")
+	# Keep the existing astronomical sun/calendar, but give every dark night a
+	# visible moon. A real lunar orbit can put it below the horizon/new moon.
+	_clock.set("compute_moon_coords", false)
+	_clock.get_node("Timer").timeout.connect(_update_night_moon)
+	var dome := _sky.get_node("SkyDome")
+	dome.set("moon_size", 0.03)
+	dome.set("star_field_color", Color(1.12, 1.20, 1.35))
+	dome.set("starmap_color", Color(0.74, 0.80, 0.95, 0.92))
+	dome.set("star_scintillation", 0.28)
+	dome.set("star_scintillation_speed", 0.006)
+	var material: ShaderMaterial = dome.get("sky_material")
+	material.set_shader_parameter("moon_intensity", 1.6)
+	material.set_shader_parameter("moon_glow_intensity", 0.65)
+	_update_night_moon()
 	if not GameSettings.mobile_effects_profile():
 		_mist = particles(12, Vector3(14,0.1,14), Color(0.72,0.81,0.84,0.035), Vector2(8,1.2), false)
 		_mist.name = "MorningSeaMist"
@@ -18,6 +56,19 @@ func _ready() -> void:
 	GameSettings.changed.connect(_quality_changed)
 	_quality_changed()
 	call_deferred("_setup_island_effects")
+
+func _update_night_moon() -> void:
+	var dome := _sky.get_node("SkyDome")
+	var sun: Vector3 = (dome.get("_sun_transform") as Transform3D).origin.normalized()
+	# A steady clock-based orbit avoids the rapid azimuth reversal caused by
+	# projecting the sun near the nadir. The same interpolated clock drives both.
+	# Keep the moon 14–46 degrees above the horizon and visible from the raft.
+	var elevation := clampf(-sun.y, 0.24, 0.72)
+	var hour: float = _clock.call("get_render_time")
+	dome.set("moon_azimuth", hour / 24.0 * TAU - PI * 0.5)
+	dome.set("moon_altitude", acos(elevation))
+	var material: ShaderMaterial = dome.get("sky_material")
+	material.set_shader_parameter("night_moon_visibility", 1.0 - smoothstep(-0.16, -0.025, sun.y))
 
 static func particles(amount: int, extent: Vector3, color: Color, size: Vector2, emissive: bool) -> GPUParticles3D:
 	var emitter := GPUParticles3D.new()
@@ -113,11 +164,16 @@ func _setup_island_effects() -> void:
 		ridge.add_child(instance)
 
 func _process(delta: float) -> void:
+	_update_night_moon()
 	_sample += delta
 	if _sample < 0.5: return
 	_sample = 0.0
 	var hour: float = _clock.get("current_time")
-	var night := hour < 5.5 or hour > 18.5
+	_daily_sky(hour)
+	var sun_height: float = (_sky.get_node("SkyDome").get("_sun_transform") as Transform3D).origin.y
+	var daylight := smoothstep(-0.12,0.25,sun_height)
+	preload("res://scripts/resource_visual.gd").set_night_readability(1.0-daylight)
+	var night := sun_height < -0.12
 	var dawn := hour >= 5 and hour < 8
 	var dusk := hour >= 17 and hour < 19
 	var env := _sky.environment
@@ -129,11 +185,14 @@ func _process(delta: float) -> void:
 		_sky.get_node("SkyDome").set("fog_visible",false)
 	env.fog_density = 0.0 if mobile_effects else (0.0015 if night else (0.001 if dawn else 0.00055))
 	env.fog_light_color = Color("192b44") if night else (Color("a88672") if dawn or dusk else Color("91b9ca"))
-	env.ambient_light_energy = 0.35 if night else (0.48 if dawn or dusk else 0.62)
+	# Match the celestial light continuously, including restored calendar dates.
+	# Hour thresholds caused a visible brightness jump before sunrise/sunset.
+	env.ambient_light_energy = lerpf(0.52,0.62,daylight)
 	var fill := _sky.get_node_or_null("FillLight") as DirectionalLight3D
 	if fill != null:
 		# Broad sky bounce: diffuse only, so sunlight still owns water/wood glints.
-		fill.light_energy = 0.035 if night else (0.20 if dawn or dusk else 0.40)
+		# Shadowless moon/sky bounce keeps salvage readable from every direction.
+		fill.light_energy = lerpf(0.35,0.32,daylight)
 	var camera := get_viewport().get_camera_3d()
 	if _mist != null:
 		if camera != null: _mist.global_position = Vector3(camera.global_position.x,0.9,camera.global_position.z)

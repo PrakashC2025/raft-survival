@@ -244,7 +244,6 @@ static func item_color(item: String) -> Color:
 static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) -> void:
 	if item=="Burning Torch":item="Torch"
 	if item=="StorageBox":item="CargoCrate"
-	if item=="CookingSetup":item="Bonfire"
 	if item.trim_suffix(" Seed") in ["Potato","Carrot","Tomato","Coconut","Banana","Onion"]:item=item.trim_suffix(" Seed")
 	if ITEM_ART.draw(c, item, center, r):
 		return
@@ -262,6 +261,19 @@ static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) ->
 		c.draw_line(center+Vector2(-r*.65,0),center+Vector2(r*.65,0),Color(.77,.44,.17),r*.20,true)
 		return
 	match item:
+		"Screw":
+			_line(c,center+Vector2(-r*.5,r*.5),center+Vector2(r*.35,-r*.35),r*.18,Color(.56,.61,.62))
+			_line(c,center+Vector2(r*.09,-r*.61),center+Vector2(r*.61,-r*.09),r*.2,Color(.72,.75,.71))
+			for index in 4:
+				var p:=center+Vector2(-.36+index*.16,.36-index*.16)*r
+				_line(c,p+Vector2(-r*.12,-r*.08),p+Vector2(r*.12,r*.08),r*.06,Color(.26,.30,.31))
+		"Wire":
+			for index in 3: c.draw_arc(center,r*(.29+index*.12),-.3,TAU-.6,28,Color(.69,.24,.09),r*.07,true)
+			_line(c,center+Vector2(r*.48,0),center+Vector2(r*.70,r*.45),r*.08,Color(.75,.43,.17))
+		"Motor":
+			c.draw_rect(Rect2(center-Vector2(r*.49,r*.37),Vector2(r*.88,r*.74)),Color(.38,.45,.46))
+			_circle(c,center+Vector2(-r*.49,0),r*.37,Color(.62,.68,.67))
+			_line(c,center+Vector2(-r*.48,0),center+Vector2(-r*.78,0),r*.12,Color(.8,.81,.72))
 		"Medkit":
 			c.draw_rect(Rect2(center-Vector2(r*.65,r*.45),Vector2(r*1.3,r*.9)),Color(.85,.88,.81))
 			_line(c,center-Vector2(r*.3,0),center+Vector2(r*.3,0),r*.18,Color(.82,.15,.15))

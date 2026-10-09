@@ -1,5 +1,5 @@
 extends RefCounted
-## Nine rounded timbers, lashings, cross-braces and a purely decorative cloth.
+## Nine rounded timbers, lashings, cross-braces with clear deck space.
 const SURFACES := preload("res://scripts/object_materials.gd")
 const WOOD := preload("res://textures/construction/timber_photographic_atlas.png")
 static var _timber: ShaderMaterial
@@ -55,50 +55,4 @@ static func create() -> Node3D:
 		strap.material_override = rope
 		strap.transform = Transform3D(Basis(Vector3.FORWARD,PI/2)*Basis.from_scale(Vector3(0.17,1,1.04)),Vector3(-0.75+i*1.5,-0.035,0))
 		root.add_child(strap)
-	var rig := Node3D.new()
-	rig.name = "DecorativeRig"
-	rig.set_meta("cosmetic_only",true)
-	# Keep the cosmetic cloth at the aft edge, clear of the starting view and
-	# the centre of the third-person camera's line of sight.
-	rig.position = Vector3(-0.88,0.13,0.68)
-	root.add_child(rig)
-	var mast := MeshInstance3D.new()
-	var pole := CylinderMesh.new()
-	pole.top_radius = 0.025
-	pole.bottom_radius = 0.042
-	pole.height = 1.75
-	pole.radial_segments = 8
-	mast.mesh = pole
-	mast.material_override = _timber
-	mast.position.y = 0.85
-	rig.add_child(mast)
-	for i in range(3):
-		var tie := MeshInstance3D.new()
-		var collar := TorusMesh.new()
-		collar.inner_radius = 0.035
-		collar.outer_radius = 0.049
-		collar.rings = 16
-		collar.ring_segments = 6
-		tie.mesh = collar
-		tie.material_override = rope
-		tie.position.y = 0.25+i*0.027
-		rig.add_child(tie)
-	var cloth := MeshInstance3D.new()
-	cloth.name = "SalvagedCloth"
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for y in range(5):
-		for x in range(7):
-			if y == 0 and x in [2,6]: continue
-			for point in [Vector2(x,y),Vector2(x+1,y),Vector2(x+1,y+1),Vector2(x,y),Vector2(x+1,y+1),Vector2(x,y+1)]:
-				var uv: Vector2 = Vector2(point)/Vector2(7,5)
-				surface.set_uv(uv)
-				surface.add_vertex(Vector3(-0.04-uv.x*0.68,0.6+uv.y*0.78+(sin(uv.x*17)*0.025 if y == 0 else 0.0),0))
-	surface.generate_normals()
-	cloth.mesh = surface.commit()
-	var canvas := ShaderMaterial.new()
-	canvas.shader = preload("res://shaders/starter_sail.gdshader")
-	cloth.material_override = canvas
-	cloth.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	rig.add_child(cloth)
 	return root

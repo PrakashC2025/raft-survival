@@ -79,10 +79,14 @@ func resume() -> void:
 var _update_timer: Timer
 var _last_update: int = 0
 var _elapsed_active := 0.0
+var _sun_sample_direction := Vector3.UP
+var _star_sample_rotation := 0.0
+var _celestial_sample_valid := false
 
 func _process(delta: float) -> void:
 	if is_instance_valid(_update_timer) and not _update_timer.is_stopped():
 		_elapsed_active += delta
+		_render_celestial_motion()
 var _sky_dome: SkyDome
 
 @export_group("General")
@@ -126,6 +130,26 @@ var _sky_dome: SkyDome
 ## enabled for this to work. Negative values moves time backwards. The Witcher 3 uses a 96 minute cycle. 
 ## Adjust [member update_interval] to match. Shorter days needs more updates. Longer days need less.
 @export var minutes_per_day: float = 15.0
+
+## Smooth the realistic sky between orbital samples without recalculating the
+## orbits every frame. The calendar, signals and saved clock remain authoritative.
+@export var smooth_celestial_motion: bool = false
+
+func get_render_time() -> float:
+	var pending := _elapsed_active if smooth_celestial_motion and is_instance_valid(_update_timer) and not _update_timer.is_stopped() and not system_sync else 0.0
+	var rate := 0.0 if is_zero_approx(minutes_per_day) else HOURS_PER_DAY / (minutes_per_day * 60.0)
+	return fposmod(current_time + pending * rate, 24.0)
+
+func _render_celestial_motion() -> void:
+	if not smooth_celestial_motion or system_sync or celestials_calculations != CelestialMode.REALISTIC or not _celestial_sample_valid or not _sky_dome.is_scene_built:
+		return
+	var rate := 0.0 if is_zero_approx(minutes_per_day) else TAU / (minutes_per_day * 60.0)
+	var angle := _elapsed_active * rate
+	var direction := _sun_sample_direction.rotated(_sky_dome.celestial_north_pole.normalized(), -angle)
+	_sky_dome.sun_altitude = acos(clampf(direction.y, -1.0, 1.0))
+	_sky_dome.sun_azimuth = atan2(direction.x, direction.z)
+	if compute_deep_space_coords:
+		_sky_dome.sky_material.set_shader_parameter("star_rotation", _star_sample_rotation - angle)
 
 
 ## Celestial coordinates are updated based upon a timer, which continuously fires based on
@@ -420,6 +444,10 @@ func _update_celestial_coords() -> void:
 					_sky_dome.sky_material.set_shader_parameter("star_tilt", latitude - HALFPI)
 					_sky_dome.sky_material.set_shader_parameter("star_rotation", -_local_sideral_time)
 	_sky_dome.update_moon_coords()
+	if _sky_dome.is_scene_built:
+		_sun_sample_direction = _sky_dome._sun_transform.origin.normalized()
+		_star_sample_rotation = -_local_sideral_time
+		_celestial_sample_valid = true
 
 
 func _compute_simple_sun_coords() -> void:

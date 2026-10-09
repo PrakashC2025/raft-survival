@@ -45,6 +45,8 @@ var collected_island_pickups: Dictionary = {}
 var infinite: bool = false
 var testing_resources_granted: bool = false
 var testing_soil_granted: bool = false
+const TESTING_SOIL_REVISION := 2
+var testing_soil_revision := 0
 
 # What each craftable/placeable thing costs.
 const RECIPES := {
@@ -67,7 +69,7 @@ const RECIPES := {
 	"TreePot":         {"Wood": 8, "Rope": 1, "Soil": 6},
 	"SandFilter": {"Wood": 6, "Sand": 4, "Sponge": 2, "Plastic": 2},
 	"WaterPurifier": {"Metal": 4, "Stone": 3, "Plastic": 2},
-	"WindGenerator": {"Metal": 8, "Wood": 6, "Rope": 3, "Plastic": 4},
+	"WindGenerator": {"Wood":8,"Metal":4,"Screw":4,"Wire":2,"Motor":1,"Battery":1},
 	"ElectricLamp": {"Metal": 2, "Plastic": 2},
 	"ElectricPurifier": {"Metal": 8, "Plastic": 5, "Rope": 2},
 	"RescueRadio": {"Metal": 10, "Plastic": 6, "Rope": 2},
@@ -76,6 +78,11 @@ const RECIPES := {
 ## Portable survival and raft equipment. These recipes produce an inventory
 ## item; building recipes above are paid when their structure is placed.
 const ITEM_RECIPES := {
+	"Axe": {"Wood":3,"Metal":2,"Rope":1},
+	"Pickaxe": {"Wood":3,"Metal":3,"Rope":1},
+	"Shovel": {"Wood":2,"Metal":2,"Rope":1},
+	"Paddle": {"Wood":4,"Plastic":2,"Rope":1},
+	"Anchor": {"Metal":4,"Stone":4,"Rope":4},
 	"Fishing Rod": {"Wood": 3, "Rope": 2, "Plastic": 1},
 	"Spear": {"Wood": 3, "Stone": 2, "Rope": 1},
 	"Sail Kit": {"Wood": 8, "Rope": 4, "Plastic": 2},
@@ -83,15 +90,20 @@ const ITEM_RECIPES := {
 	"Life Vest": {"Plastic": 5, "Rope": 2},
 	"Bow": {"Wood": 5, "Rope": 3},
 	"Arrow": {"Wood": 1, "Stone": 1},
-	"Diving Tank": {"Metal": 6, "Plastic": 4, "Rope": 2},
+	"Diving Tank": {"Plastic": 8, "Rope": 3, "Metal": 2},
 	"Bandage": {"Rope": 2},
 	"Torch": {"Wood": 2, "Rope": 1},
 	"Solar Torch": {"Metal":2,"Plastic":2},
 	"Binoculars": {"Metal":2,"Plastic":3},
 	"Walkie Talkie": {"Metal":4,"Plastic":3,"Rope":1},
 	"Battery": {"Metal":1,"Plastic":1},
+	"Repair Kit": {"Metal":2,"Wood":1,"Rope":1},
+	"Screw": {"Metal":1},
+	"Wire": {"Metal":1,"Plastic":1},
+	"Motor": {"Metal":3,"Wire":2,"Screw":2},
 	"Medkit": {"Rope":4,"Plastic":2},
 	"Can": {"Metal":1},
+	"Tumbler": {"Metal":2},
 }
 
 
@@ -112,9 +124,10 @@ func grant_testing_resources() -> void:
 	if not TESTING_RESOURCES_ENABLED:
 		return
 	# Separate migration flag grants soil to existing saves without refilling wood etc.
-	if not testing_soil_granted:
+	if testing_soil_revision < TESTING_SOIL_REVISION:
 		var soil_needed := maxi(0,TESTING_RESOURCE_AMOUNT-total("Soil"))
 		testing_soil_granted = soil_needed == 0 or add("Soil",soil_needed) == 0
+		if testing_soil_granted: testing_soil_revision = TESTING_SOIL_REVISION
 	if testing_resources_granted:return
 	var complete := true
 	for material in TESTING_RESOURCE_ITEMS:
@@ -320,6 +333,7 @@ func mark_island_pickup_collected(pickup_id: String) -> void:
 
 ## The filter accepts a salvaged plastic can or a metal container.
 func recipe_cost(recipe: String) -> Dictionary:
+	if recipe in ["WindGenerator","ElectricLamp"] and has(recipe,1):return {recipe:1}
 	var cost: Dictionary = RECIPES.get(recipe,{}).duplicate()
 	if recipe=="SandFilter" and total("Plastic")<2 and total("Metal")>=2:
 		cost.erase("Plastic")
@@ -327,6 +341,9 @@ func recipe_cost(recipe: String) -> Dictionary:
 	return cost
 
 func can_afford(recipe: String) -> bool:
+	# Old owned lamp kits/saved structures remain recoverable, but new lamps
+	# are excluded from crafting and salvage at the owner's request.
+	if recipe=="ElectricLamp" and not has(recipe,1):return false
 	if not recipe_unlocked(recipe):
 		return false
 	if infinite:
@@ -481,6 +498,7 @@ func craft_item(item_name: String) -> bool:
 	return success
 
 func recipe_unlocked(recipe: String) -> bool:
+	if recipe in ["WindGenerator","ElectricLamp"] and has(recipe,1):return true
 	var progress := get_tree().get_first_node_in_group("survival_progression")
 	return progress == null or bool(progress.call("unlocked", recipe))
 
@@ -543,6 +561,7 @@ func save_game(extra: Dictionary = {}, slot: String = "main") -> bool:
 		"version": SAVE_VERSION,
 		"testing_resources_granted": testing_resources_granted,
 		"testing_soil_granted": testing_soil_granted,
+		"testing_soil_revision": testing_soil_revision,
 		"slots": slot_data,
 		"saved_at": Time.get_unix_time_from_system(),
 		"collected_island_pickups": collected_island_pickups.keys(),
@@ -576,6 +595,7 @@ func load_game(slot: String = "main") -> Dictionary:
 	collected_island_pickups.clear()
 	testing_resources_granted = bool(data.get("testing_resources_granted", false))
 	testing_soil_granted = bool(data.get("testing_soil_granted", false))
+	testing_soil_revision = int(data.get("testing_soil_revision",0))
 	var saved_pickups: Variant = data.get("collected_island_pickups", [])
 	if saved_pickups is Array:
 		for pickup_id in saved_pickups:
@@ -608,6 +628,7 @@ func new_game_reset(clear_save_files: bool = true) -> void:
 	_ensure_slots()
 	testing_resources_granted = false
 	testing_soil_granted = false
+	testing_soil_revision = 0
 	for i in range(slots.size()):
 		slots[i] = {}
 	loaded_meta = {}

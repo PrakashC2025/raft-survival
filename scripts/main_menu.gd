@@ -54,6 +54,18 @@ var _touch_ids: Array = []        # fingers currently on the screen
 ## Prepare dependencies first, then request exactly one script at a time.
 ## Concurrent script/scene requests can deadlock the GDScript preload cache.
 const SCRIPT_WARM_PATHS := [
+	"res://textures/ui/tools/axe.png",
+	"res://textures/ui/tools/pickaxe.png",
+	"res://textures/ui/tools/shovel.png",
+	"res://textures/ui/tools/paddle.png",
+	"res://textures/ui/tools/anchor.png",
+	"res://scripts/survival_tools.gd",
+	"res://scripts/survival_tool_visual.gd",
+	"res://scripts/biome_island.gd",
+	"res://scripts/biome_resource.gd",
+	"res://shaders/biome_terrain.gdshader",
+	"res://shaders/volcanic_lava.gdshader",
+	"res://shaders/winter_needles.gdshader",
 	"res://scripts/build_socket.gd",
 	"res://scripts/object_materials.gd",
 	"res://scripts/construction_visual.gd",
@@ -82,6 +94,8 @@ const SCRIPT_WARM_PATHS := [
 	"res://scripts/torch_visual.gd",
 	"res://scripts/rope_hand_grip.gd",
 	"res://scripts/survival_audio.gd",
+	"res://scripts/contact_audio.gd",
+	"res://scripts/dive_visual.gd",
 	"res://scripts/survival_progression.gd",
 	"res://scripts/portable_electronics.gd",
 	"res://scripts/survival_animal.gd",
@@ -125,6 +139,14 @@ const SCRIPT_WARM_PATHS := [
 	"res://scripts/island_destination.gd",
 	"res://scripts/island_birds.gd",
 	"res://scripts/fish_school.gd",
+	"res://shaders/shark_skin.gdshader",
+	"res://shaders/undersea_surface.gdshader",
+	"res://shaders/sea_plants.gdshader",
+	"res://scripts/seabed.gd",
+	"res://scripts/sea_fauna_visual.gd",
+	"res://scripts/underwater_shoal.gd",
+	"res://scripts/dive_creature.gd",
+	"res://scripts/underwater_world.gd",
 	"res://addons/sky_3d/src/SkyDome.gd",
 	"res://addons/sky_3d/src/Sky3D.gd",
 	"res://addons/sky_3d/src/TimeOfDay.gd",
@@ -133,6 +155,7 @@ var _warming_scripts := false
 # Models, textures, sounds and shaders have no gameplay scripts. Retain their
 # prepared resources before loading scripts in dependency order on one worker.
 const MODEL_WARM_PATHS := [
+	"res://textures/underwater/kelp.svg",
 	"res://models/sand_raftsurvival.glb",
 	"res://models/coconut_palm.glb",
 	"res://models/realistic_grass.glb",
@@ -161,6 +184,9 @@ const MODEL_WARM_PATHS := [
 	"res://3d models/Wooded_arrow/cc0_-_wooden_arrow.glb",
 	"res://shaders/object_surface.gdshader",
 	"res://shaders/debris_weathered.gdshader",
+	"res://shaders/meal_surface.gdshader",
+	"res://shaders/cooking_steam.gdshader",
+	"res://shaders/flower_petals.gdshader",
 	"res://shaders/produce_skin.gdshader",
 	"res://shaders/sponge_surface.gdshader",
 	"res://shaders/palm_leaf.gdshader",
@@ -564,6 +590,17 @@ func _request_game_load() -> void:
 		return
 	_warming_scripts = true
 	var warm_paths: Array = MODEL_WARM_PATHS + SCRIPT_WARM_PATHS
+	for image in preload("res://scripts/item_art.gd").STATION_IMAGES.values():
+		warm_paths.append("res://textures/ui/stations/"+str(image)+".png")
+	for item in ["solar_torch","walkie_talkie","binoculars","repair_kit"]:
+		warm_paths.append("res://textures/ui/tools/"+item+".png")
+	if ResourceLoader.exists("res://textures/ui/food/recipe_atlas.png"):
+		warm_paths.append("res://textures/ui/food/recipe_atlas.png")
+	else:
+		for dish in preload("res://scripts/food_rules.gd").RECIPES:
+			warm_paths.append("res://textures/ui/food/"+str(dish).to_lower().replace(" ","_")+".png")
+	for dish in ["Tumbler","Ocean Water Tumbler","Boiled Water Tumbler","Diving Tank"]:
+		warm_paths.append("res://textures/ui/food/"+str(dish).to_lower().replace(" ","_")+".png")
 	for path in warm_paths:
 		var prepare_started := Time.get_ticks_msec()
 		if ResourceLoader.load_threaded_request(path) != OK:
@@ -877,7 +914,7 @@ func _draw_button_icon(c: Vector2, r: float, id: String, col: Color) -> void:
 
 func _draw_footer(s: Vector2) -> void:
 	var fs := 14
-	var foot := "BUILD. SURVIVE. SAIL ON."
+	var foot := "BUILD. SURVIVE. SAIL ON.  •  v" + str(ProjectSettings.get_setting("application/config/version", "1.1.7"))
 	var font := ThemeDB.fallback_font
 	var tw: float = font.get_string_size(foot, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	_draw_text(foot, Vector2((s.x - tw) * 0.5, s.y - fs * 1.4), fs, Color(1, 1, 1, 0.28))

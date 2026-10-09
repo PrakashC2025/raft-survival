@@ -6,7 +6,7 @@ class_name Debris
 
 # ---- Ocean current (assigned by the spawner so all debris share a stream) ----
 @export var current_direction: Vector3 = Vector3(0, 0, 1)
-@export var current_speed: float = 1.2
+@export var current_speed: float = 0.32
 
 # ---- Floating profile ----
 @export var freeboard: float = 0.15
@@ -36,8 +36,6 @@ var _fade_material: StandardMaterial3D = null
 var _model_visual: Node3D = null
 
 const BUOY_DAMPING: float = 3.0
-const WOOD_LOG_SCENE: PackedScene = preload("res://models/kenney_log.glb")
-const BARREL_SCENE: PackedScene = preload("res://models/kenney_barrel.glb")
 const STONE_SCENE: PackedScene = preload("res://models/kenney_rock_small.glb")
 const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
@@ -46,6 +44,8 @@ var _visual_geometry: Array[GeometryInstance3D] = []
 
 # Each entry controls how "floaty" that item looks (rides higher/lower).
 const ITEM_PROFILES := {
+	"WindGenerator": {"mass": 6.0, "freeboard": 0.10, "color": Color(.27,.32,.29)},
+	"ElectricLamp": {"mass": 1.0, "freeboard": 0.10, "color": Color(.55,.57,.51)},
 	"Wood":    {"mass": 2.0, "freeboard": 0.07, "color": Color(0.85, 0.65, 0.35)},
 	"Rope":    {"mass": 1.0, "freeboard": 0.01, "color": Color(0.75, 0.60, 0.35)},
 	"Plastic": {"mass": 0.6, "freeboard": 0.08, "color": Color(0.3, 0.7, 1.0)},
@@ -63,9 +63,9 @@ func _ready() -> void:
 		ocean = get_node_or_null("%Ocean")
 
 	_wander_seed = randf() * 1000.0
-	_side_drift = randf_range(-0.3, 0.3)
+	_side_drift = randf_range(-0.04, 0.04)
 	_speed_variation = randf_range(0.9, 1.0)
-	_rot_speed = randf_range(-1.0, 1.0)
+	_rot_speed = randf_range(-0.12, 0.12)
 
 	_apply_profile()
 	if is_instance_valid(_model_visual):RESOURCE_VISUAL.weather(_model_visual,item_name)
@@ -99,6 +99,11 @@ func is_fade_done() -> bool:
 
 func _apply_profile() -> void:
 	if not ITEM_PROFILES.has(item_name):
+		if item_name in ["Screw","Wire","Motor","Battery","Solar Torch","Walkie Talkie","Binoculars"]:
+			freeboard=0.08
+			_model_visual=RESOURCE_VISUAL.create(item_name);add_child(_model_visual)
+			(get_node("MeshInstance3D") as MeshInstance3D).hide()
+			_cache_visual_geometry();_set_visual_alpha(0.0)
 		if item_name.ends_with(" Seed"):
 			var crop:=item_name.trim_suffix(" Seed")
 			if crop in ["Potato","Tomato","Banana"]:
@@ -119,26 +124,12 @@ func _apply_profile() -> void:
 	mass_kg = float(profile["mass"])
 	freeboard = float(profile["freeboard"])
 	var mesh_instance := get_node_or_null("MeshInstance3D") as MeshInstance3D
-	var model_scene: PackedScene = null
-	var target_size := 0.0
 	match item_name:
-		"Wood":
-			model_scene = WOOD_LOG_SCENE
-			target_size = 0.86
-			_set_collision_box_size(Vector3(0.32, 0.24, 0.9))
-		"Barrel":
-			model_scene = BARREL_SCENE
-			target_size = 0.5
-			_set_collision_box_size(Vector3(0.46, 0.44, 0.46))
+		"Wood": _set_collision_box_size(Vector3(0.32, 0.24, 0.9))
+		"Barrel": _set_collision_box_size(Vector3(0.46, 0.44, 0.46))
+		"WindGenerator","ElectricLamp": _set_collision_box_size(Vector3(.52,.52,.52))
 
-	if model_scene != null and mesh_instance != null:
-		_model_visual = _create_model_visual(model_scene, target_size)
-		if _model_visual != null:
-			mesh_instance.visible = false
-			_cache_visual_geometry()
-			_set_visual_alpha(0.0)
-			return
-	if item_name in ["Rope", "Plastic", "Metal", "Sponge", "Soil", "Stone"] and mesh_instance != null:
+	if item_name in ["Wood", "Barrel", "Rope", "Plastic", "Metal", "Sponge", "Soil", "Stone", "WindGenerator", "ElectricLamp"] and mesh_instance != null:
 		_model_visual = RESOURCE_VISUAL.create(item_name)
 		add_child(_model_visual)
 		mesh_instance.visible = false
@@ -261,7 +252,7 @@ func _physics_process(delta: float) -> void:
 
 		# ---- Gentle natural tumble ----
 		var t: float = Time.get_ticks_msec() / 1000.0 + _wander_seed
-		angular_velocity = Vector3(sin(t * 0.5) * 0.2, _rot_speed, cos(t * 0.4) * 0.2)
+		angular_velocity = Vector3(sin(t * 0.5) * 0.06, _rot_speed, cos(t * 0.4) * 0.06)
 
 	# ---- Fade in on spawn ----
 	# Advance the timer regardless of whether this item has a fade material.

@@ -3,7 +3,7 @@ const SURFACES := preload("res://scripts/object_materials.gd")
 const FLAME: Shader = preload("res://shaders/campfire.gdshader")
 const COOKED := {"Fish": "Cooked Fish", "Raw Bird": "Roast Bird", "Potato": "Baked Potato", "Raw Meat": "Cooked Meat", "Raw Crab": "Cooked Crab"}
 var fuel := 180.0
-var burning := true
+var burning := false
 var cook_remaining := 0.0
 var cook_item := ""
 var _flames: Node3D
@@ -63,8 +63,8 @@ func _ready() -> void:
 	_light.light_energy = 1.3
 	_light.shadow_enabled = false
 	add_child(_light)
-	_flames.visible = not _preview
-	_light.visible = not _preview
+	_flames.visible = burning and not _preview
+	_light.visible = burning and not _preview
 	if not _preview:
 		_crackle = AudioStreamPlayer3D.new()
 		_crackle.stream = preload("res://scripts/survival_audio.gd").fire_stream()
@@ -80,10 +80,19 @@ func exposed_to_rain() -> bool:
 	var query := PhysicsRayQueryParameters3D.create(from, from + Vector3.UP * 8.0, 1, [get_rid()])
 	return get_world_3d().direct_space_state.intersect_ray(query).is_empty()
 
+func extinguish() -> void:
+	burning=false
+	if is_instance_valid(_flames):_flames.hide()
+	if is_instance_valid(_light):_light.hide()
+	if is_instance_valid(_crackle):_crackle.stop()
+
 func interact_survival(player: Node) -> void:
 	if _preview:
 		return
 	var item := str(player.get("active_item"))
+	if not burning or item=="Stone":
+		player.get_node("FireActions").start("snuff_fire" if burning else "ignite_fire",self)
+		return
 	if burning and fuel>0 and item!="Wood":
 		player.get_node("SurvivalServices").call("open_cooking",self)
 		return
@@ -120,6 +129,7 @@ func _process(delta: float) -> void:
 						if player != null:
 							player.call("_hud_toast", "MEAL COOKED · " + str(COOKED[cook_item]).to_upper())
 						cook_item = ""
+						extinguish()
 					else:
 						cook_remaining = 1.0 # full bag: retry without losing the raw food
 				else:
@@ -133,7 +143,11 @@ func _process(delta: float) -> void:
 func save_survival_state() -> Dictionary:
 	return {"fuel": fuel, "burning": burning, "cook": cook_remaining, "item": cook_item}
 
-func interaction_caption() -> String:return "CLICK TO COOK" if burning and fuel>0 else "ADD FIREWOOD"
+func interaction_caption() -> String:
+	var player:=get_tree().get_first_node_in_group("player")
+	if not burning or fuel<=0:return "LIGHT FIRE"
+	if player!=null and player.active_item=="Stone":return "PUT OUT FIRE"
+	return "ADD FIREWOOD" if player!=null and player.active_item=="Wood" else "COOK / FIRE"
 
 func restore_survival_state(data: Dictionary) -> void:
 	fuel = clampf(float(data.get("fuel", 180)), 0, 900)

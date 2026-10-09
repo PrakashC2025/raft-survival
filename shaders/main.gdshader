@@ -20,7 +20,7 @@ render_mode unshaded, cull_disabled;
 // --- time-of-day state (ocean.gd) ---
 uniform vec3 water_day_color = vec3(0.024, 0.20, 0.42);
 uniform vec3 water_twilight_color = vec3(0.02, 0.15, 0.34);
-uniform vec3 water_night_color = vec3(0.014, 0.08, 0.20);
+uniform vec3 water_night_color = vec3(0.024, 0.072, 0.12);
 uniform vec3 water_deep_color = vec3(0.012, 0.09, 0.20);
 uniform vec3 water_horizon_color = vec3(0.05, 0.44, 0.66);
 uniform vec3 water_crest_color = vec3(0.21, 0.52, 0.65);
@@ -36,14 +36,17 @@ uniform vec3 moon_glint_color = vec3(0.72, 0.82, 1.0);
 uniform float sparkle_strength : hint_range(0.0, 4.0) = 0.35;
 uniform float surface_detail : hint_range(0.0, 1.0) = 1.0;
 uniform sampler2D wave_normals : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform vec4 island_shores[4];
+uniform vec4 island_shores[7];
 uniform sampler2D shore_height_0 : filter_linear, repeat_disable;
 uniform sampler2D shore_height_1 : filter_linear, repeat_disable;
 uniform sampler2D shore_height_2 : filter_linear, repeat_disable;
 uniform sampler2D shore_height_3 : filter_linear, repeat_disable;
+uniform sampler2D shore_height_4 : filter_linear, repeat_disable;
+uniform sampler2D shore_height_5 : filter_linear, repeat_disable;
+uniform sampler2D shore_height_6 : filter_linear, repeat_disable;
 
 float coastal_depth(vec3 position_value) {
-	for (int index = 0; index < 4; index++) {
+	for (int index = 0; index < 7; index++) {
 		vec4 zone = island_shores[index];
 		if (zone.z < 1.0) { continue; }
 		vec2 uv = (position_value.xz - zone.xy) / (zone.zw * 2.0) + 0.5;
@@ -52,7 +55,10 @@ float coastal_depth(vec3 position_value) {
 		if (index == 0) { ground = texture(shore_height_0, uv).r; }
 		else if (index == 1) { ground = texture(shore_height_1, uv).r; }
 		else if (index == 2) { ground = texture(shore_height_2, uv).r; }
-		else { ground = texture(shore_height_3, uv).r; }
+		else if (index == 3) { ground = texture(shore_height_3, uv).r; }
+		else if (index == 4) { ground = texture(shore_height_4, uv).r; }
+		else if (index == 5) { ground = texture(shore_height_5, uv).r; }
+		else { ground = texture(shore_height_6, uv).r; }
 		float edge = min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y));
 		float padding_depth = (1.0 - smoothstep(0.0, 0.13, edge)) * 12.0;
 		return position_value.y - ground + padding_depth;
@@ -223,20 +229,12 @@ void fragment() {
 	// distant water smooths into atmospheric cobalt.
 	float dist = distance(world_pos, CAMERA_POSITION_WORLD);
 	float fine = 1.0 - smoothstep(35.0, 170.0, dist);
-	vec2 mdir1 = vec2(0.6, 0.8);
-	vec2 mdir2 = vec2(0.9, -0.4);
-	vec2 mdir3 = vec2(-0.72, 0.55);
-	// Calm-water micro ripples: small amplitude and slow speed so the near
-	// field shimmers gently instead of boiling.
-	float mh = 0.12 * sin(dot(mdir1, p) * 2.8 + t * 1.2)
-		+ 0.09 * sin(dot(mdir2, p) * 4.6 + t * 1.6)
-		+ 0.05 * sin(dot(mdir3, p) * 7.4 + t * 2.0);
-	float mgx = 0.12 * 2.8 * mdir1.x * cos(dot(mdir1, p) * 2.8 + t * 1.2)
-		+ 0.09 * 4.6 * mdir2.x * cos(dot(mdir2, p) * 4.6 + t * 1.6)
-		+ 0.05 * 7.4 * mdir3.x * cos(dot(mdir3, p) * 7.4 + t * 2.0);
-	float mgz = 0.12 * 2.8 * mdir1.y * cos(dot(mdir1, p) * 2.8 + t * 1.2)
-		+ 0.09 * 4.6 * mdir2.y * cos(dot(mdir2, p) * 4.6 + t * 1.6)
-		+ 0.05 * 7.4 * mdir3.y * cos(dot(mdir3, p) * 7.4 + t * 2.0);
+	// Coarse horizon triangles must not interpolate large near-wave normals
+	// into kilometre-long reflection bands. Near waves/CPU buoyancy are intact.
+	n=normalize(mix(n,vec3(0.0,1.0,0.0),smoothstep(180.0,600.0,dist)));
+	// Filtered moving normals replace the three regular crossed sine bands.
+	// Their screen footprint suppresses distant glitter without extra passes.
+	float detail_lod = 1.0-smoothstep(0.06,0.45,length(fwidth(p*0.8)));
 	vec3 ripple = water_noise(p * 1.7 + vec2(t * 0.24, -t * 0.18));
 	vec2 normal_a = texture(wave_normals, p * 0.028 + vec2(t * 0.003,-t * 0.002)).xy * 2.0 - 1.0;
 	vec2 normal_b = texture(wave_normals, vec2(p.y,-p.x) * 0.085 + vec2(-t * 0.007,t * 0.006)).xy * 2.0 - 1.0;
@@ -249,10 +247,10 @@ void fragment() {
 	ripple_slope += surface_swell.yz*0.065*swell_lod;
 	if (surface_detail > 0.6) {
 		vec3 small_ripple = water_noise(p * 4.3 + vec2(-t * 0.35, t * 0.29));
-		ripple_slope += small_ripple.yz * 0.035;
+		ripple_slope += small_ripple.yz * 0.018 * detail_lod;
 	}
-	n = normalize(vec3(n.x - mgx*0.08*fine - ripple_slope.x*mix(0.30,1.0,fine),
-		n.y, n.z - mgz*0.08*fine - ripple_slope.y*mix(0.30,1.0,fine)));
+	n = normalize(vec3(n.x - ripple_slope.x*mix(0.12,0.85,fine)*detail_lod,
+		n.y, n.z - ripple_slope.y*mix(0.12,0.85,fine)*detail_lod));
 	ndv = max(dot(n, tocam), 0.0);
 	float micro_w = (ripple.x - 0.5) * fine * 0.20;
 
@@ -272,7 +270,7 @@ void fragment() {
 	// sheet). Night: faint navy. Used by the horizon, fresnel sheen and the
 	// sky-mirror band shading so surface structure tracks the actual sky.
 	vec3 sky_tone = mix(vec3(0.10, 0.25, 0.36), vec3(0.13, 0.23, 0.32), twilight_factor);
-	sky_tone = mix(sky_tone, vec3(0.016, 0.06, 0.14), night_factor);
+	sky_tone = mix(sky_tone, vec3(0.040, 0.10, 0.18), night_factor);
 
 	// ---- Near/steep = deep navy; far/grazing = lighter cobalt horizon ----
 	// Looking almost straight down at close water you see through to the deep
@@ -288,7 +286,8 @@ void fragment() {
 	hz = mix(hz, sky_tone * 1.35, twilight_factor * 0.6);
 	hz = mix(hz, water_night_color * 1.5, night_factor);
 	float near_steep = (1.0 - horizon_k) * smoothstep(0.5, 0.95, ndv);
-	base = mix(base, water_deep_color, near_steep * 0.92);
+	vec3 deep_body = mix(water_deep_color, water_night_color * 0.72, night_factor);
+	base = mix(base, deep_body, near_steep * 0.92);
 	base = mix(base, hz, horizon_k * 0.85);
 
 	// ---- Fresnel sheen toward the sky tone (subtle) ----
@@ -297,13 +296,15 @@ void fragment() {
 	// ---- Wave-band shading: rolling crest faces catch light, troughs darken ----
 	float crest = wave_crest;
 	float trough = smoothstep(-1.0, -0.08, -crest);
-	base *= 1.0 - trough * 0.24 * (1.0 - horizon_k * 0.75);
+	base *= 1.0 - trough * 0.24 * (1.0 - horizon_k * 0.75) * (1.0-night_factor*0.55);
 	// Neutral wave-band contrast (works at any time of day, incl. night): rolling
 	// crests lift and troughs fall so wave bands stay visible even without sun.
 	base *= 1.0 + crest * 0.16 * (1.0 - horizon_k * 0.75);
 	// At night crests pick up a faint cool lift so the far dark side still shows
 	// moving swell structure instead of a uniform navy sheet.
-	base += crest * vec3(0.02, 0.05, 0.10) * night_factor * (1.0 - horizon_k * 0.9);
+	// Only lift moonlit crests. Subtracting this in troughs made black bands
+	// that looked like cloud shadows even with the reflection disabled.
+	base += max(crest,0.0) * vec3(0.008, 0.02, 0.035) * night_factor * (1.0 - horizon_k * 0.9);
 	// Fragment-scale ripple shading: micro crests catch a little light, micro
 	// troughs fall darker — this is what makes the near field read as moving
 	// chop instead of a flat tint between the coarse mesh waves.
@@ -318,21 +319,22 @@ void fragment() {
 	vec3 r = reflect(-tocam, n);
 	// A mobile-friendly sky reflection, strongest at grazing angles. This is
 	// an analytic sky approximation rather than screen-space scene reflection.
-	vec3 reflected_horizon = mix(vec3(0.17, 0.32, 0.46), vec3(0.30, 0.23, 0.20), twilight_factor);
-	vec3 reflected_zenith = mix(vec3(0.03, 0.12, 0.24), vec3(0.07, 0.11, 0.22), twilight_factor);
-	reflected_horizon = mix(reflected_horizon, vec3(0.024, 0.05, 0.09), night_factor);
-	reflected_zenith = mix(reflected_zenith, vec3(0.009, 0.018, 0.05), night_factor);
+	vec3 reflected_horizon = mix(vec3(0.22, 0.35, 0.43), vec3(0.30, 0.23, 0.20), twilight_factor);
+	vec3 reflected_zenith = mix(vec3(0.045, 0.16, 0.27), vec3(0.07, 0.11, 0.22), twilight_factor);
+	// Clear moonlit blue bounce at night: do not mirror a black cloud ceiling.
+	reflected_horizon = mix(reflected_horizon, vec3(0.065, 0.13, 0.20), night_factor);
+	reflected_zenith = mix(reflected_zenith, vec3(0.040, 0.085, 0.15), night_factor);
 	vec3 reflection = mix(reflected_horizon, reflected_zenith, smoothstep(0.02, 0.85, max(r.y, 0.0)));
 	float cloud = water_noise(r.xz / max(r.y + 0.4, 0.2) * 2.2 + vec2(t * 0.012, 0.0)).x;
 	reflection += smoothstep(0.48, 0.78, cloud) * vec3(0.14, 0.15, 0.14) * (1.0 - night_factor);
-	base = mix(base, reflection, 0.08 + fres * 0.38);
+	base = mix(base, reflection, (0.08 + fres * 0.38) * mix(1.0,0.35,night_factor));
 	// Dark troughs retain depth beneath brighter moving reflective facets.
 	base *= mix(0.82,1.03,smoothstep(-0.7,0.6,crest));
 	float refl_up = r.y;
 	float mir_k = smoothstep(-0.14, 0.28, refl_up);
 	mir_k *= 1.0 - near_steep * 0.7;  // weakest looking straight down
 	base = mix(base, sky_tone * 1.1, mir_k * 0.16);
-	base *= 1.0 - (1.0 - mir_k) * 0.06;  // facets hiding the sky sit slightly darker
+	base *= 1.0 - (1.0 - mir_k) * 0.06 * (1.0-night_factor);
 
 	// Lit wave faces: only faces tilted toward the light on rising crests get the
 	// blue-cyan lift (reference crest fronts). Faces away from the sun stay in
@@ -357,20 +359,24 @@ void fragment() {
 
 	// Night dims the whole water body only gently (the deep/horizon mixes above
 	// are day-scaled); moon glitter is added afterwards so it still reads.
-	base *= mix(1.0, 0.80, night_factor);
+	base *= mix(1.0, 0.98, night_factor);
 
 	// ---- Specular: broken sun glitter by day, moon shimmer by night ----
 	// Highlights only land on crest bands, break into elongated streaks via
 	// chop, and fade out with distance — no round dots, no far-field grid.
 	float sdot = max(dot(r, sun_n), 0.0);
 	float glitter_dist = 1.0 - smoothstep(30.0, 120.0, dist);
-	float glitter = (pow(sdot, 32.0) * 0.17 + pow(sdot, 210.0) * 2.2) * chop
+	float glitter = (pow(sdot, 28.0) * 0.20 + pow(sdot, mix(70.0,150.0,detail_lod)) * 0.85) * chop
 		* mix(0.55, 1.0, glitter_dist)
 		* sparkle_strength * (1.0 - night_factor);
 	// Moon path: wider lobe + stronger so the shimmer visibly tracks the swell
 	// lines at night (the “path of moonlight on water”).
-	float moon_spark = pow(max(dot(r, normalize(moon_dir)), 0.0), 60.0) * chop
-		* glitter_dist * 0.35 * moon_factor * sparkle_strength * 0.40;
+	// A continuous broken silver path reaches the horizon. The old 120 m
+	// daytime glitter cutoff erased the distant moon reflection completely.
+	float moon_alignment = max(dot(r, normalize(moon_dir)),0.0);
+	float moon_distance = 1.0-smoothstep(80.0,420.0,dist);
+	float moon_spark = (pow(moon_alignment,32.0)*0.20+pow(moon_alignment,110.0)*0.65)
+		* mix(0.22,chop,0.78)*moon_distance*moon_factor*sparkle_strength*0.32;
 	vec3 light_add = glitter * sun_glint_color + moon_spark * moon_glint_color;
 
 	// Soft broad sheen on wave faces facing each light (kept small).
@@ -388,7 +394,7 @@ void fragment() {
 	// Whitecaps stay blue-white at night (moonlit foam, not gray flecks).
 	vec3 foam_col = mix(water_foam_color * 0.9, vec3(0.30, 0.40, 0.52), night_factor);
 	foam_col = mix(foam_col, water_foam_color * 0.5, twilight_factor * 0.6);
-	light_add += cap * foam_col * 0.26 * (1.0 - night_factor * 0.45);
+	light_add += cap * foam_col * 0.12 * (1.0 - night_factor * 0.45);
 
 	// ---- Atmospheric haze at the very far field ----
 	float haze = smoothstep(90.0, 380.0, dist);
@@ -406,7 +412,9 @@ void fragment() {
 	light_add += foam_col * shore_foam * 0.38;
 
 	// Never-black floor keeps the water reading as water even in deep night.
-	vec3 col = max(base + light_add, vec3(0.012, 0.03, 0.09));
+	// A small additive night fill retains wave/reflection contrast. A large
+	// channel-wise minimum flattened most night pixels to one solid blue.
+	vec3 col = max(base + light_add + vec3(0.002,0.004,0.009)*night_factor, vec3(0.001,0.002,0.004));
 	// Sparse plankton follows moving wave crests, fading beyond the near water.
 	vec2 plankton_cell = floor(world_pos.xz * 1.8);
 	float plankton_seed = fract(sin(dot(plankton_cell,vec2(127.1,311.7)))*43758.5453);

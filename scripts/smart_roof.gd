@@ -17,6 +17,7 @@ static func plan(raft: Node3D, world_aim: Vector3, exclude: Node3D = null, singl
 	var edges := {}
 	var roofs := {}
 	var stair_openings := {}
+	var landings := {}
 	var supports := {}
 	for child in pieces.get_children():
 		if not child is Node3D or child == exclude or child.is_queued_for_deletion():
@@ -24,9 +25,12 @@ static func plan(raft: Node3D, world_aim: Vector3, exclude: Node3D = null, singl
 		if child.name.begins_with("WallTorch"): continue
 		if child.name.begins_with("Stairs") and absf(child.position.y-0.25)<0.25:
 			# Preserve the stairwell rather than putting a ceiling through a head.
+			var run: float = child.get("run")
 			for step in range(12):
-				var flight: Vector3=child.transform*Vector3(0,0,(step+0.5)*0.25)
+				var flight: Vector3=child.transform*Vector3(0,0,(step+0.5)*run/12.0)
 				stair_openings[Vector2i(roundi(flight.x/2.0),roundi(flight.z/2.0))]=true
+			var landing: Vector3 = child.transform * Vector3(0,0,run+0.2)
+			landings[Vector2i(roundi(landing.x/2.0),roundi(landing.z/2.0))] = child
 		var local: Vector3 = child.position
 		if not local.is_finite():
 			continue
@@ -44,6 +48,9 @@ static func plan(raft: Node3D, world_aim: Vector3, exclude: Node3D = null, singl
 				supports[edge] = child
 	var aim: Vector3 = raft.to_local(world_aim)
 	var start := Vector2i(roundi(aim.x / 2.0), roundi(aim.z / 2.0))
+	# The landing itself supports a flush upper deck even before the player
+	# builds a wall or a foundation beneath that cell.
+	if landings.has(start): decks[start] = true
 	if not decks.has(start):
 		# A wall hit lies exactly between two cells. Prefer nearby supported deck
 		# instead of requiring a precise hit on the floor inside the room.
@@ -100,9 +107,10 @@ static func plan(raft: Node3D, world_aim: Vector3, exclude: Node3D = null, singl
 					closest=distance
 					extension=next
 			start=extension
-		var supported := not supporting_edges.is_empty()
+		var supported := not supporting_edges.is_empty() or landings.has(start)
 		for direction in DIRECTIONS:
 			if roofs.has(start+direction): supported = true
+			if landings.has(start+direction): supported = true
 		if not supported:
 			return {}
 		queue = [start]
@@ -125,4 +133,9 @@ static func plan(raft: Node3D, world_aim: Vector3, exclude: Node3D = null, singl
 			break
 	if support == null and not supports.is_empty():
 		support = supports.values()[0]
+	if support == null:
+		for cell: Vector2i in landings:
+			if (cell-start).length_squared() <= 1:
+				support = landings[cell]
+				break
 	return {"cells": cells, "transforms": transforms, "support": support, "room": enclosed, "stair_opening": stair_openings.has(start)}

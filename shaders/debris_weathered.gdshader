@@ -9,13 +9,16 @@ uniform float detail_scale = 1.0;
 uniform bool horizontal_wood = false;
 uniform bool timber_atlas = false;
 uniform bool barrel = false;
+uniform float night_readability : hint_range(0.0,1.0) = 0.0;
 varying vec3 local_position;
+varying vec3 local_normal;
+varying float world_height;
 float hash(vec3 p) { p=fract(p*0.1031);p+=dot(p,p.yzx+33.33);return fract((p.x+p.y)*p.z); }
 float noise(vec3 p) {
 	vec3 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);
 	return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);
 }
-void vertex() { local_position=VERTEX*detail_scale; }
+void vertex() { local_position=VERTEX*detail_scale; local_normal=NORMAL; world_height=(MODEL_MATRIX*vec4(VERTEX,1.0)).y; }
 void fragment() {
 	vec3 p=local_position;
 	float broad=noise(p*12.0),fine=noise(p*155.0);
@@ -36,9 +39,12 @@ void fragment() {
 		color*=0.70+grain*0.38+fine*0.13;
 		color=mix(color,vec3(0.32,0.28,0.22),smoothstep(0.58,0.85,broad)*0.3);
 		color*=1.0-cracks*0.3;relief=grain+cracks*0.4;rough=0.82;
-		if (horizontal_wood && abs(NORMAL.z)>0.75) {
+		if (horizontal_wood && abs(local_normal.z)>0.75) {
 			float rings=sin(length(p.xy)*420.0+grain*2.0)*0.5+0.5;
 			color*=0.84+rings*0.18;
+		}
+		if (barrel && abs(local_normal.y)>0.8) {
+			color*=0.86+0.10*sin(length(p.xz)*240.0+grain*2.0);
 		}
 	} else if (kind==1) {
 		float rust=smoothstep(0.35,0.74,broad);
@@ -58,8 +64,14 @@ void fragment() {
 		rough=0.45+broad*0.25;relief=scratches*0.3;
 	}
 	// Damp lower surfaces and salt bleaching break up uniform toy-like colors.
-	float damp=1.0-smoothstep(-0.10,0.13,p.y);
+	float damp=1.0-smoothstep(-0.08,0.18,world_height);
+	float salt=smoothstep(0.48,0.74,noise(p*vec3(32.0,48.0,32.0)))*
+		(1.0-smoothstep(0.015,0.075,abs(p.y-0.06)));
+	color=mix(color,vec3(0.24,0.23,0.19),salt*0.055);
 	ALBEDO=color*(1.0-damp*0.13);
+	// Soft moon/sky bounce keeps the grain and colour readable on every face.
+	// Below bloom brightness; no added lights, outlines or per-object passes.
+	EMISSION=ALBEDO*vec3(0.68,0.78,0.94)*night_readability*0.45;
 	ROUGHNESS=clamp(rough-damp*0.12,0.2,0.98);METALLIC=metal;SPECULAR=0.35;
 	NORMAL_MAP=normalize(vec3(-dFdx(relief)*0.2,-dFdy(relief)*0.2,1.0))*0.5+0.5;
 	NORMAL_MAP_DEPTH=0.2;

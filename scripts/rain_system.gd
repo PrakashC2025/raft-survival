@@ -92,9 +92,14 @@ var _ocean: Node = null
 
 var _particles: GPUParticles3D = null
 var _rain_mat: ShaderMaterial = null
+var _splash_mat: ShaderMaterial = null
 var _mask_boxes := PackedVector4Array()
 var _mask_levels := PackedVector4Array()
 var _mask_raft: Node3D
+const ROOF_MAP_SIZE := 128
+const ROOF_CELL := 0.25
+var _roof_image: Image
+var _roof_texture: ImageTexture
 var _rain_process_mat: ParticleProcessMaterial = null
 var _audio: AudioStreamPlayer = null
 var _thunder_audio: AudioStreamPlayer = null
@@ -228,12 +233,15 @@ func _build_particles() -> void:
 func _build_splash_pool() -> void:
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.05, 0.05)
-	var smat := StandardMaterial3D.new()
-	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	smat.albedo_color = Color(0.9, 0.95, 1.0, 0.95)
-	smat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
-	quad.material = smat
+	# The old unmasked splash droplets bounced up, then fell through ceilings.
+	# Share streak shelter clipping while retaining small camera-facing splashes.
+	_splash_mat = ShaderMaterial.new()
+	_splash_mat.shader = preload("res://shaders/rain_sheltered.gdshader")
+	_splash_mat.set_shader_parameter("intensity", 1.0)
+	_splash_mat.set_shader_parameter("drop_color", Color(0.24, 0.48, 0.72))
+	_splash_mat.set_shader_parameter("drop_opacity", 0.65)
+	_splash_mat.set_shader_parameter("align_to_velocity", false)
+	quad.material = _splash_mat
 
 	for i in splash_pool_size:
 		var p := GPUParticles3D.new()
@@ -386,7 +394,7 @@ func _process(delta: float) -> void:
 	_follow_player()
 	_update_cover_state(delta)
 	if is_instance_valid(_mask_raft):
-		_rain_mat.set_shader_parameter("world_to_raft",_mask_raft.global_transform.affine_inverse())
+		_set_shelter_parameter("world_to_raft",_mask_raft.global_transform.affine_inverse())
 	_update_submerged_state()
 	_update_intensity(delta)
 	_process_splashes(delta)
@@ -417,7 +425,7 @@ func _update_cover_state(delta: float) -> void:
 	if _cover_timer > 0.0:
 		return
 	_cover_timer = _cover_check_interval
-	if not _is_raining:
+	if not _is_raining and _intensity <= 0.01:
 		# No rain: skip the raycasts entirely, and make sure the emitter is
 		# back in full-box mode for the next downpour.
 		if _covered or absf(_box_top - rain_area_size.y * 0.5) > 0.01:
@@ -656,7 +664,8 @@ func _spawn_one_splash() -> void:
 
 	if water_splash_enabled and _ocean != null:
 		var water_y := float(_ocean.call("get_height", Vector3(x, 0.0, z)))
-		_fire_splash(Vector3(x, water_y, z), false)
+		var point := Vector3(x, water_y, z)
+		if rain_visible_at(point + Vector3.UP * 0.12): _fire_splash(point, false)
 
 
 func _fire_splash(pos: Vector3, on_structure: bool) -> void:
@@ -713,20 +722,28 @@ func _unhandled_input(event: InputEvent) -> void:
 func _refresh_shelter_masks() -> void:
 	_mask_boxes.clear()
 	_mask_levels.clear()
-	if _rain_mat != null: _rain_mat.set_shader_parameter("cover_count", 0)
+	_set_shelter_parameter("cover_count", 0)
+	_set_shelter_parameter("roof_map_enabled", false)
 	_mask_raft = get_tree().get_first_node_in_group("raft") as Node3D
 	if _mask_raft == null or _rain_mat == null: return
 	var pieces := _mask_raft.get_node_or_null("BuiltPieces")
 	if pieces == null: return
 	var camera_local := _mask_raft.to_local(_camera.global_position) if is_instance_valid(_camera) else Vector3.ZERO
+	var map_origin := Vector2(floorf(camera_local.x/ROOF_CELL),floorf(camera_local.z/ROOF_CELL))*ROOF_CELL-Vector2.ONE*16.0
+	if _roof_image == null:_roof_image=Image.create(ROOF_MAP_SIZE,ROOF_MAP_SIZE,false,Image.FORMAT_RF)
+	_roof_image.fill(Color(-1000.0,0,0))
 	var candidates: Array[Dictionary] = []
 	for piece in pieces.get_children():
 		if not piece is Node3D or piece.is_queued_for_deletion(): continue
-		var roof: bool = piece.name.begins_with("Roof")
-		var deck: bool = piece.name.begins_with("Foundation") and piece.position.y > 0.3
-		var stair: bool = piece.name.begins_with("Stairs")
-		var wall: bool = piece.name.begins_with("Wall") or piece.name.begins_with("Window") or piece.name.begins_with("Door") or piece.name.begins_with("HalfWall")
-		if piece.name.begins_with("WallTorch"): continue
+		# Godot may give repeated scene instances an @-name. Identify the actual
+		# scene as well as legacy named nodes, so renamed ceilings still shelter.
+		var kind: String=piece.scene_file_path.get_file().get_basename().to_pascal_case()
+		if kind.is_empty():kind=str(piece.name)
+		var roof: bool = kind.begins_with("Roof")
+		var deck: bool = kind.begins_with("Foundation") and piece.position.y > 0.3
+		var stair: bool = kind.begins_with("Stairs")
+		var wall: bool = kind.begins_with("Wall") or kind.begins_with("Window") or kind.begins_with("Door") or kind.begins_with("HalfWall")
+		if kind.begins_with("WallTorch"): continue
 		if not roof and not deck and not stair and not wall: continue
 		for col: CollisionShape3D in piece.find_children("*","CollisionShape3D",true,false):
 			if col.disabled or not col.shape is BoxShape3D: continue
@@ -737,23 +754,55 @@ func _refresh_shelter_masks() -> void:
 			if distance > 26.0*26.0: continue
 			var yaw := xf.basis.get_euler().y
 			var bottom := xf.origin.y-half.y-0.08 if wall else -30.0
+			if not wall:_raster_roof(xf.origin,half,yaw,map_origin)
 			candidates.append({"distance":distance + (800.0 if wall else 0.0),"box":Vector4(xf.origin.x,xf.origin.z,half.x+0.08,half.z+0.08),"level":Vector4(xf.origin.y+half.y+0.04,bottom,sin(yaw),cos(yaw))})
 	candidates.sort_custom(func(a: Dictionary,b: Dictionary)->bool: return a.distance<b.distance)
 	for index in mini(candidates.size(),64):
 		_mask_boxes.append(candidates[index].box)
 		_mask_levels.append(candidates[index].level)
-	_rain_mat.set_shader_parameter("cover_count",_mask_boxes.size())
+	_set_shelter_parameter("cover_count",_mask_boxes.size())
 	# Godot uniform arrays keep their fixed shader length.
 	var boxes := _mask_boxes.duplicate(); boxes.resize(64)
 	var levels := _mask_levels.duplicate(); levels.resize(64)
-	_rain_mat.set_shader_parameter("cover_boxes",boxes)
-	_rain_mat.set_shader_parameter("cover_levels",levels)
-	_rain_mat.set_shader_parameter("world_to_raft",_mask_raft.global_transform.affine_inverse())
+	_set_shelter_parameter("cover_boxes",boxes)
+	_set_shelter_parameter("cover_levels",levels)
+	_set_shelter_parameter("world_to_raft",_mask_raft.global_transform.affine_inverse())
+	# Complete roof coverage supplements the 64 exact wall/panel boxes. Actual
+	# cut collision panels keep stairwells open, regardless of house size.
+	if _roof_texture == null:_roof_texture=ImageTexture.create_from_image(_roof_image)
+	else:_roof_texture.update(_roof_image)
+	_set_shelter_parameter("roof_heights",_roof_texture)
+	_set_shelter_parameter("roof_map_origin",map_origin)
+	_set_shelter_parameter("roof_map_enabled",true)
+
+func _raster_roof(at: Vector3, half: Vector3, yaw: float, map_origin: Vector2) -> void:
+	var sine:=sin(yaw);var cosine:=cos(yaw)
+	var extent:=Vector2(absf(cosine)*half.x+absf(sine)*half.z,absf(sine)*half.x+absf(cosine)*half.z)+Vector2.ONE*0.08
+	var lower: Vector2i=Vector2i(((Vector2(at.x,at.z)-extent-map_origin)/ROOF_CELL).floor()).clamp(Vector2i.ZERO,Vector2i.ONE*(ROOF_MAP_SIZE-1))
+	var upper: Vector2i=Vector2i(((Vector2(at.x,at.z)+extent-map_origin)/ROOF_CELL).ceil()).clamp(Vector2i.ZERO,Vector2i.ONE*(ROOF_MAP_SIZE-1))
+	for z in range(lower.y,upper.y+1):
+		for x in range(lower.x,upper.x+1):
+			var offset:=map_origin+(Vector2(x,z)+Vector2.ONE*0.5)*ROOF_CELL-Vector2(at.x,at.z)
+			var local:=Vector2(offset.x*cosine-offset.y*sine,offset.x*sine+offset.y*cosine)
+			# Cover every intersected texel, including a rotated panel's rim.
+			# A sub-texel weather margin keeps wind-driven drops outside the eaves;
+			# it does not alter collision or the actual walking opening.
+			var inset: float=ROOF_CELL*0.5*(absf(sine)+absf(cosine))
+			if absf(local.x)<half.x+0.08+inset and absf(local.y)<half.z+0.08+inset:
+				_roof_image.set_pixel(x,z,Color(maxf(_roof_image.get_pixel(x,z).r,at.y+half.y+0.04),0,0))
+
+func _set_shelter_parameter(parameter: String, value: Variant) -> void:
+	for material in [_rain_mat, _splash_mat]:
+		if material != null: material.set_shader_parameter(parameter, value)
 
 func rain_visible_at(world_point: Vector3) -> bool:
 	# Mirrors the visual occluder for focused shelter checks.
 	if not is_instance_valid(_mask_raft): return true
 	var p := _mask_raft.to_local(world_point)
+	if _roof_image != null:
+		var origin: Vector2=_rain_mat.get_shader_parameter("roof_map_origin")
+		var cell:=Vector2i(((Vector2(p.x,p.z)-origin)/ROOF_CELL).floor())
+		if cell.x>=0 and cell.y>=0 and cell.x<ROOF_MAP_SIZE and cell.y<ROOF_MAP_SIZE and p.y<_roof_image.get_pixel(cell.x,cell.y).r:return false
 	for index in _mask_boxes.size():
 		var b := _mask_boxes[index]
 		var l := _mask_levels[index]

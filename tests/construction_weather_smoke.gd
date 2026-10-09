@@ -57,7 +57,7 @@ func _run() -> void:
 	if stair.get("valid",false):
 		var local: Vector3=raft.to_local(stair.transform.origin)
 		check(local.distance_to(Vector3(4,0.25,3))<0.001,"Stair foot is centred at the foundation's entry edge")
-		check(absf((raft.to_local(stair.transform*Vector3(0,2.55,3.5))).y-2.8)<0.001,"Landing meets the next roof/deck height exactly")
+		check(absf((raft.to_local(stair.transform*Vector3(0,2.55,2.9))).y-2.8)<0.001,"Landing meets the next roof/deck height exactly")
 		var wood: int=root.get_node("Inventory").call("total","Wood")
 		player.call("_try_build"); await frames()
 		var placed:=built.find_child("Stairs_*",false,false) as Node3D

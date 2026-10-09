@@ -9,6 +9,11 @@ var enabled := {"Solar Torch":false,"Walkie Talkie":false}
 var solar := false
 var zoomed := false
 var cover_open := false
+var faults: Dictionary={"Solar Torch":"","Walkie Talkie":""}
+var fault_after: Dictionary={"Solar Torch":300.0,"Walkie Talkie":420.0}
+var _flicker:=0.0
+var _repair_button: Button
+var _shake_button: Button
 var battery_animation := 0.0
 var battery_operation := ""
 var _battery_item := ""
@@ -61,10 +66,12 @@ func _build_ui() -> void:
 	_cover=_button("OPEN BATTERY COVER",toggle_cover)
 	_remove=_button("REMOVE BATTERY",func():battery_action("remove"))
 	_replace=_button("INSERT / REPLACE BATTERY",func():battery_action("replace"))
+	_repair_button=_button("REPAIR · VIEW REQUIRED PARTS",func():player.get_node("EquipmentRepairs").open(self,str(player.active_item)))
+	_shake_button=_button("SHAKE LOOSE CONTACT",func():player.get_node("EquipmentRepairs").start("shake",self,str(player.active_item)))
 	_panel.hide()
 
 func _button(label: String,action: Callable) -> Button:
-	var button:=Button.new();button.text=label;button.custom_minimum_size=Vector2(220,38)
+	var button:=Button.new();button.text=label;button.custom_minimum_size=Vector2(220,44)
 	button.add_theme_font_size_override("font_size",14)
 	button.button_down.connect(func():GameSettings.release_gameplay_input())
 	button.pressed.connect(action);_panel.add_child(button)
@@ -73,11 +80,15 @@ func _button(label: String,action: Callable) -> Button:
 func _blocked() -> bool:
 	var hud:=player.get_node_or_null("CanvasLayer/SurvivalHUD")
 	return get_tree().paused or GameSettings.is_open or bool(player.get("build_mode")) \
-		or player.get("_editing")!=null or player.get_node("SurvivalServices").busy() or (hud!=null and hud.call("gameplay_input_blocked"))
+		or player.get("_editing")!=null or player.get_node("SurvivalServices").busy() or player.get_node("SurvivalServices").is_modal() or (hud!=null and hud.call("gameplay_input_blocked"))
 
 func use() -> void:
 	var item:=str(player.get("active_item"))
 	if _blocked() or not Inventory.has(item,1):return
+	if not fault_for(item).is_empty():
+		if fault_for(item)=="contact":player.get_node("EquipmentRepairs").start("shake",self,item)
+		else:player.get_node("EquipmentRepairs").open(self,item)
+		return
 	if item=="Binoculars":set_zoom(not zoomed)
 	elif item=="Solar Torch":toggle_power()
 	elif item=="Walkie Talkie":
@@ -147,7 +158,9 @@ func battery_action(operation: String) -> bool:
 	return true
 
 func _sun_exposed() -> bool:
-	var sky:=get_tree().current_scene.get_node_or_null("Sky3D")
+	var scene:=get_tree().current_scene
+	if scene==null:return false
+	var sky:=scene.get_node_or_null("Sky3D")
 	if sky==null or bool(player.get("is_swimming")):return false
 	var hour:=float(sky.get("current_time"))
 	if hour<6.5 or hour>17.5:return false
@@ -161,23 +174,31 @@ func _sun_exposed() -> bool:
 	return hit.is_empty()
 
 func _process(delta: float) -> void:
+	# Scene transitions briefly clear current_scene before the player exits.
+	var scene:=get_tree().current_scene
+	if scene==null:return
 	var item:=str(player.get("active_item"))
 	var blocked:=_blocked()
+	if not blocked:
+		_flicker=maxf(0.0,_flicker-delta)
+		if item in POWERED and enabled[item] and installed[item] and float(charge[item])>0 and fault_for(item).is_empty():
+			fault_after[item]=maxf(0.0,float(fault_after[item])-minf(delta,.25))
+			if float(fault_after[item])<=0.0:develop_fault(item,"contact" if randf()<.8 else "wiring")
 	if zoomed and (item!="Binoculars" or blocked):set_zoom(false)
 	_solar_tick+=delta
 	if _solar_tick>=0.5:_solar_tick=0.0;solar=_sun_exposed()
-	var sky:=get_tree().current_scene.get_node_or_null("Sky3D")
+	var sky:=scene.get_node_or_null("Sky3D")
 	var day_seconds:=absf(float(sky.get("minutes_per_day")))*60.0 if sky!=null else 1440.0
 	if day_seconds<1:day_seconds=1440.0
 	advance_power(delta,day_seconds,solar)
-	beam.visible=item=="Solar Torch" and enabled[item] and installed[item] and float(charge[item])>0 and not blocked
+	beam.visible=item=="Solar Torch" and working(item) and not blocked
 	if battery_animation>0.0:
 		battery_animation=maxf(0,battery_animation-delta)
 		if battery_animation==0.0:cover_open=false;battery_operation=""
 	_radio_cooldown=maxf(0,_radio_cooldown-delta)
 	if _reply>0.0:
 		_reply=maxf(0,_reply-delta)
-		if _reply==0.0 and enabled["Walkie Talkie"] and installed["Walkie Talkie"] and float(charge["Walkie Talkie"])>0.0:
+		if _reply==0.0 and working("Walkie Talkie"):
 			_sound("radio_receive")
 			var nearest: Node3D
 			var distance_value:=INF
@@ -194,8 +215,12 @@ func _process(delta: float) -> void:
 	if _panel.visible and update_text:
 		var status_text:=("RADIO CH 16" if item=="Walkie Talkie" else "SOLAR FLASHLIGHT")+" · "+("ON" if enabled[item] else "OFF")+"\n"+("BATTERY %d%%"%roundi(float(charge[item])) if installed[item] else "NO BATTERY")+(" · SOLAR ☀" if solar else "")
 		if _status.text!=status_text:_status.text=status_text
+		var fault:=fault_for(item)
+		if not fault.is_empty():_status.text+="\n"+("LOOSE CONTACT · SHAKE / REPAIR" if fault=="contact" else "WIRING DAMAGED · REPAIR")
+		_repair_button.visible=not fault.is_empty();_shake_button.visible=fault=="contact"
+		_solar_button.visible=fault.is_empty();_cover.visible=fault.is_empty()
 		_cover.text="CLOSE BATTERY COVER" if cover_open else "OPEN BATTERY COVER"
-		_remove.visible=cover_open;_replace.visible=cover_open
+		_remove.visible=cover_open and fault.is_empty();_replace.visible=cover_open and fault.is_empty()
 		_remove.disabled=battery_animation>0 or not installed[item]
 		_replace.disabled=battery_animation>0
 
@@ -203,12 +228,27 @@ func advance_power(seconds: float,day_seconds: float,in_sun: bool) -> void:
 	for item in POWERED:
 		if not Inventory.has(item,1) or not installed[item]:continue
 		# Only the exposed held panel charges; an enclosed backpack cannot collect sunlight.
-		if in_sun and str(player.get("active_item"))==item:
+		if in_sun and str(player.get("active_item"))==item and fault_for(item)!="wiring":
 			charge[item]=minf(100,float(charge[item])+seconds*100.0/240.0)
 		elif enabled[item]:
 			var lifetime:=day_seconds*30.0 if item=="Walkie Talkie" else 1800.0
 			charge[item]=maxf(0,float(charge[item])-seconds*100.0/maxf(lifetime,1))
 		if float(charge[item])<=0.000001:charge[item]=0.0;enabled[item]=false
+
+func fault_for(item: String) -> String:return str(faults.get(item,""))
+func working(item: String) -> bool:
+	if item not in POWERED:return false
+	var fault:=fault_for(item)
+	var contact_on:=fault.is_empty() or (fault=="contact" and _flicker>0 and sin(_flicker*55.0)>0.25)
+	return enabled[item] and installed[item] and float(charge[item])>0.0 and contact_on
+func develop_fault(item: String, fault: String="contact") -> void:
+	if item not in POWERED or fault not in ["contact","wiring"]:return
+	faults[item]=fault;_flicker=.9;_reply=0.0
+	_sound("battery");player.call("_hud_toast",item.to_upper()+" · "+("LOOSE CONTACT · SHAKE OR REPAIR" if fault=="contact" else "DAMAGED WIRING · REPAIR REQUIRED"))
+	player.call("_queue_save")
+func clear_fault(item: String) -> void:
+	if item not in POWERED:return
+	faults[item]="";fault_after[item]=randf_range(420.0,720.0);_flicker=0;_sound("switch")
 
 func _update_visuals(item: String,update_text: bool=true) -> void:
 	var hand:=player.get("_hand_item") as Node3D
@@ -222,8 +262,9 @@ func _update_visuals(item: String,update_text: bool=true) -> void:
 	for parts in _visuals:
 		var screen: Label3D=parts.screen if is_instance_valid(parts.screen) else null
 		if is_instance_valid(screen) and update_text:
-			var screen_text:=("CH16" if enabled["Walkie Talkie"] else "OFF")+"\n"+("%d%%"%roundi(float(charge["Walkie Talkie"])) if installed["Walkie Talkie"] else "NO CELL")+(" SUN" if solar and item=="Walkie Talkie" else "")
+			var screen_text:=("FAULT" if not fault_for("Walkie Talkie").is_empty() else "CH16" if enabled["Walkie Talkie"] else "OFF")+"\n"+("%d%%"%roundi(float(charge["Walkie Talkie"])) if installed["Walkie Talkie"] else "NO CELL")+(" SUN" if solar and item=="Walkie Talkie" else "")
 			if screen.text!=screen_text:screen.text=screen_text
+		if is_instance_valid(screen):screen.modulate=Color(.43,.72,.46) if working("Walkie Talkie") else Color(.20,.29,.21)
 		var cover: Node3D=parts.cover if is_instance_valid(parts.cover) else null
 		if is_instance_valid(cover):
 			cover.position.z=lerpf(cover.position.z,0.11 if cover_open else 0.049,0.2)
@@ -244,7 +285,7 @@ func _sound(kind: String) -> void:
 	_audio.stream=AUDIO.electronic_stream(kind);_audio.play()
 
 func save_state() -> Dictionary:
-	return {"charge":charge.duplicate(),"installed":installed.duplicate(),"enabled":enabled.duplicate()}
+	return {"charge":charge.duplicate(),"installed":installed.duplicate(),"enabled":enabled.duplicate(),"faults":faults.duplicate(),"fault_after":fault_after.duplicate()}
 func restore_state(data: Variant) -> void:
 	if not data is Dictionary:return
 	for field in ["charge","installed","enabled"]:
@@ -255,6 +296,11 @@ func restore_state(data: Variant) -> void:
 		charge[item]=clampf(amount,0,100) if is_finite(amount) else 0.0
 		installed[item]=bool(data.get("installed",{}).get(item,true))
 		enabled[item]=bool(data.get("enabled",{}).get(item,false)) and installed[item] and float(charge[item])>0
+		var saved_fault: Variant=data.get("faults",{})
+		faults[item]=str(saved_fault.get(item,"")) if saved_fault is Dictionary and str(saved_fault.get(item,"")) in ["contact","wiring"] else ""
+		var saved_clock: Variant=data.get("fault_after",{})
+		var remaining: Variant=saved_clock.get(item,420.0) if saved_clock is Dictionary else 420.0
+		fault_after[item]=clampf(float(remaining),30.0,720.0) if (remaining is float or remaining is int) and is_finite(float(remaining)) else 420.0
 
 func _notification(what: int) -> void:
 	if what in [NOTIFICATION_APPLICATION_FOCUS_OUT,NOTIFICATION_APPLICATION_PAUSED] and is_instance_valid(player):

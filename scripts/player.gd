@@ -7,6 +7,7 @@ const ROPE_VISUAL := preload("res://scripts/rope_launcher_visual.gd")
 const SAND_FOOTPRINTS_SCRIPT := preload("res://scripts/sand_footprints.gd")
 const SAND_SURFACE_SHADER: Shader = preload("res://shaders/sand_surface.gdshader")
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
+const CONTACT_AUDIO := preload("res://scripts/contact_audio.gd")
 const WALK_SPEED := 3.0
 const SPRINT_SPEED := 5.0
 # Measured Quaternius men's gait cycle strides, scaled for this near-1x model.
@@ -34,19 +35,13 @@ const FLOAT_FORCE := 8.0
 const FLOAT_DAMPING := 0.95
 const WATER_ENTER_OFFSET := 0.3
 const WATER_EXIT_OFFSET := 1.5
-const MAX_SWIM_DEPTH := 30.0
+const MAX_SWIM_DEPTH := 70.0
 
 # Aim
 const AIM_DISTANCE := 60.0
 const PICKUP_RANGE := 5.0
 const NEARBY_PICKUP_RANGE := 2.0
-const FOOTSTEP_WOOD := [
-	preload("res://audio/footstep_wood01.ogg"),
-	preload("res://audio/footstep_wood02.ogg"),
-	preload("res://audio/footstep_wood03.ogg"),
-]
-const FOOTSTEP_ISLAND := [preload("res://audio/footstep_gravel.ogg")]
-const PICKUP_SOUND: AudioStream = preload("res://audio/pickup_rustle.ogg")
+const PICKUP_SOUND: AudioStream = preload("res://audio/contact/cloth.wav")
 const ITEM_PICKUP_SCENE: PackedScene = preload("res://scenes/food_pickup.tscn")
 # Climb out of the ocean: horizontal reach to the deck edge + how far onto
 # the deck the player lands (kept small so the board feels natural).
@@ -86,6 +81,7 @@ const FOOD_RULES := preload("res://scripts/food_rules.gd")
 var _equipment: Node
 var _action: Node
 var _pending_build: Dictionary = {}
+var _timed_build_commit := false
 const SOCKET_SNAP_RADIUS: float = 2.5
 const WALL_SURFACE_SNAP_RANGE: float = 4.0  # wall ghost snaps to a surface within this 2D distance
 const WALL_STACK_AIM_TOLERANCE: float = 0.6  # aiming this close to a wall's top stacks a 2nd floor wall
@@ -150,7 +146,11 @@ var _fist_node: Node3D = null
 var _footstep_audio: AudioStreamPlayer3D = null
 var _interaction_audio: AudioStreamPlayer3D = null
 var _footprint_manager: Node3D = null
-var _footstep_timer: float = 0.0
+var _gait_phase := 0.0
+var _gait_active := false
+var _gait_speed := 0.0
+var _footfall_count := 0
+var _footstep_surface := "wood"
 var _sand_gather_cooldown := 0.0
 var _fishing_time_remaining := 0.0
 var _fishing_cast_target := Vector3.ZERO
@@ -215,6 +215,8 @@ var _restore_in_progress := false
 
 # Grid occupancy — maps raft-relative Vector2i → Node3D
 var _grid_occupancy: Dictionary = {}
+var _fresh_starter := false
+var _starter_extended := false
 var _raft_node: Node3D = null  # cached reference to root raft
 var _last_debug_key: String = ""  # prevents output flooding
 
@@ -241,12 +243,17 @@ func _ready() -> void:
 	var electronics := preload("res://scripts/portable_electronics.gd").new()
 	electronics.name="PortableElectronics"
 	add_child(electronics)
+	var repairs:=preload("res://scripts/equipment_repairs.gd").new()
+	repairs.name="EquipmentRepairs";add_child(repairs)
 	var wildlife := preload("res://scripts/island_wildlife.gd").new()
 	wildlife.name = "IslandWildlife"
 	add_child(wildlife)
 	_equipment = SURVIVAL_EQUIPMENT.new()
 	_equipment.name = "SurvivalEquipment"
 	add_child(_equipment)
+	var tools := preload("res://scripts/survival_tools.gd").new()
+	tools.name="SurvivalTools"
+	add_child(tools)
 	_mobile_build_preview = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios")
 	add_to_group("player")
 	_setup_audio()
@@ -273,6 +280,7 @@ func _ready() -> void:
 	# Real progression now uses gathered materials; infinite mode remains a
 	# manual Inventory debug toggle and is never enabled by a normal game.
 	Inventory.infinite = false
+	_fresh_starter=Inventory.loaded_meta.is_empty()
 	if Inventory.loaded_meta.is_empty():
 		Stats.reset()
 	else:
@@ -479,10 +487,13 @@ func _play_survivor_animation(requested_name: String) -> void:
 
 
 func _update_survivor_animation(sprinting: bool) -> void:
-	if _survivor_animator == null or _body_visual == null or not _body_visual.visible:
+	if _survivor_animator == null or _body_visual == null:
 		return
 	var real_velocity := get_real_velocity()
-	var horizontal_speed := Vector2(real_velocity.x, real_velocity.z).length()
+	var horizontal_speed := _gait_speed if not is_swimming else Vector2(real_velocity.x, real_velocity.z).length()
+	# The capsule stays upright; only the visible swimmer leans into the stroke.
+	var swimming_pitch := -1.12 if is_swimming and horizontal_speed>0.6 else 0.0
+	_body_visual.rotation.x=lerp_angle(_body_visual.rotation.x,swimming_pitch,clampf(get_physics_process_delta_time()*5.0,0,1))
 	var animation_name := "Idle"
 	if is_swimming:
 		animation_name = "Swim"
@@ -495,13 +506,17 @@ func _update_survivor_animation(sprinting: bool) -> void:
 		# slide at the game's 3 m/s walk and 5 m/s sprint speeds.
 		_survivor_animator.speed_scale = clampf(cycle_speed, 0.6, 2.5)
 	else:
-		_survivor_animator.speed_scale = 1.0
+		_survivor_animator.speed_scale = clampf(horizontal_speed/2.0,.65,1.35) if is_swimming else 1.0
 	_play_survivor_animation(animation_name)
+	if _gait_active and animation_name in ["Walk","Run"]:
+		# The contact clock also drives the displayed feet in both camera modes.
+		var clip:=_survivor_animator.get_animation(_survivor_animation)
+		_survivor_animator.seek(_gait_phase*clip.length,true)
 
 
 ## Reusable one-shot for nearby interactions (pickup, chopping, harvest).
-func play_action(kind: String, seconds: float=0.6, at: Vector3=Vector3.ZERO) -> void:
-	if _action!=null: _action.call("play",kind,seconds,at)
+func play_action(kind: String, seconds: float=0.6, at: Vector3=Vector3.ZERO, item: String="") -> void:
+	if _action!=null: _action.call("play",kind,seconds,at,item)
 
 func play_world_sfx(sound: AudioStream, level_db: float = -7.0) -> void:
 	if sound == null or _interaction_audio == null:
@@ -529,6 +544,7 @@ func _is_sand_surface_hit() -> bool:
 	var current: Node = aim_collider
 	while current != null:
 		if current.is_in_group("wild_plant"): return false
+		if current.is_in_group("biome_resource"):return false
 		if current.name.begins_with("Palm") or current.name.begins_with("IslandGrass") \
 				or current.name.begins_with("IslandBeacon"):
 			return false
@@ -566,25 +582,46 @@ func _island_underfoot() -> bool:
 
 
 func _update_footsteps(delta: float, sprinting: bool) -> void:
-	if _footstep_audio == null or is_swimming or not is_on_floor():
-		_footstep_timer = 0.0
+	var relative:=get_real_velocity()-get_platform_velocity()
+	var speed:=Vector2(relative.x,relative.z).length()
+	# A bobbing/drifting raft and pushing against a wall are not walking.
+	if Vector2(velocity.x,velocity.z).length()<.1:speed=0.0
+	_advance_gait(delta,speed,sprinting,is_on_floor() and not is_swimming)
+
+func _advance_gait(delta: float, speed: float, sprinting: bool, grounded: bool) -> void:
+	_gait_speed=speed if grounded else 0.0
+	if not grounded or speed<.65:
+		_gait_active=false;_gait_phase=0.0
 		return
-	var real_velocity := get_real_velocity()
-	if Vector2(real_velocity.x, real_velocity.z).length() < 0.65:
-		_footstep_timer = 0.0
-		return
-	_footstep_timer += delta
-	var interval := 0.34 if sprinting else 0.48
-	if _footstep_timer < interval:
-		return
-	_footstep_timer = 0.0
-	var on_island := _island_underfoot()
-	var sounds: Array = FOOTSTEP_ISLAND if on_island else FOOTSTEP_WOOD
-	_footstep_audio.stream = sounds[randi_range(0, sounds.size() - 1)]
-	_footstep_audio.pitch_scale = randf_range(0.94, 1.06)
+	_gait_active=true
+	var stride:=SURVIVOR_RUN_STRIDE_M if sprinting else SURVIVOR_WALK_STRIDE_M
+	var previous:=_gait_phase
+	# Discard missed contact time after a stalled frame; never replay a burst.
+	var next:=previous+speed*clampf(delta,0,.10)/stride
+	_gait_phase=fposmod(next,1.0)
+	if floori(previous*2)!=floori(next*2):_play_footfall(sprinting)
+
+func _ground_surface() -> String:
+	var query:=PhysicsRayQueryParameters3D.create(global_position+Vector3.UP*.12,global_position+Vector3.DOWN*1.25,1,[get_rid()])
+	var hit:=get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():return "wood"
+	var island:=_find_island_ancestor(hit.get("collider") as Node)
+	if island==null:return "wood"
+	var biome:=str(island.get_meta("biome",""))
+	if biome=="winter":return "snow"
+	if biome=="volcano":return "stone"
+	if biome=="spring" and global_position.y-island.global_position.y>1.3:return "grass"
+	return "sand"
+
+func _play_footfall(sprinting: bool) -> void:
+	if _footstep_audio==null:return
+	_footstep_surface=_ground_surface()
+	_footstep_audio.stream=CONTACT_AUDIO.pick(_footstep_surface)
+	_footstep_audio.volume_db=(-10.0 if sprinting else -14.0)+randf_range(-1.0,0.0)
+	_footstep_audio.pitch_scale=randf_range(.98,1.02)
 	_footstep_audio.play()
-	if on_island:
-		_stamp_sand_footprint()
+	_footfall_count+=1
+	if _footstep_surface=="sand":_stamp_sand_footprint()
 
 
 func _stamp_sand_footprint() -> void:
@@ -734,7 +771,7 @@ func _update_swimming_state(water_y: float, has_ocean: bool) -> void:
 	was_swimming = is_swimming
 	if has_ocean:
 		if is_swimming:
-			is_swimming = global_position.y < water_y + WATER_EXIT_OFFSET and not is_on_floor()
+			is_swimming = global_position.y < water_y + WATER_EXIT_OFFSET and (not is_on_floor() or camera.global_position.y < water_y-0.3)
 		else:
 			is_swimming = global_position.y < water_y + WATER_ENTER_OFFSET
 	else:
@@ -766,8 +803,11 @@ func _update_swimming(delta: float, direction: Vector3, water_y: float, sprintin
 	var spd := SWIM_SPRINT_SPEED if sprinting else SWIM_SPEED
 	if get_node("SurvivalProgression").stamina < 10:
 		spd = SWIM_SPEED * 0.65
-	velocity.x = direction.x * spd
-	velocity.z = direction.z * spd
+	var input_axis := Input.get_vector("move_left","move_right","move_back","move_forward")
+	var vertical_aim := (-camera.global_basis.z).y * input_axis.y
+	var steering := Vector3(direction.x,vertical_aim,direction.z).limit_length(1.0)
+	velocity.x = move_toward(velocity.x,steering.x*spd,SWIM_ACCELERATION*delta)
+	velocity.z = move_toward(velocity.z,steering.z*spd,SWIM_ACCELERATION*delta)
 	if Input.is_action_just_pressed("jump"):
 		velocity.y = WATER_JUMP_VELOCITY
 	elif Input.is_action_pressed("jump"):
@@ -775,12 +815,12 @@ func _update_swimming(delta: float, direction: Vector3, water_y: float, sprintin
 	elif Input.is_action_pressed("move_down"):
 		velocity.y = move_toward(velocity.y, -SWIM_DOWN_SPEED, SWIM_ACCELERATION * delta)
 	else:
-		velocity.y = move_toward(velocity.y, 0.0, SWIM_DECELERATION * delta)
+		velocity.y = move_toward(velocity.y, steering.y*spd, SWIM_ACCELERATION * delta)
 	var depth := water_y - global_position.y
 	if depth > -1.0 and depth < 2.0:
 		var surface_target := water_y + 0.2
 		var error := surface_target - global_position.y
-		if abs(error) > 0.3 and not Input.is_action_pressed("jump") and not Input.is_action_pressed("move_down"):
+		if abs(error) > 0.3 and absf(vertical_aim)<0.15 and not Input.is_action_pressed("jump") and not Input.is_action_pressed("move_down"):
 			velocity.y += error * FLOAT_FORCE * delta
 		velocity.y *= FLOAT_DAMPING
 	if depth > MAX_SWIM_DEPTH:
@@ -790,6 +830,12 @@ func _update_swimming(delta: float, direction: Vector3, water_y: float, sprintin
 # Runs right before move_and_slide: if walking into an obstacle that is lower
 # than MAX_STEP_HEIGHT, lift the body onto it so the slide can carry it over.
 func _try_step_up() -> void:
+	# The compact timber flight alone may exceed the ordinary ground limit.
+	floor_max_angle = PI/4.0
+	for collision_index in get_slide_collision_count():
+		var floor_body := get_slide_collision(collision_index).get_collider() as Node3D
+		if floor_body != null and _find_piece_name(floor_body)=="Stairs":
+			floor_max_angle=deg_to_rad(50.0)
 	if is_swimming or not is_on_floor() or velocity.y > 0.1:
 		return
 	var horiz := Vector3(velocity.x, 0.0, velocity.z)
@@ -804,6 +850,9 @@ func _try_step_up() -> void:
 	# Free to move at current height — normal walking, nothing to step over.
 	if not PhysicsServer3D.body_test_motion(get_rid(), params, result):
 		return
+	var next_body := instance_from_id(result.get_collider_id()) as Node3D
+	if next_body != null and _find_piece_name(next_body)=="Stairs":
+		floor_max_angle=deg_to_rad(50.0)
 	# Blocked ahead: find how much lift clears the obstacle (stairs risers up to
 	# MAX_STEP_HEIGHT). Tall walls (2.5 m) stay blocked at every probe height.
 	# Probe only within the allowed curb height, then verify a supported landing.
@@ -835,8 +884,11 @@ func _try_step_up() -> void:
 func _handle_pickup() -> void:
 	if not Input.is_action_just_pressed("interact"):
 		return
+	if active_item in ["Pickaxe","Shovel","Paddle","Anchor","Spear"] and not (active_item=="Shovel" and aim_collider is PlantInstance):
+		get_node("SurvivalTools").call("use")
+		return
 	# SHOOT is dedicated to the selected bow; CLIMB has its own touch button.
-	if active_item in ["Bow", "Bandage", "Diving Tank", "Torch","Burning Torch","Medkit","Can","Solar Torch","Binoculars","Walkie Talkie"]:
+	if active_item in ["Bow", "Bandage", "Diving Tank", "Torch","Burning Torch","Medkit","Can","Tumbler","Solar Torch","Binoculars","Walkie Talkie","WindGenerator","ElectricLamp"]:
 		_handle_selected_item_use()
 		return
 	# Boarding the raft from the water takes priority over pickups: when the
@@ -928,7 +980,15 @@ func _handle_pickup() -> void:
 
 
 func _handle_selected_item_use() -> void:
-	if active_item in ["Medkit","Can"] or FOOD_RULES.edible(active_item):
+	if active_item.is_empty() and get_node("SurvivalProgression").call("can_refill_air"):
+		get_node("SurvivalProgression").call("refill_air");return
+	if active_item in preload("res://scripts/survival_tool_visual.gd").ITEMS:
+		get_node("SurvivalTools").call("use")
+		return
+	if active_item in ["WindGenerator","ElectricLamp"] and Inventory.has(active_item,1):
+		select_piece_for_build(BUILD_RECIPE_NAMES.find(active_item))
+		return
+	if active_item in ["Medkit","Can","Tumbler"] or FOOD_RULES.edible(active_item):
 		get_node("SurvivalServices").call("use_item",active_item)
 		return
 	match active_item:
@@ -949,18 +1009,16 @@ func _handle_selected_item_use() -> void:
 			if not progress.diving_tank and Inventory.has("Diving Tank", 1):
 				Inventory.remove("Diving Tank", 1)
 				progress.diving_tank = true
+				progress.air_tank_seconds = progress.AIR_CAPACITY
+				play_action("install",1.2)
 				_queue_save()
-				_hud_toast("DIVING TANK EQUIPPED · LONGER BREATH · SURFACE TO REFILL")
+				_hud_toast("HANDMADE AIR TANK · 3:00 · REFILL ON DRY GROUND")
 			return
 		"Bow":
 			_equipment.call("begin_draw")
 			return
 		"Spear":
-			var shark := _get_aimed_shark()
-			if shark != null and aim_distance <= 5.2 and shark.has_method("take_damage"):
-				play_action("strike",0.55,aim_point)
-				shark.call("take_damage", 38.0, self)
-				play_world_sfx(PICKUP_SOUND, -10.0)
+			get_node("SurvivalTools").call("use")
 			return
 		"Fishing Rod":
 			if _fishing_time_remaining > 0.0:
@@ -1148,10 +1206,13 @@ func request_course_to(island: Node3D) -> bool:
 	if raft == null or not raft.has_method("set_course"):
 		_hud_toast("NO SAILING RAFT FOUND")
 		return false
+	if raft.get("anchored")==true:
+		_hud_toast("RAISE YOUR ANCHOR BEFORE SAILING")
+		return false
 	if raft_upgrade_tier <= 0:
 		_hud_toast("CRAFT AND INSTALL A SAIL KIT FIRST")
 		return false
-	if bool(raft.call("set_course", island.global_position)):
+	if bool(raft.call("set_course", island.global_position,float(island.get_meta("arrival_radius",14.0)))):
 		_queue_save()
 		_hud_toast("COURSE SET  •  HOLD ON WHILE THE RAFT SAILS")
 		return true
@@ -1183,6 +1244,10 @@ func _plant_on_ground() -> bool:
 	for wild in get_tree().get_nodes_in_group("island_wild_plants"):
 		if wild.blocks_crop(aim_point):
 			_hud_toast("GATHER PLANTS OR CHOP THE TREE TO CLEAR THIS GROUND");return false
+	for tree in get_tree().get_nodes_in_group("biome_resource"):
+		if tree.required_tool!="Axe" or tree.health<=0 or tree.growth<1:continue
+		if Vector2(tree.global_position.x-aim_point.x,tree.global_position.z-aim_point.z).length()<2:
+			_hud_toast("CHOP THIS TREE TO CLEAR THE GROUND FIRST");return false
 	for plot in get_tree().get_nodes_in_group("ground_plot"):
 		if plot.global_position.distance_to(aim_point)<1.1:
 			_hud_toast("LEAVE SPACE BETWEEN CROPS");return false
@@ -1264,7 +1329,7 @@ func _collect_debris(debris: Node3D) -> void:
 		if overflow < pickup_amount and debris.has_method("set_pickup_amount"):
 			debris.call("set_pickup_amount", overflow)
 		return
-	play_action("grab",0.65,debris.global_position)
+	play_action("grab",.85,debris.global_position,Inventory.canonical_item(item_name))
 	debris.set("collected", true)
 	if debris.has_method("get_pickup_id"):
 		Inventory.mark_island_pickup_collected(str(debris.call("get_pickup_id")))
@@ -1554,6 +1619,14 @@ func _write_save(slot: String) -> bool:
 	if not restoration_complete: return false
 	var meta := {"active_slot": active_slot_index, "rope_gun_selected": rope_gun_selected}
 	meta["island_layout"] = preload("res://scripts/island_layout.gd").version(Inventory.loaded_meta)
+	meta["raft_anchored"] = bool(_get_raft_node().get("anchored")) if _get_raft_node()!=null else false
+	meta["biome_resources"] = Inventory.loaded_meta.get("biome_resources",{}).duplicate(true)
+	meta["biome_tree_growth"] = Inventory.loaded_meta.get("biome_tree_growth",{}).duplicate(true)
+	for deposit in get_tree().get_nodes_in_group("biome_resource"):
+		meta["biome_resources"][deposit.resource_id]=deposit.health
+		if deposit.required_tool=="Axe":meta["biome_tree_growth"][deposit.resource_id]=deposit.call("tree_growth_state")
+	for biome_island in get_tree().get_nodes_in_group("biome_island"):
+		if biome_island.biome=="winter":meta["winter_exposure"]=biome_island.winter_exposure
 	meta["island_groves"] = Inventory.loaded_meta.get("island_groves",{}).duplicate(true)
 	for grove in get_tree().get_nodes_in_group("island_grove"):
 		var key := str(grove.get_parent().name)
@@ -1564,6 +1637,8 @@ func _write_save(slot: String) -> bool:
 	for wild in get_tree().get_nodes_in_group("island_wild_plants"):
 		if wild.prepared: meta["wild_plants"][str(wild.island_node().name)] = wild.save_state()
 	meta["progression"] = get_node("SurvivalProgression").call("save_state")
+	var undersea:=get_tree().get_first_node_in_group("underwater_world")
+	if undersea!=null:meta["underwater_creatures"]=undersea.call("save_state")
 	meta["electronics"] = get_node("PortableElectronics").call("save_state")
 	meta["survival_services"] = get_node("SurvivalServices").call("save_state")
 	meta["wildlife"] = get_node("IslandWildlife").call("save_state")
@@ -1683,6 +1758,11 @@ func _restore_built_pieces() -> void:
 	await _restore_ground_crops(true)
 	if not is_inside_tree(): return
 	var built: Array = Inventory.loaded_meta.get("built", [])
+	# One extra real grid tile doubles the starting deck to 2 x 4 metres.
+	# Old saved structures keep their footprint; removing this tile stays removed.
+	if built.is_empty() and _fresh_starter and not _starter_extended:
+		_starter_extended=true
+		built=[{"t":"Foundation","x":[1,0,0,0,1,0,0,0,1,0,0,2],"cost":Inventory.RECIPES["Foundation"].duplicate()}]
 	if built.is_empty():
 		restoration_complete = true
 		_restore_in_progress = false
@@ -1716,8 +1796,10 @@ func _restore_built_pieces() -> void:
 		if entry.get("cost",null) is Dictionary:
 			var restored_cost := {}
 			for material in entry.cost:
-				if material in ["Wood","Rope","Plastic","Metal","Stone","Barrel","Soil","Sand","Sponge"]:
+				if material in ["Wood","Rope","Plastic","Metal","Stone","Barrel","Soil","Sand","Sponge","Screw","Wire","Motor","Battery"]:
 					restored_cost[material]=clampi(int(entry.cost[material]),0,100)
+				elif material==pname and pname in ["WindGenerator","ElectricLamp"]:
+					restored_cost[material]=clampi(int(entry.cost[material]),0,1)
 			piece.set_meta("construction_cost",restored_cost)
 		var floats: Array = entry.get("x", [])
 		if floats.size() == 12:
@@ -1742,6 +1824,8 @@ func _restore_built_pieces() -> void:
 				(piece as Planter).restore_plant_state(entry["plant"])
 		if piece.has_method("restore_survival_state") and entry.get("survival", null) is Dictionary:
 			piece.call("restore_survival_state", entry["survival"])
+		elif pname == "Stairs":
+			piece.call("restore_survival_state", {})
 		if entry.get("station_job") is Dictionary and (piece.is_in_group("campfire") or str(piece.get("machine_type")) in ["SandFilter","WaterPurifier","ElectricPurifier"]):
 			get_node("SurvivalServices").ensure_job(piece).restore_job(entry.station_job)
 		piece.add_to_group("build_surface")
@@ -1862,7 +1946,14 @@ func _update_hand_item() -> void:
 	# Each item is composed from primitives placed in a NATURAL HAND POSE around
 	# the fist (offsets below are fist-local: +X right, +Y up, -Z forward).
 	var along_forward := Basis(Vector3.RIGHT, PI / 2.0)
-	if active_item in ["Medkit","Can","Dirty Water Can","Clean Water Can"] or FOOD_RULES.RECIPES.has(active_item):
+	if active_item in preload("res://scripts/survival_tool_visual.gd").ITEMS:
+		var tool:=preload("res://scripts/survival_tool_visual.gd").create(active_item)
+		tool.position=Vector3(0,-.04,-.13);tool.rotation.x=-.18
+		_hand_item.add_child(tool);return
+	if active_item in ["WindGenerator","ElectricLamp"]:
+		var recovered:=preload("res://scripts/resource_visual.gd").create(active_item)
+		recovered.scale=Vector3.ONE*.45;recovered.position=Vector3(0,-.05,-.25);_hand_item.add_child(recovered);return
+	if active_item in ["Medkit","Repair Kit","Can","Dirty Water Can","Clean Water Can"] or active_item.ends_with("Tumbler") or FOOD_RULES.RECIPES.has(active_item):
 		var survival_item := preload("res://scripts/survival_item_visual.gd").create(active_item)
 		survival_item.position=Vector3(0,-.02,-.24);_hand_item.add_child(survival_item);return
 	match active_item:
@@ -2040,7 +2131,7 @@ func _update_hand_item() -> void:
 			water_can.position=Vector3(0,-0.22,-0.20)
 			_hand_item.add_child(water_can)
 		"Diving Tank":
-			_add_hand_asset("res://models/diving_tank.glb",0.38)
+			var tank:=preload("res://scripts/dive_visual.gd").tank();tank.scale=Vector3.ONE*.65;_hand_item.add_child(tank)
 		"Bandage":
 			var roll := CylinderMesh.new()
 			roll.top_radius = 0.07
@@ -2133,12 +2224,12 @@ func _update_hand_sway(_delta: float) -> void:
 		return
 	if _hand_item.get_child_count() == 0:
 		return
-	var speed_h := Vector2(velocity.x, velocity.z).length()
+	var speed_h := _gait_speed
 	var amp: float = clampf(speed_h / maxf(WALK_SPEED, 0.01), 0.0, 1.3)
 	var kick: float = rope_system.get_launcher_kick() if active_item == "Rope" else 0.0
-	var bob := sin(_hand_time * 9.5) * 0.016 * amp + sin(_hand_time * 1.6) * 0.006
-	var sway := sin(_hand_time * 1.3) * 0.02 + sin(_hand_time * 4.7) * 0.012 * amp
-	var roll := sin(_hand_time * 0.9) * 0.012 + cos(_hand_time * 4.7) * 0.01 * amp
+	var bob := -cos(_gait_phase*TAU*2) * 0.016 * amp + sin(_hand_time * 1.6) * 0.006
+	var sway := sin(_hand_time * 1.3) * 0.02 + sin(_gait_phase*TAU) * 0.012 * amp
+	var roll := sin(_hand_time * 0.9) * 0.012 + cos(_gait_phase*TAU) * 0.01 * amp
 	_hand_item.position = Vector3(0.0, bob, kick * 0.055)
 	_hand_item.rotation = Vector3(-kick * 0.12, sway, roll)
 	if active_item == "Fishing Rod" and _fishing_time_remaining > 0.0:
@@ -2165,16 +2256,22 @@ func _update_hand_sway(_delta: float) -> void:
 ##     case — in real life you only take debris that is within your pickable
 ##     range, and the E key collects those even without precise aiming).
 func interaction_caption() -> String:
+	if active_item.is_empty() and get_node("SurvivalProgression").call("can_refill_air"):return "REFILL AIR"
+	if active_item=="Shovel" and aim_collider is PlantInstance:return "HARVEST"
+	if active_item in ["Pickaxe","Shovel","Paddle","Anchor"] or (active_item=="Axe" and get_node("SurvivalTools").call("target")!=null):
+		return get_node("SurvivalTools").call("caption")
+	if active_item in ["WindGenerator","ElectricLamp"]:return "PLACE"
 	if active_item=="Medkit":return "USE MEDKIT"
-	if active_item=="Can":return "COLLECT WATER"
+	if active_item in ["Can","Tumbler"]:return "COLLECT WATER"
 	if active_item.ends_with("Water Can") and aim_valid and is_instance_valid(aim_collider) and get_node("SurvivalServices").is_filter(aim_collider):return "FILTER WATER"
 	if not is_instance_valid(aim_collider):aim_collider=null;aim_valid=false
 	if active_item=="Binoculars":return "LOWER" if get_node("PortableElectronics").zoomed else "LOOK"
+	if active_item in ["Solar Torch","Walkie Talkie"] and not get_node("PortableElectronics").fault_for(active_item).is_empty():return "SHAKE" if get_node("PortableElectronics").fault_for(active_item)=="contact" else "REPAIR"
 	if active_item=="Solar Torch":return "LIGHT OFF" if get_node("PortableElectronics").enabled[active_item] else "LIGHT ON"
 	if active_item=="Walkie Talkie":return "SEND SIGNAL" if get_node("PortableElectronics").enabled[active_item] else "POWER ON"
 	if active_item in ["Torch","Burning Torch"]:
-		if aim_valid and aim_collider != null and _find_piece_name(aim_collider) == "WallTorch": return "TAKE / LIGHT"
-		if get_node("SurvivalProgression").is_held_lit() and bool(_resolve_wall_torch().get("valid",false)): return "PLACE TORCH"
+		if aim_valid and aim_collider != null and _find_piece_name(aim_collider) == "WallTorch": return "TAKE TORCH"
+		if bool(_resolve_wall_torch().get("valid",false)): return "PLACE TORCH"
 		return "PUT OUT" if get_node("SurvivalProgression").is_held_lit() else "LIGHT TORCH"
 	if active_item in ["Diving Tank", "Bandage"]:
 		return "EQUIP" if active_item == "Diving Tank" else "HEAL"
@@ -2206,8 +2303,8 @@ func interaction_caption() -> String:
 			return "COLLECT"
 	if active_item in ["Sail Kit","Motor Kit"]:return "INSTALL"
 	if active_item == "Life Vest":return "EQUIP"
-	if active_item == "Spear":return "STRIKE"
-	if FOOD_RULES.edible(active_item):return "DRINK" if active_item.ends_with("Water Can") else "EAT"
+	if active_item == "Spear":return get_node("SurvivalTools").call("caption")
+	if FOOD_RULES.edible(active_item):return "DRINK" if FOOD_RULES.is_drink(active_item) else "EAT"
 	if active_item == "Water":
 		return "DRINK"
 	if active_item in ["Coconut", "Banana", "Fish", "Cooked Fish", "Roast Bird", "Baked Potato", "Potato", "Carrot", "Tomato", "Onion", "Cooked Meat", "Cooked Crab"]:
@@ -2216,8 +2313,13 @@ func interaction_caption() -> String:
 
 
 func can_interact_now() -> bool:
+	if active_item.is_empty() and get_node("SurvivalProgression").call("can_refill_air"): return true
+	if active_item=="Shovel" and aim_collider is PlantInstance:return aim_distance<=PICKUP_RANGE and aim_collider._stage>=3
+	if active_item in ["Pickaxe","Shovel","Paddle","Anchor"] or (active_item=="Axe" and get_node("SurvivalTools").call("target")!=null):
+		return get_node("SurvivalTools").call("can_use")
+	if active_item in ["WindGenerator","ElectricLamp"]:return Inventory.has(active_item,1)
 	if active_item=="Medkit":return Stats.health<Stats.MAX_VALUE and Inventory.has(active_item,1)
-	if active_item=="Can":return Inventory.has(active_item,1) and get_node("SurvivalServices").ocean_point().is_finite()
+	if active_item in ["Can","Tumbler"]:return Inventory.has(active_item,1) and get_node("SurvivalServices").ocean_point().is_finite()
 	if FOOD_RULES.edible(active_item) and Inventory.has(active_item,1):return true
 	if not is_instance_valid(aim_collider):aim_collider=null;aim_valid=false
 	if active_item in ["Solar Torch","Binoculars","Walkie Talkie"]:return Inventory.has(active_item,1)
@@ -2236,8 +2338,7 @@ func can_interact_now() -> bool:
 		return true
 	if active_item == "Fishing Rod" and _valid_fishing_cast() and _fishing_time_remaining <= 0.0:
 		return true
-	if active_item == "Spear" and aim_distance <= 5.2 and _get_aimed_shark() != null:
-		return true
+	if active_item == "Spear": return get_node("SurvivalTools").call("can_use")
 	if active_item in ["Sail Kit", "Motor Kit"] and Inventory.has(active_item, 1):
 		var raft := _get_raft_node()
 		if raft != null and global_position.distance_to(raft.global_position) <= 9.0:
@@ -3695,7 +3796,7 @@ func _resolve_wall_torch() -> Dictionary:
 func mount_held_torch() -> bool:
 	var selected:=active_item
 	var progress := get_node("SurvivalProgression")
-	if selected not in ["Torch","Burning Torch"] or not Inventory.has(selected,1) or not progress.is_held_lit():return false
+	if selected not in ["Torch","Burning Torch"] or not Inventory.has(selected,1):return false
 	var placement := _resolve_wall_torch()
 	if not bool(placement.get("valid",false)): return false
 	var raft := _get_raft_node()
@@ -3712,9 +3813,10 @@ func mount_held_torch() -> bool:
 	torch.set("burning",float(progress.get("torch_fuel")) > 0.0)
 	Inventory.remove(selected,1)
 	progress.set("torch_fuel",0.0)
+	progress.set("torch_end_time",0.0)
 	progress.set("legacy_torch",false)
 	container.add_child(torch)
-	_hud_toast("TORCH MOUNTED · BURNS UNTIL DAWN · USE TO TAKE")
+	_hud_toast("TORCH MOUNTED · USE TO TAKE · STONES TO LIGHT / PUT OUT")
 	_queue_save()
 	return true
 
@@ -3750,10 +3852,17 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	_diag["piece"] = piece_name
 	if not aim_point.is_finite():
 		return {"valid": false}
-	if piece_name == "Roof" and _get_raft_node() != null and _get_raft_node().to_local(aim_point).y < 3.2:
-		var room := _resolve_smart_roof(aim_point)
-		if not room.is_empty():
-			return room
+	if piece_name == "Roof" and _get_raft_node() != null:
+		var roof_aim := aim_point
+		if not aim_valid or _find_support_piece(aim_collider)==null:
+			var roof_ray := _placement_ray_direction()
+			var roof_eye := _placement_ray_origin()
+			if absf(roof_ray.y)>0.001:
+				var roof_t := (_get_structural_deck_y()+2.65-roof_eye.y)/roof_ray.y
+				if roof_t>0.0 and roof_t<AIM_DISTANCE: roof_aim=roof_eye+roof_ray*roof_t
+		if _get_raft_node().to_local(roof_aim).y < 3.2:
+			var room := _resolve_smart_roof(roof_aim)
+			if not room.is_empty(): return room
 
 
 	# Shared variables declared before branches to avoid CONFUSABLE_LOCAL_DECLARATION
@@ -3766,6 +3875,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	var effective_aim_point: Vector3 = aim_point
 	var effective_aim_normal: Vector3 = aim_normal
 	var effective_collider: Node3D = aim_collider
+	var foundation_projection_valid := false
 	# For Foundation: use structural build plane for targeting.
 	# For Wall: use ACTUAL ray hit — the player's crosshair determines which edge.
 	if piece_name == "Foundation":
@@ -3777,6 +3887,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 			if t_bp > 0.0 and t_bp < AIM_DISTANCE:
 				effective_aim_point = ray_o + ray_d * t_bp
 				effective_aim_normal = Vector3.UP
+				foundation_projection_valid=true
 	# Fallback: when ray misses OR hits a non-building object.
 	# The crosshair determines the target — NOT nearest Foundation.
 	# 1. Intersect the structural build plane to get exact aim position.
@@ -3826,7 +3937,16 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 					aim_collider = _fb_foundation
 					aim_distance = _bp_t
 					# else: no Foundation under crosshair — stay invalid (RED)
-	if (not aim_valid or effective_collider == null) and piece_name != "Wall" \
+	if piece_name == "Foundation":
+		# Select the actual connected deck neighbour for the projected cell,
+		# even if the sight ray hits a stair, wall, debris or empty water.
+		var target_cell := _world_to_grid(effective_aim_point)
+		for offset: Vector2i in [Vector2i.ZERO,Vector2i.RIGHT,Vector2i.LEFT,Vector2i.UP,Vector2i.DOWN]:
+			var deck: Node3D = _grid_occupancy.get(target_cell+offset) as Node3D
+			if is_instance_valid(deck) and deck!=_editing and _find_piece_name(deck) in ["Raft","Foundation"]:
+				effective_collider=deck
+				break
+	if ((not aim_valid and not foundation_projection_valid) or effective_collider == null) and piece_name != "Wall" \
 		and piece_name != "Roof" and piece_name != "Door" and piece_name != "Window":
 		# Walls, Roofs, Doors and Windows handle the aim-less case themselves
 		# (deck-plane projection + auto-snap), so they must not bail out here.
@@ -4043,7 +4163,15 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 
 		# Step 4h: Overlap check
 		var found_shape: Shape3D = _get_validation_shape(found_scene)
-		var found_overlap := _check_overlap(found_shape, found_solved, support)
+		var found_overlap: Array[Dictionary] = []
+		for hit in _check_overlap(found_shape, found_solved, support):
+			var obstacle := _find_support_piece(hit.get("collider") as Node3D)
+			# The thin deck is allowed beneath a flight. Its upper face must stay
+			# below the stair foot, so this cannot hide a deck through the ramp.
+			if obstacle != null and _find_piece_name(obstacle) == "Stairs":
+				var top := obstacle.to_local(found_solved * Vector3(0,FOUNDATION_HALF_HEIGHT,0))
+				if top.y <= -0.075: continue
+			found_overlap.append(hit)
 		_diag["overlap_valid"] = found_overlap.size() == 0
 		_diag["overlap_count"] = found_overlap.size()
 		if found_overlap.size() > 0:
@@ -5438,12 +5566,14 @@ func _begin_build_action() -> void:
 		if not Inventory.has_cost(costs):
 			_hud_toast("ROOF · NEED %d WOOD + %d ROPE FOR %d TILES"%[costs.Wood,costs.Rope,tiles]);return
 	var locked_support: Node3D = _ghost_support if is_instance_valid(_ghost_support) else aim_collider
+	var seconds:=6.0 if name2 in ["WindGenerator","ElectricPurifier","RescueRadio"] else .75
 	_pending_build={"time":0.0,"index":selected_piece_index,"collider":locked_support,
+		"seconds":seconds,
 		"point":raft.to_local(aim_point),"normal":aim_normal,"distance":aim_distance,
 		"ray_origin":raft.to_local(camera.global_position),"ray_direction":raft.global_basis.inverse()*-camera.global_basis.z,
 		"rotation":build_rotation,"pitch":build_rotation_x,
 		"local_transform":raft.global_transform.affine_inverse()*_ghost_transform}
-	play_action("build",0.75,_ghost_transform.origin)
+	play_action("assemble_electronics" if seconds>1.0 else "build",seconds,_ghost_transform.origin,name2)
 	_action.get("_label").text="ASSEMBLING "+name2.to_upper()+ (" · %d TILES"%tiles if tiles>1 else "")
 
 func _tick_build_action(delta: float) -> void:
@@ -5456,7 +5586,7 @@ func _tick_build_action(delta: float) -> void:
 	if cancelled:
 		_pending_build.clear();_action.call("stop");_hud_toast("BUILD CANCELLED · MATERIALS KEPT");return
 	_pending_build.time=float(_pending_build.time)+delta
-	if float(_pending_build.time)<0.75:return
+	if float(_pending_build.time)<float(_pending_build.get("seconds",.75)):return
 	var saved := _pending_build.duplicate();_pending_build.clear()
 	var placement: Vector3=raft.to_global(saved.point)
 	if global_position.distance_to(placement)>PICKUP_RANGE+4.0:
@@ -5471,7 +5601,9 @@ func _tick_build_action(delta: float) -> void:
 	aim_valid=true
 	_placement_ray_override = {"origin":raft.to_global(saved.ray_origin),"direction":raft.global_basis*saved.ray_direction}
 	_update_build_preview()
+	_timed_build_commit=true
 	_try_build()
+	_timed_build_commit=false
 	_placement_ray_override.clear()
 	build_rotation=old_rotation.x;build_rotation_x=old_rotation.y
 	aim_point=old_aim[0]
@@ -5613,7 +5745,7 @@ func _try_build() -> void:
 				pname = "NULL"
 			print("  %s -> %s" % [str(key), pname])
 	_hud_toast(piece_name.to_upper() + " PLACED")
-	play_world_sfx(CONSTRUCTION_AUDIO.build_sound(piece_name))
+	if not _timed_build_commit:play_world_sfx(CONTACT_AUDIO.pick("hammer"))
 	_update_build_preview()
 
 func _link_reciprocal_socket(new_piece: Node3D, parent_socket: BuildSocket) -> void:
@@ -5651,7 +5783,7 @@ const RECIPE_REFUND := {
 	"Bonfire": {"Wood": 8, "Stone": 4},
 	"RainCollector": {"Wood": 6, "Barrel": 1, "Rope": 2},
 	"WaterPurifier": {"Metal": 4, "Stone": 3, "Plastic": 2},
-	"WindGenerator": {"Metal": 8, "Wood": 6, "Rope": 3, "Plastic": 4},
+	"WindGenerator": {"Wood":8,"Metal":4,"Screw":4,"Wire":2,"Motor":1,"Battery":1},
 	"ElectricLamp": {"Metal": 2, "Plastic": 2},
 	"ElectricPurifier": {"Metal": 8, "Plastic": 5, "Rope": 2},
 	"RescueRadio": {"Metal": 10, "Plastic": 6, "Rope": 2},
@@ -6174,7 +6306,7 @@ func _build_smart_roof() -> void:
 		var sample := piece.get_node_or_null("SampleMarker")
 		if sample != null and raft.has_method("register_sample_point"): raft.register_sample_point(sample)
 	_queue_save()
-	play_world_sfx(CONSTRUCTION_AUDIO.build_sound("Roof"))
+	if not _timed_build_commit:play_world_sfx(CONTACT_AUDIO.pick("hammer"))
 	_hud_toast("ROOF COMPLETE · %d TILES" % pending.size())
 	_update_build_preview()
 
@@ -6217,12 +6349,11 @@ func _update_room_preview() -> void:
 func _update_head_bob(delta: float) -> void:
 	if camera == null: return
 	_update_swim_splash()
-	# Smooth amplitude up to five centimetres. A ten-radian gait rate produces
-	# natural walking bob rather than an uncomfortable ten shakes per second.
-	var speed := Vector2(velocity.x,velocity.z).length()
+	# The camera settles down on the same contact as the feet and held item.
+	var speed := _gait_speed
 	var weight := clampf(speed / WALK_SPEED,0,1) if is_on_floor() and not is_swimming and cam_mode == CAM_FPS and GameSettings.head_bob else 0.0
-	_head_bob_phase += delta*10.0
-	var target := Vector3(sin(_head_bob_phase*0.5)*0.018,sin(_head_bob_phase)*0.05,0)*weight
+	_head_bob_phase = _gait_phase*TAU
+	var target := Vector3(sin(_head_bob_phase)*0.018,-cos(_head_bob_phase*2)*0.035,0)*weight
 	_head_bob_offset = _head_bob_offset.lerp(target,1.0-exp(-delta*12.0))
 	camera.position = _head_bob_offset
 
@@ -6265,14 +6396,21 @@ func _add_swim_animation(animator: AnimationPlayer, idle_name: String, _survivor
 	for track in animation.get_track_count():
 		if animation.track_get_type(track) != Animation.TYPE_ROTATION_3D: continue
 		var path := str(animation.track_get_path(track))
-		if not (path.contains("UpperArm") or path.contains("UpperLeg") or path.contains("LowerArm")): continue
+		if not (path.contains("UpperArm") or path.contains("UpperLeg") or path.contains("LowerArm") or path.contains("LowerLeg")): continue
 		if animation.track_get_key_count(track) == 0: continue
 		var resting: Quaternion = animation.track_get_key_value(track,0)
 		while animation.track_get_key_count(track) > 0: animation.track_remove_key(track,0)
-		for index in range(9):
-			var phase := float(index)/8.0*TAU + (PI if path.ends_with(".R") else 0.0)
-			var amount := 0.65 if path.contains("UpperArm") else 0.22
-			animation.rotation_track_insert_key(track,index*0.2,resting*Quaternion(Vector3.RIGHT,sin(phase)*amount))
+		for index in range(17):
+			var phase := float(index)/16.0*TAU + (PI if path.ends_with(".R") else 0.0)
+			var pose:=Quaternion.IDENTITY
+			if path.contains("UpperArm"):
+				pose=Quaternion(Vector3.RIGHT,sin(phase)*1.15)*Quaternion(Vector3.FORWARD,cos(phase)*.30)
+			elif path.contains("LowerArm"):
+				pose=Quaternion(Vector3.RIGHT,-.20-maxf(0,cos(phase))*.85)
+			elif path.contains("UpperLeg"):
+				pose=Quaternion(Vector3.RIGHT,sin(phase*2)*.27)
+			else:pose=Quaternion(Vector3.RIGHT,maxf(0,-sin(phase*2))*.38)
+			animation.rotation_track_insert_key(track,index*.1,resting*pose)
 	var library := AnimationLibrary.new()
 	library.add_animation("Swim",animation)
 	animator.add_animation_library("Survival",library)
@@ -6316,6 +6454,9 @@ func _resolve_deck_prop(kind: String, support: Node3D, point: Vector3) -> Dictio
 					return {"valid":false,"transform":solved}
 	var shape:=BoxShape3D.new();shape.size=col.shape.size-Vector3.ONE*0.035
 	var hits:=_check_overlap(shape,solved*col.transform,support)
+	if kind=="WindGenerator":
+		for extra: CollisionShape3D in template.find_children("*","CollisionShape3D",true,false):
+			if extra!=col: hits.append_array(_check_overlap(extra.shape,solved*extra.transform,support))
 	if not hits.is_empty():
 		_diag["invalid_reason"]="SPACE BLOCKED · AIM AT A CLEAR PART OF THE DECK"
 		return {"valid":false,"transform":solved}
@@ -6331,14 +6472,14 @@ func _resolve_stairs(support: Node3D, _world_aim: Vector3) -> Dictionary:
 	var basis := flat.basis.rotated(Vector3.UP, snappedf(build_rotation, PI/2.0))
 	var base := flat.origin
 	if kind == "Stairs":
-		# The landing ends at local Z=4, with its top at Y=2.55.
-		base = flat * Vector3(0,2.55,4.0)
+		base = flat * support.get_node("BuildSockets/Socket_Top").position
 	else:
 		base += basis * Vector3(0,0,-1.0)
 		base.y += 0.075 if kind == "Roof" else 0.15
 	var solved := Transform3D(basis,base+Vector3.UP*0.1)
 	var scene: PackedScene = build_pieces[BUILD_RECIPE_NAMES.find("Stairs")]
-	var template := _solver_template(scene)
+	var template := _editing if _editing!=null and _find_piece_name(_editing)=="Stairs" else _solver_template(scene)
+	var stair_run: float = template.run
 	# Check every real collision shape, including the sloping walkable ramp.
 	# Existing decks below the ramp are support; walls and machines are not.
 	var probe_excludes := _support_ray_excludes()
@@ -6356,15 +6497,16 @@ func _resolve_stairs(support: Node3D, _world_aim: Vector3) -> Dictionary:
 			if body != null and _find_piece_name(body) in ["Raft","Foundation","Roof"]:
 				var point := solved.affine_inverse()*body.global_position
 				# A deck at the foot or the upper landing may touch the stairs.
-				if point.y < 0.05 or (point.z > 2.95 and point.y >= 2.45): continue
+				if point.y < 0.05 or (point.z > stair_run-0.05 and point.y >= 2.45): continue
 			_diag["invalid_reason"] = "STAIRS BLOCKED · ROTATE OR CLEAR THE LANDING"
 			return {"valid": false,"transform": solved,"support": support}
 	# Leave character clearance above the ramp, including roofs that do not
 	# intersect the stair geometry but would prevent walking up the flight.
 	var clearance := BoxShape3D.new()
-	clearance.size = Vector3(1.45,1.65,0.28)
-	for distance in [0.5,1.2,1.9,2.6]:
-		var floor_y: float = -0.1+float(distance)/3.0*2.65
+	clearance.size = Vector3(1.20,1.65,0.28)
+	for fraction in [0.14,0.4,0.65,0.9]:
+		var distance: float = fraction*stair_run
+		var floor_y: float = -0.1+fraction*2.65
 		var query := PhysicsShapeQueryParameters3D.new()
 		query.shape = clearance
 		query.transform = solved*Transform3D(Basis.IDENTITY,Vector3(0,floor_y+0.92,distance))

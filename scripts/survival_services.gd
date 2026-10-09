@@ -23,8 +23,13 @@ func _ready() -> void:
 	player=get_parent() as CharacterBody3D
 	ui=preload("res://scripts/survival_service_ui.gd").new();ui.service=self;add_child(ui)
 	call_deferred("_restore_drops")
-func is_modal() -> bool:return menu_open
-func busy() -> bool:return not action.is_empty()
+func is_modal() -> bool:
+	var repairs:=player.get_node_or_null("EquipmentRepairs")
+	return menu_open or (repairs!=null and repairs.menu_open)
+func busy() -> bool:
+	var fire_actions:=player.get_node_or_null("FireActions")
+	var repairs:=player.get_node_or_null("EquipmentRepairs")
+	return not action.is_empty() or (fire_actions!=null and fire_actions.busy()) or (repairs!=null and repairs.busy())
 func equip_owned(item: String) -> void:
 	for index in Inventory.SLOT_COUNT:
 		if Inventory.slot_item(index)!=item:continue
@@ -58,7 +63,7 @@ func use_item(item: String) -> bool:
 		player.call("play_action","bandage",1.5)
 		player.call("play_world_sfx",preload("res://audio/pickup_rustle.ogg"),-14.0)
 		return true
-	if item=="Can":
+	if item in ["Can","Tumbler"]:
 		var at:=ocean_point()
 		if not at.is_finite():player.call("_hud_toast","AIM AT REACHABLE OCEAN WATER");return false
 		_start_action("fill",2.0,item)
@@ -66,10 +71,13 @@ func use_item(item: String) -> bool:
 		return true
 	if RULES.edible(item):
 		var return_can: Dictionary={"Can":1} if item.ends_with("Water Can") else {}
+		if item.ends_with("Tumbler"):return_can={"Tumbler":1}
 		if not Inventory.try_exchange({item:1},return_can):return false
 		var values:=RULES.effects(item)
 		Stats.eat(float(values[0]));Stats.drink(float(values[1]));Stats.change_health(float(values[2]))
-		player.call("play_action","drink" if item in ["Water","Dirty Water Can","Clean Water Can"] else "eat",0.95)
+		var drinking:=RULES.is_drink(item)
+		player.get_node("SurvivalAction").call("play","drink" if drinking else "eat",1.55 if drinking else 1.75,Vector3.ZERO,item)
+		if item=="Ocean Water Tumbler":player.call("_hud_toast","RAW SEAWATER · -8 HEALTH · BOIL YOUR NEXT CUP")
 		player.call("_queue_save")
 		return true
 	return false
@@ -92,14 +100,18 @@ func advance_action(seconds: float) -> void:
 		cancel_action();return
 	if action.kind=="fill" and not ocean_point().is_finite():cancel_action();return
 	action.remaining=maxf(0.0,float(action.remaining)-seconds)
-	ui.show_progress("USING MEDKIT" if action.kind=="medkit" else "FILLING CAN",1.0-float(action.remaining)/float(action.duration))
+	ui.show_progress("USING MEDKIT" if action.kind=="medkit" else ("FILLING TUMBLER" if action.item=="Tumbler" else "FILLING CAN"),1.0-float(action.remaining)/float(action.duration))
 	if float(action.remaining)>.000001:return
 	var completed:=action.duplicate();action.clear();ui.hide_progress()
 	player.get_node("SurvivalAction").call("stop")
 	if completed.kind=="medkit":
 		if Inventory.try_exchange({"Medkit":1},{}):Stats.change_health(Stats.MAX_VALUE*.5)
 	elif completed.kind=="fill":
-		if Inventory.try_exchange({"Can":1},{"Dirty Water Can":1}):player.call("_hud_toast","DIRTY SEAWATER · FILTER BEFORE DRINKING")
+		var vessel:=str(completed.item)
+		var filled:="Ocean Water Tumbler" if vessel=="Tumbler" else "Dirty Water Can"
+		if Inventory.try_exchange({vessel:1},{filled:1}):
+			equip_owned(filled)
+			player.call("_hud_toast","OCEAN WATER · DRINK RAW OR BOIL AT A FIRE" if vessel=="Tumbler" else "DIRTY SEAWATER · FILTER BEFORE DRINKING")
 	player.call("_queue_save")
 
 func ocean_point() -> Vector3:
@@ -131,9 +143,19 @@ func _open_menu() -> void:
 	menu_open=true
 	GameSettings.release_gameplay_input();Input.mouse_mode=Input.MOUSE_MODE_VISIBLE
 func close_menu() -> void:
+	var repairs:=player.get_node_or_null("EquipmentRepairs")
+	if repairs!=null and repairs.menu_open:repairs.close()
 	menu_open=false;storage=null;station=null;ui.close()
 	GameSettings.release_gameplay_input()
 	if not _blocked():Input.mouse_mode=Input.MOUSE_MODE_CAPTURED
+func toggle_station_fire() -> void:
+	var target:=station
+	if not is_fire(target):return
+	close_menu()
+	player.get_node("FireActions").start("snuff_fire" if target.burning else "ignite_fire",target)
+func fuel_station() -> void:
+	if not is_fire(station) or station.fuel>=900 or not Inventory.try_exchange({"Wood":1},{}):return
+	station.fuel=minf(station.fuel+90,900);player.call("_queue_save");ui.call("_refresh_cooking")
 func can_cook(dish: String) -> bool:
 	if _blocked() or not RULES.RECIPES.has(dish) or not _station_ready(station):return false
 	var job:=station.get_node_or_null("StationJob")
@@ -153,7 +175,7 @@ func start_cooking(dish: String) -> bool:
 	focused_job=job
 	_job_label=dish.to_upper()
 	close_menu()
-	player.call("play_action","fire",1.2,target.global_position)
+	player.call("play_action","cook",2.0,target.global_position,dish)
 	player.call("_queue_save")
 	return true
 func start_filtering() -> bool:
@@ -168,6 +190,19 @@ func start_filtering() -> bool:
 	_job_label="FILTERING WATER"
 	close_menu();player.call("play_action","install",.8,target.global_position);player.call("_queue_save")
 	return true
+
+func can_boil() -> bool:
+	if _blocked() or busy() or not _station_ready(station) or not Inventory.has("Ocean Water Tumbler",1):return false
+	var existing:=station.get_node_or_null("StationJob")
+	return existing==null or existing.job.is_empty()
+
+func start_boiling() -> bool:
+	if not can_boil() or not Inventory.try_exchange({"Ocean Water Tumbler":1},{}):return false
+	var target:=station;var job:=ensure_job(target)
+	job.restore_job({"kind":"boil","item":"Boiled Water Tumbler","remaining":8.0});focused_job=job;_job_label="BOILING WATER"
+	close_menu();player.call("play_action","fill",.9,target.global_position,"Ocean Water Tumbler")
+	player.get_node("SurvivalAction").get("_label").text="PLACING TUMBLER"
+	player.call("_queue_save");return true
 func ensure_job(target: Node3D) -> Node3D:
 	var existing:=target.get_node_or_null("StationJob") as Node3D
 	if existing!=null:return existing
@@ -175,11 +210,14 @@ func ensure_job(target: Node3D) -> Node3D:
 func finish_station_job(job: Node3D) -> void:
 	if not is_instance_valid(job) or job.get_script()!=JOB or job.job.is_empty() or float(job.job.remaining)>0:return
 	var item:=str(job.job.item)
-	if item!="Clean Water Can" and not RULES.RECIPES.has(item):return
+	if item not in ["Clean Water Can","Boiled Water Tumbler"] and not RULES.RECIPES.has(item):return
+	var heat_job:=str(job.job.kind) in ["cook","boil"]
 	# Clear before inventory signals/save callbacks; completion can only award once.
 	job.job.clear();job.call("_sync_visual")
+	if heat_job and job.get_parent().has_method("extinguish"):job.get_parent().call("extinguish")
 	if Inventory.add(item,1)>0:drop_items([{"item":item,"count":1}],job.global_position+Vector3.UP*.35)
 	player.call("_hud_toast","READY · "+item.to_upper())
+	player.call("play_world_sfx",preload("res://audio/action_ready.wav"),-13.0)
 	player.call("_queue_save")
 
 func transfer(from_box: bool,source: int,to_box: bool,destination: int) -> bool:

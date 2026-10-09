@@ -22,6 +22,7 @@ func _populate() -> void:
 	for island in get_tree().get_nodes_in_group("island"):
 		if not is_instance_valid(island) or not island is Node3D:
 			continue
+		if island.is_in_group("biome_island"):continue
 		for index in range(4):
 			if not is_instance_valid(island):
 				break

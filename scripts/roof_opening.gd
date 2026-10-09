@@ -3,22 +3,24 @@ extends StaticBody3D
 ## and stair transforms remain the save format's authoritative geometry.
 const TIMBER := preload("res://scripts/construction_visual.gd")
 const HALF_WIDTH := 0.70
-const START := 0.45
-const END := 3.10
+const START := 0.35
+const END := 2.50
 var _tick := 0.0
 var _signature := 0
 var _cut_root: Node3D
 static var _meshes: Dictionary = {}
 
-static func panels(tile: Transform3D, flights: Array[Transform3D]) -> Array[Rect2]:
+static func panels(tile: Transform3D, flights: Array[Transform3D], runs: Array[float] = []) -> Array[Rect2]:
 	var result: Array[Rect2] = [Rect2(-1,-1,2,2)]
-	for flight in flights:
+	for flight_index in flights.size():
+		var flight := flights[flight_index]
+		var run := runs[flight_index] if flight_index<runs.size() else 2.4
 		var relative := tile.affine_inverse()*flight
 		if absf(relative.origin.y + 2.475) > 0.3: continue
 		var lower := Vector2(INF,INF)
 		var upper := Vector2(-INF,-INF)
 		for x in [-HALF_WIDTH,HALF_WIDTH]:
-			for z in [START,END]:
+			for z in [START*run/2.4,run+0.1]:
 				var p: Vector3 = relative*Vector3(x,0,z)
 				lower=lower.min(Vector2(p.x,p.z)); upper=upper.max(Vector2(p.x,p.z))
 		var opening := Rect2(lower,upper-lower)
@@ -54,15 +56,20 @@ func refresh(force_scan: bool = true) -> void:
 	var frame := Engine.get_process_frames()
 	if force_scan or int(container.get_meta("roof_flight_frame",-1)) != frame:
 		var snapshot: Array[Transform3D] = []
+		var lengths: Array[float] = []
 		for piece in container.get_children():
-			if piece is Node3D and piece.name.begins_with("Stairs") and not piece.is_queued_for_deletion(): snapshot.append(piece.transform)
+			if piece is Node3D and piece.name.begins_with("Stairs") and not piece.is_queued_for_deletion():
+				snapshot.append(piece.transform)
+				lengths.append(piece.run)
 		container.set_meta("roof_flight_frame",frame)
 		container.set_meta("roof_flights",snapshot)
+		container.set_meta("roof_runs",lengths)
 	var flights: Array[Transform3D] = container.get_meta("roof_flights")
-	var next_signature := hash([transform,flights])
+	var runs: Array[float] = container.get_meta("roof_runs")
+	var next_signature := hash([transform,flights,runs])
 	if next_signature==_signature:return
 	_signature=next_signature
-	var sections:=panels(transform,flights)
+	var sections:=panels(transform,flights,runs)
 	var cut := sections.size()!=1 or sections[0]!=Rect2(-1,-1,2,2)
 	if is_instance_valid(_cut_root):
 		remove_child(_cut_root);_cut_root.queue_free()

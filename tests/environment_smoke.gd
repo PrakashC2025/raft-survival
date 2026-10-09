@@ -19,6 +19,8 @@ func _run() -> void:
 		quit(2)
 		return
 	root.get_node("Inventory").call("new_game_reset", true)
+	# Earlier suites may save Battery Saver in the shared isolated test profile.
+	root.get_node("GameSettings").call("update_setting","quality",0)
 	root.get_node("Stats").set("enabled", false)
 	var starting_buses := AudioServer.bus_count
 	change_scene_to_file("res://scenes/main.tscn")

@@ -18,6 +18,14 @@ static func make(kind: int, color: Color, roughness: float = 0.8, metallic: floa
 	_materials[key] = material
 	return material
 
+static func worn(kind: int, color: Color, roughness: float = 0.85, metallic: float = 0.0) -> ShaderMaterial:
+	var key:="worn:%d:%s:%.3f:%.3f"%[kind,color.to_html(true),roughness,metallic]
+	if not _materials.has(key):
+		var material:=make(kind,color,roughness,metallic).duplicate() as ShaderMaterial
+		material.set_shader_parameter("surface_wear",0.9)
+		_materials[key]=material
+	return _materials[key]
+
 static func kind_for_item(item: String) -> int:
 	match item:
 		"Wood", "Barrel", "Spear", "Fishing Rod", "Bow", "Arrow": return Kind.WOOD

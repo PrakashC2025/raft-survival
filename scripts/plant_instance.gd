@@ -28,10 +28,11 @@ const ONION_STAGES := [preload("res://models/onion_sprout.glb"),preload("res://m
 const BANANA_PLANT_SCENE: PackedScene = preload("res://models/banana_plant.glb")
 const VEGETATION_VISUAL := preload("res://scripts/vegetation_visual.gd")
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
+const PRODUCE_VISUAL := preload("res://scripts/produce_visual.gd")
 const COCONUT_SCENE: PackedScene = preload("res://models/kenney_coconut.glb")
 const BANANA_SCENE: PackedScene = preload("res://models/kenney_banana.glb")
-const CHOP_SOUND: AudioStream = preload("res://audio/chop.ogg")
-const HARVEST_SOUND: AudioStream = preload("res://audio/pickup_rustle.ogg")
+const CHOP_SOUND: AudioStream = preload("res://audio/contact/hammer.wav")
+const HARVEST_SOUND: AudioStream = preload("res://audio/contact/cloth.wav")
 const ITEM_PICKUP_SCENE: PackedScene = preload("res://scenes/food_pickup.tscn")
 # Height fraction reached at the END of each stage (indexed by Stage.SEED..MATURE)
 const STAGE_FRAC := [0.16, 0.30, 0.62, 1.0]
@@ -64,6 +65,7 @@ var _holding: bool = false
 var _hold_progress: float = 0.0
 var _hold_target: float = 1.0
 var _hold_kind: String = ""
+var _hold_contact := false
 var _health: int = 0
 var _fell_axis: Vector3 = Vector3.FORWARD
 var _pending_dig_drop: Dictionary = {}
@@ -329,6 +331,7 @@ func _build_root_visual(stage: int) -> void:
 		onion.name = "OnionPlantModel"
 		onion.scale = Vector3.ONE * _hvar
 		_container.add_child(onion)
+		VEGETATION_VISUAL.apply_crop(onion)
 		return
 	# A recognisable small plant is visible from planting onward.
 	if plant_id in ["Tomato", "Potato", "Carrot"]:
@@ -340,10 +343,18 @@ func _build_root_visual(stage: int) -> void:
 		crop.scale = Vector3.ONE * (0.55 if plant_id == "Tomato" else (0.85 if plant_id=="Potato" else 1.0)) * _hvar
 		for part in crop.find_children("*", "MeshInstance3D", true, false):
 			var part_name := str(part.name)
-			if part_name == "PotatoTuber":
-				(part as MeshInstance3D).material_override = OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.FOOD,Color(0.50,0.39,0.235),0.94)
+			if part_name == "PotatoTuber" or part_name.begins_with("Tomato_"):
+				# Growing fruit uses the same irregular skin as the harvested food.
+				var food := PRODUCE_VISUAL.create("Potato" if part_name == "PotatoTuber" else "Tomato")
+				var bounds: AABB = (part as MeshInstance3D).get_aabb()
+				var source: AABB = (food.get_child(0) as MeshInstance3D).get_aabb()
+				food.position = bounds.get_center()
+				food.scale = bounds.size/source.size
+				(part as MeshInstance3D).mesh = null
+				part.add_child(food)
 			if part_name.begins_with("Tomato_") or part_name in ["Flower", "PotatoFlower"]:
 				(part as Node3D).visible = stage == Stage.MATURE
+		VEGETATION_VISUAL.apply_crop(crop)
 		return
 
 	var leaf_col: Color = _def.get("leaf_color", Color(0.25, 0.55, 0.2))
@@ -411,6 +422,7 @@ func _build_tree_visual(stage: int) -> void:
 			for surface in mesh.mesh.get_surface_count():
 				var material := mesh.get_active_material(surface) as StandardMaterial3D
 				if material != null:material.vertex_color_use_as_albedo=true
+		VEGETATION_VISUAL.apply_crop(banana)
 		var target_height: float = _grow_y(float(_def.get("trunk_height",2.2)))
 		var bounds := _node_local_aabb(banana)
 		var model_scale := target_height/maxf(bounds.size.y,0.01)
@@ -828,6 +840,11 @@ func _show_prompt(text: String) -> void:
 
 
 func _run_hold(kind: String, per_hit_time: float, delta: float) -> void:
+	var tool_actor := _get_player()
+	if tool_actor!=null:
+		var equipped := str(tool_actor.get("active_item"))
+		if (kind in ["chop","stump"] and equipped=="Axe" and Inventory.has("Axe",1)) \
+				or (kind=="dig" and equipped=="Shovel" and Inventory.has("Shovel",1)):per_hit_time*=.60
 	if not Input.is_action_pressed("interact"):
 		if _holding:
 			_cancel_hold()
@@ -837,15 +854,16 @@ func _run_hold(kind: String, per_hit_time: float, delta: float) -> void:
 		_hold_kind = kind
 		_hold_progress = 0.0
 		_hold_target = per_hit_time
+		_hold_contact = false
 		var actor := _get_player()
 		if actor!=null:actor.call("play_action","chop" if kind in ["chop","stump"] else "scoop",per_hit_time,global_position)
 	_hold_progress += delta
 	if _progress_bar != null:
 		_progress_bar.size.x = 180.0 * clampf(_hold_progress / _hold_target, 0.0, 1.0)
-	if _hold_progress >= _hold_target:
-		_hold_progress = 0.0
-		var actor := _get_player()
-		if actor!=null and kind in ["chop","stump"]:actor.call("play_action","chop",per_hit_time,global_position)
+	# Axe hits, tree damage and its recorded impact share the downstroke.
+	var contact_fraction:=.57 if kind in ["chop","stump"] else 1.0
+	if not _hold_contact and _hold_progress >= _hold_target*contact_fraction:
+		_hold_contact=true
 		match kind:
 			"dig":
 				_do_dig()
@@ -853,6 +871,10 @@ func _run_hold(kind: String, per_hit_time: float, delta: float) -> void:
 				_do_chop_hit()
 			"stump":
 				_do_remove_stump()
+	if _holding and _hold_progress >= _hold_target:
+		_hold_progress=0.0;_hold_contact=false
+		var actor:=_get_player()
+		if actor!=null and kind in ["chop","stump"]:actor.call("play_action","chop",per_hit_time,global_position)
 
 
 func _cancel_hold() -> void:
@@ -875,7 +897,7 @@ func _pick_fruit(fruit) -> void:
 		_notify_bag_full()
 		return
 	var actor := _get_player()
-	if actor!=null:actor.call("play_action","pick",0.6,global_position)
+	if actor!=null:actor.call("play_action","pick",.85,global_position,yield_item)
 	fruit["elapsed"] = 0.0
 	var fruit_hit: CollisionShape3D = fruit.get("hit_shape")
 	if is_instance_valid(fruit_hit):fruit_hit.set_deferred("disabled",true)
@@ -922,7 +944,7 @@ func _do_dig() -> void:
 	_harvesting = true
 	if is_instance_valid(_progress_ui):_progress_ui.visible=false
 	var actor := _get_player()
-	if actor!=null:actor.call("play_action","harvest",1.7 if plant_id in ["Potato","Carrot","Onion"] else 0.65,global_position)
+	if actor!=null:actor.call("play_action","harvest",1.7 if plant_id in ["Potato","Carrot","Onion"] else .85,global_position,yield_item)
 	var tw := create_tween()
 	if plant_id in ["Potato","Carrot","Onion"]:
 		# Lift the complete root system out of the soil before collecting it.
@@ -950,8 +972,8 @@ func _finish_dig() -> void:
 # CUTTING — health-based, configurable via PlantDB
 # ============================================================
 func _do_chop_hit() -> void:
-	_health -= 1
 	var player := _get_player()
+	_health -= 2 if player!=null and player.get("active_item")=="Axe" and Inventory.has("Axe",1) else 1
 	if player != null and player.has_method("play_world_sfx"):
 		player.call("play_world_sfx", CHOP_SOUND, -9.0)
 	var trunk_col: Color = _def.get("trunk_color", Color(0.5, 0.36, 0.2))

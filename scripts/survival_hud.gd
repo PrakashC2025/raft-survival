@@ -29,14 +29,15 @@ var _refresh_seconds := 0.0
 ## ============================================================
 
 const PIECE_ORDER := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
-const CRAFT_ORDER := ["PlanterPot","PlanterBox","TreePot","Foundation","Wall","Roof","Stairs","Door","Window","Bonfire","RainCollector","SandFilter","Fishing Rod", "Spear", "Sail Kit", "Motor Kit", "Life Vest", "Bow", "Arrow", "Bandage", "Diving Tank", "Torch","Solar Torch","Binoculars","Walkie Talkie","Battery","Medkit","Can","StorageBox","CookingSetup","HalfWall","CargoCrate","WallTorch","WaterPurifier","WindGenerator","ElectricLamp","ElectricPurifier","RescueRadio"]
+const CRAFT_ORDER := ["Torch","Bonfire","Diving Tank","Spear","Axe","Shovel","Pickaxe","Paddle","Anchor","PlanterPot","PlanterBox","TreePot","Foundation","Wall","Roof","Stairs","Door","Window","RainCollector","SandFilter","Fishing Rod", "Sail Kit", "Motor Kit", "Life Vest", "Bow", "Arrow", "Bandage","Solar Torch","Binoculars","Walkie Talkie","Battery","Repair Kit","Screw","Wire","Motor","Medkit","Can","Tumbler","StorageBox","CookingSetup","HalfWall","CargoCrate","WallTorch","WaterPurifier","WindGenerator","ElectricPurifier","RescueRadio"]
 const RESOURCE_PILL_ITEMS := []
 const STATS := [["health", "HEALTH"], ["thirst", "WATER"], ["hunger", "HUNGER"]]
 const FOOD_RULES := preload("res://scripts/food_rules.gd")
 var _display_stats := [100.0,100.0,100.0]
 const CRAFT_PAGE_SIZE := 6
-const ITEM_LABELS := {"PlanterPot":"Plant Pot","PlanterBox":"Plant Bed","TreePot":"Tree Pot","RainCollector":"Rain Collector","SandFilter":"Sand Filter","HalfWall":"Half Wall","CargoCrate":"Cargo Crate","WallTorch":"Wall Torch","WaterPurifier":"Water Purifier","WindGenerator":"Wind Generator","ElectricLamp":"Electric Lamp","ElectricPurifier":"Electric Purifier","RescueRadio":"Rescue Radio"}
+const ITEM_LABELS := {"Torch":"Hand Fire Torch","Bonfire":"Bonfire","Diving Tank":"Handmade Air Tank","PlanterPot":"Plant Pot","PlanterBox":"Plant Bed","TreePot":"Tree Pot","RainCollector":"Rain Collector","SandFilter":"Sand Filter","HalfWall":"Half Wall","CargoCrate":"Cargo Crate","WallTorch":"Wall Torch","WaterPurifier":"Water Purifier","WindGenerator":"Wind Generator","ElectricLamp":"Electric Lamp","ElectricPurifier":"Electric Purifier","RescueRadio":"Rescue Radio"}
 const MAP_RANGE_METERS := 430.0
+var _map_range := MAP_RANGE_METERS
 
 const HOTBAR_COUNT := 6
 const BAG_COLS := 6
@@ -61,7 +62,7 @@ var _craft_panel_rect := Rect2()
 var _craft_close_rect := Rect2()
 var _craft_card_rects: Array[Rect2] = []
 var _craft_page := 0
-var _craft_selected := "PlanterPot"
+var _craft_selected := "Torch"
 var _craft_detail_rect := Rect2()
 var _craft_confirm_rect := Rect2()
 var _craft_prev_rect := Rect2()
@@ -320,6 +321,11 @@ func handle_back() -> void:
 
 
 func _process(delta: float) -> void:
+	# Action feedback belongs to gameplay; it must not cover inventory recipes.
+	var actor:=_get_player()
+	var action:=actor.get_node_or_null("SurvivalAction") if actor!=null else null
+	if action!=null and is_instance_valid(action.get("_panel")):
+		action.get("_panel").visible=not gameplay_input_blocked() and not get_tree().paused and not str(action.kind).is_empty() and not action._construction_idle
 	if _pickup_remaining>0.0 and not get_tree().paused:
 		_pickup_remaining-=delta
 		if _pickup_remaining<=0.0:_advance_pickup()
@@ -522,13 +528,18 @@ func _compute_layout() -> void:
 				_map_panel_rect.end.y - map_pad - course_h, course_w, course_h)
 		var raft := _get_raft()
 		var origin := raft.global_position if raft != null else Vector3.ZERO
-		for island in get_tree().get_nodes_in_group("island"):
+		_map_range=MAP_RANGE_METERS
+		var destinations:=get_tree().get_nodes_in_group("island")+get_tree().get_nodes_in_group("dive_site")
+		for destination in destinations:
+			var relative: Vector3=destination.global_position-origin
+			_map_range=maxf(_map_range,Vector2(relative.x,relative.z).length()*1.22)
+		for island in destinations:
 			if not (island is Node3D) or not is_instance_valid(island):
 				continue
 			var island_node := island as Node3D
 			var offset := island_node.global_position - origin
 			var relative := Vector2(offset.x, offset.z)
-			var map_pos := _map_center + relative / MAP_RANGE_METERS * _map_plot_radius
+			var map_pos := _map_center + relative / _map_range * _map_plot_radius
 			var label: String = str(island_node.get_meta("map_label", island_node.name))
 			_map_markers.append({
 				"node": island_node,
@@ -647,12 +658,14 @@ func _build_cache_key() -> String:
 		return key
 	var progress := p.get_node_or_null("SurvivalProgression")
 	if progress != null:
-		key += str(progress.level) + str(progress.call("objective")) + str(int(progress.oxygen)) + str(int(progress.stamina))
+		key += str(progress.level) + str(progress.call("objective")) + str(int(progress.oxygen)) + str(int(progress.stamina))+str(int(progress.air_tank_seconds))
 	key += "|bm" + str(p.get("build_mode") == true)
 	key += "|ed" + str(_editing())
 	key += "|sel" + str(int(p.get("selected_piece_index")))
 	key += "|act" + str(int(p.get("active_slot_index")))
 	key += "|av" + str(p.get("active_item"))
+	if _map_open:key+="|heading"+str(snappedf(p.global_rotation.y,.01))+"|position"+str(p.global_position.snapped(Vector3.ONE))
+	if progress!=null and (progress.oxygen<=25 or (progress.diving_tank and progress.air_tank_seconds<=30)):key+="|airblink"+str(int(Time.get_ticks_msec()/400))
 	key += "|valid" + str(p.get("build_valid") == true)
 	# inventory digest (totals are cheap; pickups/removals change them)
 	for item in Inventory.items:
@@ -742,6 +755,13 @@ func _input(event: InputEvent) -> void:
 		return
 	var controls := get_parent().get_node_or_null("MobileControls")
 	if controls != null and bool(controls.get("_help_open")):
+		return
+	# Android replays a finger event as a mouse event. This custom HUD already
+	# handles the finger; processing both can immediately close the opened bag
+	# or confirm a recipe twice. Real desktop mouse events remain supported.
+	if event is InputEventMouse and event.device == -1:
+		if visible and (gameplay_input_blocked() or claims_touch(event.position)):
+			_consume_input()
 		return
 	_compute_layout()
 	if _death_open:
@@ -885,12 +905,14 @@ func _handle_modal_pointer(event: InputEvent) -> void:
 		elif _map_course_rect.has_point(pointer):
 			_start_selected_course()
 		else:
+			var nearest:=maxf(24.0,_map_plot_radius*.16)
 			for marker in _map_markers:
 				var marker_pos: Vector2 = marker.get("pos", Vector2.ZERO)
-				if pointer.distance_to(marker_pos) <= maxf(24.0, _map_plot_radius * 0.16):
+				var distance:=pointer.distance_to(marker_pos)
+				if distance<=nearest:
+					nearest=distance
 					_selected_island = marker.get("node") as Node3D
 					queue_redraw()
-					break
 	elif _craft_open:
 		if _craft_close_rect.has_point(pointer):
 			_close_crafting()
@@ -935,6 +957,12 @@ func _craft_item(item_name: String) -> void:
 	if not Inventory.recipe_unlocked(item_name):
 		_show_toast("COMPLETE YOUR MISSION TO UNLOCK " + item_name.to_upper())
 		return
+	if item_name in preload("res://scripts/equipment_repairs.gd").PORTABLE:
+		if not Inventory.can_afford_item(item_name) or not Inventory.can_store_craft_result(item_name):_show_toast("NEED PARTS OR BAG SPACE FOR "+item_name.to_upper());return
+		_close_crafting();_bag_open=false;GameSettings.release_gameplay_input()
+		var actor:=_get_player()
+		if actor!=null:actor.get_node("EquipmentRepairs").start("assemble_electronics",null,item_name)
+		queue_redraw();return
 	if Inventory.craft_item(item_name):
 		var player := _get_player()
 		if player!=null:player.call("play_action","craft",0.7)
@@ -956,7 +984,7 @@ func _use_bag_selection(eat: bool) -> void:
 	var actor:=_get_player()
 	if actor==null:return
 	var item:=Inventory.slot_item(_inspect_slot)
-	if eat and not FOOD_RULES.edible(item) and item not in ["Medkit","Can","Bandage","Solar Torch","Binoculars","Walkie Talkie"]:return
+	if eat and not FOOD_RULES.edible(item) and item not in ["Medkit","Can","Tumbler","Bandage","Solar Torch","Binoculars","Walkie Talkie","WindGenerator","ElectricLamp"]:return
 	var equip_slot:=_inspect_slot
 	if equip_slot>=HOTBAR_COUNT:
 		equip_slot=clampi(int(actor.active_slot_index),0,HOTBAR_COUNT-1)
@@ -989,9 +1017,11 @@ func _handle_bar_input(event: InputEvent) -> void:
 				_consume_input()
 				return
 			if _bag_rect.has_point(touch.position) and not _in_build_mode():
+				_cancel_drag()
 				_press_bag = true
 				_bag_open = true
 				GameSettings.release_gameplay_input()
+				_compute_layout()
 				queue_redraw()
 				_consume_input()
 				return
@@ -1235,6 +1265,19 @@ func _draw_tab_caption(rect: Rect2, title: String, subtitle: String) -> void:
 	_draw_text(subtitle, Vector2(x, rect.position.y + rect.size.y * 0.76), int(clampf(rect.size.y * 0.19, 7.0, 9.0)), Color(0.70, 0.80, 0.74))
 
 
+func map_player_arrow() -> PackedVector2Array:
+	var actor:=_get_player()
+	var raft:=_get_raft()
+	var centre:=_map_center
+	var heading:=0.0
+	if actor!=null:
+		var forward:Vector3=-actor.global_basis.z
+		heading=atan2(forward.x,-forward.z)
+		if raft!=null:centre+=Vector2(actor.global_position.x-raft.global_position.x,actor.global_position.z-raft.global_position.z)/maxf(_map_range,1)*_map_plot_radius
+	var points:=PackedVector2Array()
+	for point in [Vector2(0,-12),Vector2(8,9),Vector2(0,4),Vector2(-8,9)]:points.append(centre+point.rotated(heading))
+	return points
+
 func _draw_map_overlay() -> void:
 	draw_rect(Rect2(Vector2.ZERO, _vp), Color(0.01, 0.035, 0.055, 0.86))
 	var panel := _map_panel_rect
@@ -1245,7 +1288,7 @@ func _draw_map_overlay() -> void:
 	_draw_text("THE FLOODED WORLD", Vector2(panel.position.x + panel.size.x * 0.07,
 			panel.position.y + panel.size.y * 0.075 + title_fs * 0.36), title_fs, Color(0.9, 0.95, 0.85, 0.98))
 	_draw_text("95% SUBMERGED   •   RARE ISLANDS & YOUR FLOATING CAMP", Vector2(panel.position.x + panel.size.x * 0.07,
-			panel.position.y + panel.size.y * 0.12 + title_fs * 0.48 + sub_fs), sub_fs,
+			panel.position.y + panel.size.y * 0.12 + sub_fs * 0.6), sub_fs,
 			Color(0.65, 0.81, 0.81, 0.9))
 	var close_center := _map_close_rect.get_center()
 	draw_circle(close_center, _map_close_rect.size.x * 0.5, Color(1, 1, 1, 0.08))
@@ -1257,7 +1300,7 @@ func _draw_map_overlay() -> void:
 		var radius := _map_plot_radius * float(ring) / 4.0
 		draw_arc(_map_center, radius, 0.0, TAU, 56, Color(0.55, 0.82, 0.78, 0.20), 1.0, true)
 		if ring < 4:
-			var range_label := str(int(roundf(MAP_RANGE_METERS * float(ring) / 4.0))) + " m"
+			var range_label := str(int(roundf(_map_range * float(ring) / 4.0))) + " m"
 			_draw_text(range_label, _map_center + Vector2(-_map_plot_radius * float(ring) / 4.0 - 3.0, -4.0),
 					int(clampf(sub_fs * 0.82, 10.0, 13.0)), Color(0.65, 0.84, 0.83, 0.55))
 	draw_line(_map_center - Vector2(_map_plot_radius, 0), _map_center + Vector2(_map_plot_radius, 0),
@@ -1268,6 +1311,7 @@ func _draw_map_overlay() -> void:
 			int(clampf(sub_fs, 11.0, 16.0)), Color(0.85, 0.94, 0.88, 0.85))
 
 	var selected_pos := Vector2.ZERO
+	var label_boxes:Array[Rect2]=[]
 	for marker in _map_markers:
 		var island := marker.get("node") as Node3D
 		if island == null or not is_instance_valid(island):
@@ -1302,7 +1346,9 @@ func _draw_map_overlay() -> void:
 			pos + Vector2(r * 0.65, -r * 0.55), pos + Vector2(r, r * 0.12),
 			pos + Vector2(r * 0.35, r * 0.8), pos + Vector2(-r * 0.55, r * 0.65),
 		])
-		draw_colored_polygon(island_shape, Color(0.68, 0.68, 0.39, 0.98) if chosen else Color(0.52, 0.68, 0.46, 0.95))
+		var biome := str(island.get_meta("biome","tropical"))
+		var tint:Color={"volcano":Color(.86,.40,.20),"winter":Color(.81,.92,1),"spring":Color(.61,.84,.40),"underwater":Color(.22,.68,.88)}.get(biome,Color(.52,.68,.46,.95))
+		draw_colored_polygon(island_shape,tint.lightened(.18) if chosen else tint)
 		var label_fs: int = int(clampf(sub_fs * 0.95, 11.0, 15.0))
 		var label_text := "%s  %dm" % [label, int(roundf(dist))]
 		var label_w: float = ThemeDB.fallback_font.get_string_size(label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, label_fs).x
@@ -1311,19 +1357,26 @@ func _draw_map_overlay() -> void:
 		var label_y := pos.y + r + label_fs * 1.3
 		if label_y > _map_area_rect.end.y - label_fs:
 			label_y = pos.y - r - label_fs * 0.55
+		var box:=Rect2(label_x,label_y-label_fs,label_w,label_fs+4)
+		for attempt in 12:
+			var overlaps:=false
+			for previous in label_boxes:overlaps=overlaps or previous.grow(3).intersects(box)
+			if not overlaps:break
+			label_y=pos.y+(1 if attempt%2==0 else -1)*(label_fs+5)*(floori(float(attempt)/2)+2)
+			label_y=clampf(label_y,_map_area_rect.position.y+label_fs+5,_map_area_rect.end.y-6)
+			box.position.y=label_y-label_fs
+		label_boxes.append(box)
+		if absf(label_y-pos.y)>38:draw_line(pos+Vector2(0,r),Vector2(clampf(pos.x,label_x,label_x+label_w),label_y-label_fs),Color(.4,.63,.65,.5),1,true)
 		_draw_text(label_text, Vector2(label_x, label_y), label_fs, Color(0.93, 0.96, 0.86, 0.95))
 
 	# Current raft marker stays at chart center as the world origin.
 	draw_circle(_map_center, 12.0, Color(0.26, 0.86, 0.95, 0.2))
 	draw_arc(_map_center, 10.0, 0.0, TAU, 28, Color(0.45, 0.92, 1.0, 0.96), 2.0, true)
-	var player_arrow := PackedVector2Array([
-		_map_center + Vector2(0.0, -8.0), _map_center + Vector2(6.0, 6.0),
-		_map_center + Vector2(0.0, 3.0), _map_center + Vector2(-6.0, 6.0),
-	])
+	var player_arrow := map_player_arrow()
 	draw_colored_polygon(player_arrow, Color(0.45, 0.92, 1.0, 0.96))
 
 	var detail_fs: int = int(clampf(sub_fs * 1.05, 12.0, 16.0))
-	var detail := "Select an island to plot a course."
+	var detail := "Your arrow shows where you face. Select a destination."
 	if _selected_island != null and is_instance_valid(_selected_island):
 		var selected_name: String = str(_selected_island.get_meta("map_label", _selected_island.name))
 		var distance_m: float = _get_raft().global_position.distance_to(_selected_island.global_position) if _get_raft() != null else 0.0
@@ -1399,6 +1452,10 @@ func _draw_crafting_overlay() -> void:
 	elif not ready:hint="Gather missing materials." if structure or not Inventory.can_afford_item(_craft_selected) else "Make room in your bag."
 	if _craft_selected in ["PlanterPot","PlanterBox"]:hint="Root crops · foundation or roof top."
 	elif _craft_selected=="TreePot":hint="Trees · foundation or roof top."
+	var tool_hints:={"Axe":"Chop trees faster. Equip and aim.","Pickaxe":"Mine marked island deposits.","Shovel":"Dig 3 Soil/Sand; harvest faster.","Paddle":"Row from your raft; uses stamina.","Anchor":"Stop the raft. Raise to sail again."}
+	if ready and tool_hints.has(_craft_selected):hint=tool_hints[_craft_selected]
+	if ready and _craft_selected=="Torch":hint="Hold it near a lit bonfire to light it."
+	if ready and _craft_selected=="Diving Tank":hint="3 min air · equip; refill with empty hands on land."
 	_draw_text(hint,Vector2(detail.position.x+12,_craft_confirm_rect.position.y-18),13,Color(0.78,0.82,0.75))
 	_draw_pause_button(_craft_confirm_rect,"CHOOSE BUILD SPOT" if structure else "CONFIRM CRAFT",ready)
 
@@ -1414,7 +1471,8 @@ func _draw_mission() -> void:
 	if progress == null:
 		return
 	var width := minf(380, _vp.x * 0.34)
-	var rect := Rect2(Vector2((_vp.x-width)*0.5, 12),Vector2(width,59))
+	var show_air:bool=progress.oxygen<99 or progress.stamina<80 or progress.diving_tank
+	var rect := Rect2(Vector2((_vp.x-width)*0.5, 12),Vector2(width,85 if show_air else 59))
 	_draw_rounded(rect, 9, Color(0.03,0.10,0.115,0.80))
 	_draw_text("LEVEL %d · %s" % [progress.level, progress.CHAPTERS[progress.level-1][0]], rect.position+Vector2(12,20),14,Color(0.86,0.77,0.57))
 	var font := ThemeDB.fallback_font
@@ -1423,8 +1481,11 @@ func _draw_mission() -> void:
 	while font.get_string_size(objective,HORIZONTAL_ALIGNMENT_LEFT,-1,fs).x > width-24 and fs > 9:
 		fs -= 1
 	_draw_text(objective,rect.position+Vector2(12,43),fs,Color(0.82,0.90,0.85))
-	if progress.oxygen < 99 or progress.stamina < 80:
-		_draw_text("OXYGEN %d%% · STAMINA %d%%" % [int(progress.oxygen),int(progress.stamina)],rect.position+Vector2(12,76),13,Color(0.78,0.89,0.92))
+	if show_air:
+		var air := " · AIR %d:%02d" % [floori(progress.air_tank_seconds/60.0),int(progress.air_tank_seconds)%60] if progress.diving_tank else ""
+		var warning:bool=progress.oxygen<=25 or (progress.diving_tank and progress.air_tank_seconds<=30)
+		var tint:=Color(1,.46,.27,.45 if int(Time.get_ticks_msec()/400)%2 else 1.0) if warning else Color(.78,.89,.92)
+		_draw_text("OXYGEN %d%% · STAMINA %d%%%s" % [int(progress.oxygen),int(progress.stamina),air],rect.position+Vector2(12,76),13,tint)
 
 func _draw_pause_overlay() -> void:
 	draw_rect(Rect2(Vector2.ZERO, _vp), Color(0.0, 0.0, 0.0, 0.55))
@@ -1767,8 +1828,8 @@ func _draw_bag_panel() -> void:
 
 	if _inspect_slot>=0 and not Inventory.slot_empty(_inspect_slot):
 		var inspected:=Inventory.slot_item(_inspect_slot)
-		var edible:=FOOD_RULES.edible(inspected) or inspected in ["Medkit","Can","Bandage","Solar Torch","Binoculars","Walkie Talkie"]
-		_draw_pause_button(_bag_use_rect,"USE" if inspected in ["Medkit","Can","Solar Torch","Binoculars","Walkie Talkie"] else ("USE / DRINK" if inspected=="Water" or inspected.ends_with("Water Can") else "USE / EAT"),edible)
+		var edible:=FOOD_RULES.edible(inspected) or inspected in ["Medkit","Can","Tumbler","Bandage","Solar Torch","Binoculars","Walkie Talkie","WindGenerator","ElectricLamp"]
+		_draw_pause_button(_bag_use_rect,"PLACE" if inspected in ["WindGenerator","ElectricLamp"] else "USE" if inspected in ["Medkit","Can","Tumbler","Solar Torch","Binoculars","Walkie Talkie"] else ("USE / DRINK" if FOOD_RULES.is_drink(inspected) else "USE / EAT"),edible)
 		_draw_pause_button(_bag_equip_rect,"HOLD TO PLANT" if PlantDB.crop_for_item(inspected)!="" else "HOLD ITEM",true)
 	else:
 		_draw_text("TAP AN ITEM FOR USE OPTIONS",Vector2(rect.position.x+24,rect.end.y-18),12,Color(0.8,0.84,0.75))

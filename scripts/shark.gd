@@ -6,7 +6,7 @@ const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 @export var max_health := 70.0
 @export var chase_speed := 4.1
 @export var patrol_speed := 1.7
-@export var detect_range := 42.0
+@export var detect_range := 85.0
 @export var bite_range := 2.6
 @export var bite_damage := 12.0
 
@@ -19,6 +19,11 @@ var _body_material: ShaderMaterial
 var _was_flashing := false
 var _tail_fin: Node3D
 var _hit_flash := 0.0
+var _encounter := 0.0
+var _encounter_cooldown := 240.0
+var _swimmer_time := 0.0
+var _rng := RandomNumberGenerator.new()
+static var _skin: ShaderMaterial
 
 const FISH_PICKUP_SCENE: PackedScene = preload("res://scenes/food_pickup.tscn")
 
@@ -28,11 +33,15 @@ func _ready() -> void:
 	health = max_health
 	_home = global_position
 	_ocean = get_tree().get_first_node_in_group("ocean") as Ocean
+	_rng.seed = 91831 + get_index() * 391
+	_encounter_cooldown = _rng.randf_range(210,360)
 	_build_visual()
 
 
 func _physics_process(delta: float) -> void:
 	_time += delta
+	_encounter = maxf(0.0, _encounter - delta)
+	_encounter_cooldown = maxf(0.0, _encounter_cooldown - delta)
 	_bite_timer = maxf(0.0, _bite_timer - delta)
 	_hit_flash = maxf(0.0, _hit_flash - delta)
 	var flashing := _hit_flash > 0.0
@@ -47,20 +56,34 @@ func _physics_process(delta: float) -> void:
 	var target := _home + Vector3(sin(_time * 0.17) * 14.0, 0.0, cos(_time * 0.13) * 14.0)
 	var speed := patrol_speed
 	if player != null and player.get("is_swimming") == true:
+		_swimmer_time += delta
 		var distance := global_position.distance_to(player.global_position)
-		if distance < detect_range:
+		if _encounter_cooldown <= 0 and _swimmer_time > 25 and distance < detect_range:
+			_encounter_cooldown = 30.0
+			var progress := player.get_node_or_null("SurvivalProgression")
+			if progress != null and int(progress.level) >= 6 and _rng.randf() < 0.08 and get_parent().has_method("allow_encounter") and get_parent().call("allow_encounter",self):
+				_encounter = 9.0
+				_encounter_cooldown = _rng.randf_range(210,360)
+		if _encounter > 0 and can_attack(player) and distance < detect_range:
 			target = player.global_position
 			speed = chase_speed
 			chasing = true
 			if distance <= bite_range and _bite_timer <= 0.0:
 				_bite_player(player)
-				_bite_timer = 1.8
+				_bite_timer = 6.0
+				_encounter = 0.0
+		elif distance < 42.0:
+			target = global_position + (global_position-player.global_position).normalized()*25.0
+	else:
+		_swimmer_time = 0.0
+		_encounter = 0.0
 
 	var flat_to_target := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
 	var direction := flat_to_target.normalized() if flat_to_target.length_squared() > 0.04 else Vector3.ZERO
 	var target_y := -0.45 + sin(_time * 1.4 + _home.x) * 0.22
 	if _ocean != null:
 		target_y = float(_ocean.get_height(global_position)) - 0.52 + sin(_time * 1.4 + _home.x) * 0.18
+	if chasing: target_y = player.global_position.y + 0.15
 	var vertical := clampf((target_y - global_position.y) * 1.8, -1.2, 1.2)
 	velocity = Vector3(direction.x * speed, vertical, direction.z * speed)
 	move_and_slide()
@@ -107,10 +130,15 @@ func _drop_fish() -> void:
 
 
 func _bite_player(player: Node3D) -> void:
+	if not can_attack(player): return
 	if player.has_method("take_shark_damage"):
 		player.call("take_shark_damage", bite_damage)
 	else:
 		Stats.change_health(-bite_damage)
+
+func can_attack(player: Node3D) -> bool:
+	var progress := player.get_node_or_null("SurvivalProgression")
+	return progress != null and int(progress.level) >= 6 and player.get("is_swimming") == true and _encounter > 0 and Stats.health > 0
 
 
 func _build_visual() -> void:
@@ -119,8 +147,12 @@ func _build_visual() -> void:
 		imported.name = "SharkVisual"
 		add_child(imported)
 		_tail_fin = imported.find_child("TailFin",true,false) as Node3D
+		if _skin==null:_skin=ShaderMaterial.new();_skin.shader=preload("res://shaders/shark_skin.gdshader")
 		for node in imported.find_children("*","MeshInstance3D",true,false):
 			(node as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var original:Material=node.get_active_material(0)
+			if original is BaseMaterial3D and (original as BaseMaterial3D).albedo_color.v<.07:continue
+			(node as MeshInstance3D).material_override = _skin
 		return
 	var visual := Node3D.new()
 	visual.name = "SharkVisual"

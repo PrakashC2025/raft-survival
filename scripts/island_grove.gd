@@ -41,7 +41,7 @@ func _plant() -> void:
 	var setup := island.get_node_or_null("IslandSetup")
 	if setup == null: setup = island.get_node_or_null("../IslandSetup")
 	for frame in range(600):
-		if setup != null and setup.get("setup_complete") == true: break
+		if (island.get("prepared")==true) or (setup != null and setup.get("setup_complete") == true): break
 		await get_tree().physics_frame
 		if not is_inside_tree(): return
 	for index in range(POINTS.size()):

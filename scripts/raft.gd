@@ -1,8 +1,8 @@
 extends AnimatableBody3D
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
 
-@export var float_height: float = 0.20
-@export var follow_speed: float = 3.0
+@export var float_height: float = 0.045
+@export var follow_speed: float = 9.0
 
 var ocean: Ocean = null
 var _markers: Array = []
@@ -25,6 +25,10 @@ var upgrade_tier := 0
 var _course_active := false
 var _course_target := Vector3.ZERO
 var _arrival_radius := 14.0
+var anchored := false
+var _paddle_velocity := Vector3.ZERO
+var _anchor_rig: Node3D
+var _anchor_tween: Tween
 
 
 func _ready() -> void:
@@ -41,6 +45,7 @@ func _ready() -> void:
 	add_child(starter)
 	var old_deck := get_node_or_null("MeshInstance3D") as MeshInstance3D
 	if old_deck != null: old_deck.hide()
+	set_anchored(bool(Inventory.loaded_meta.get("raft_anchored",false)),false)
 
 
 func _get_ocean() -> Ocean:
@@ -63,9 +68,11 @@ func get_navigation_speed() -> float:
 	return 0.0
 
 
-func set_course(target: Vector3) -> bool:
-	if get_navigation_speed() <= 0.0:
+func set_course(target: Vector3,arrival: float=14.0) -> bool:
+	if anchored or get_navigation_speed() <= 0.0:
 		return false
+	_arrival_radius=clampf(arrival,14,80)
+	_paddle_velocity=Vector3.ZERO
 	_course_target = Vector3(target.x, global_position.y, target.z)
 	_course_active = Vector2(_course_target.x - global_position.x,
 			_course_target.z - global_position.z).length() > _arrival_radius + 1.0
@@ -120,7 +127,7 @@ func _physics_process(delta: float) -> void:
 	delta=_pending_motion_delta
 	_pending_motion_delta=0.0
 	var before_move := global_position
-	var next_position := _course_position(delta)
+	var next_position := navigation_position(delta)
 	var horizontal_delta := next_position-before_move
 	if horizontal_delta.length_squared() > 0.000001:
 		_carry_passenger(before_move, horizontal_delta)
@@ -137,12 +144,14 @@ func _physics_process(delta: float) -> void:
 	# clearance without hundreds of separate Node calls each physics tick.
 	var crest := _deck_crest(oc,next_position,next_basis)
 	var time := float(oc.get("_time"))
-	var bob := sin(time*0.84)*0.012+sin(time*1.19+1.3)*0.008
-	var target_y := crest+maxf(float_height,0.20)+bob
+	var bob := sin(time*0.84)*0.003+sin(time*1.19+1.3)*0.002
+	var target_y := crest+clampf(float_height,0.035,0.07)+bob
 	var smooth_y := lerpf(global_position.y,target_y,1.0-exp(-follow_speed*delta))
 	# Safe freeboard takes precedence over smoothing on a rising crest. Lower
 	# gently after the swell; a large foundation must never follow its average.
-	next_position.y=maxf(smooth_y,crest+0.12)
+	# Rounded logs extend 14 cm below the deck plane. A 4.5 cm freeboard
+	# keeps their lower part submerged instead of lifting them clear of water.
+	next_position.y=clampf(smooth_y,crest+0.035,crest+0.085)
 	# AnimatableBody sync_to_physics queues a transform and restores the current
 	# one until the physics tick. Separate setters overwrite the queued tilt.
 	global_transform=Transform3D(next_basis,next_position)
@@ -212,7 +221,7 @@ func _refresh_deck_samples() -> void:
 
 
 func _course_position(delta: float) -> Vector3:
-	if not _course_active:
+	if anchored or not _course_active:
 		return global_position
 	var to_target := Vector2(_course_target.x - global_position.x,
 			_course_target.z - global_position.z)
@@ -225,6 +234,52 @@ func _course_position(delta: float) -> Vector3:
 	if distance - travel <= _arrival_radius:
 		_course_active = false
 	return global_position+Vector3(direction.x*travel,0,direction.y*travel)
+
+func paddle_stroke(direction: Vector3) -> bool:
+	if anchored or not direction.is_finite():return false
+	direction.y=0
+	if direction.length_squared()<.01:return false
+	clear_course()
+	_paddle_velocity=(_paddle_velocity+direction.normalized()*1.35).limit_length(2.3)
+	return true
+
+func navigation_position(delta: float) -> Vector3:
+	if anchored:return global_position
+	var next := _course_position(delta)
+	if not _course_active and _paddle_velocity.length_squared()>.0001:
+		var drag := exp(-.9*delta)
+		next+=_paddle_velocity*(1.0-drag)/.9
+		_paddle_velocity*=drag
+	# New large landmasses must stop a rowed hull at the shoreline.
+	for island in get_tree().get_nodes_in_group("biome_island"):
+		var local: Vector3=island.to_local(next)
+		if Vector2(local.x,local.z).length()>50:continue
+		if island.call("height_at",Vector2(local.x,local.z))> -1.6:
+			_paddle_velocity=Vector3.ZERO;clear_course();return global_position
+	return next
+
+func set_anchored(enabled: bool,animate: bool=true) -> void:
+	anchored=enabled
+	if enabled:clear_course();_paddle_velocity=Vector3.ZERO
+	if _anchor_rig==null and enabled:
+		_anchor_rig=Node3D.new();_anchor_rig.name="AnchorRig";_anchor_rig.position=Vector3(.85,0,.7);add_child(_anchor_rig)
+		var anchor:=preload("res://scripts/survival_tool_visual.gd").create("Anchor");anchor.name="IronAnchor";_anchor_rig.add_child(anchor)
+		var rope_mat:=OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.CLOTH,Color(.35,.25,.13),.98)
+		var rope:=preload("res://scripts/machine_visual.gd").cylinder(_anchor_rig,Vector3(0,-2,0),.012,4,rope_mat);rope.name="AnchorRope"
+	if _anchor_rig==null:return
+	if _anchor_tween!=null and _anchor_tween.is_valid():_anchor_tween.kill()
+	var iron:=_anchor_rig.get_node("IronAnchor") as Node3D
+	var rope:=_anchor_rig.get_node("AnchorRope") as Node3D
+	rope.show()
+	_anchor_rig.show()
+	if animate:
+		_anchor_tween=create_tween().set_parallel(true)
+		_anchor_tween.tween_property(iron,"position:y",-4.0 if enabled else .02,.8)
+		_anchor_tween.tween_property(rope,"scale:y",1.0 if enabled else .01,.8)
+		_anchor_tween.tween_property(rope,"position:y",-2.0 if enabled else .0,.8)
+		if not enabled:_anchor_tween.chain().tween_callback(_anchor_rig.hide)
+	else:
+		iron.position.y=-4 if enabled else .02;rope.visible=enabled;_anchor_rig.visible=enabled
 
 
 func _carry_passenger(raft_before_move: Vector3, movement: Vector3) -> void:

@@ -7,6 +7,27 @@ static var _textured_leaves: Dictionary = {}
 static var _bark: ShaderMaterial
 static var _grass_tuft: ArrayMesh
 static var _fronds: ArrayMesh
+static var _crop_leaves: Dictionary = {}
+
+static func apply_crop(root: Node3D) -> void:
+	# Preserve the owner's leaf textures and normals. Diffuse transmission gives
+	# thin leaves a softer underside without expensive subsurface effects.
+	for candidate in root.find_children("*","MeshInstance3D",true,false):
+		var part := candidate as MeshInstance3D
+		if part.mesh == null: continue
+		for surface in part.mesh.get_surface_count():
+			var original := part.get_active_material(surface) as StandardMaterial3D
+			if original == null: continue
+			var label := (str(part.name)+original.resource_name).to_lower()
+			var tint := original.albedo_color
+			if not (label.contains("leaf") or label.contains("leav") or tint.g>tint.r*1.2):continue
+			if not _crop_leaves.has(original):
+				var leaf := original.duplicate() as StandardMaterial3D
+				leaf.roughness=0.83;leaf.metallic=0.0;leaf.metallic_specular=0.18
+				leaf.cull_mode=BaseMaterial3D.CULL_DISABLED
+				leaf.backlight_enabled=true;leaf.backlight=Color(0.10,0.16,0.035)
+				_crop_leaves[original]=leaf
+			part.set_surface_override_material(surface,_crop_leaves[original])
 
 static func palm_fronds() -> ArrayMesh:
 	if _fronds != null:

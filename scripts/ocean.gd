@@ -21,7 +21,7 @@ class_name Ocean
 #   night (0.018, 0.07, 0.17)   -> blue navy, alive under the moon
 @export var day_color := Color(0.012, 0.095, 0.155)
 @export var twilight_color := Color(0.04, 0.11, 0.22)
-@export var night_color := Color(0.012, 0.05, 0.12)
+@export var night_color := Color(0.024, 0.072, 0.12)
 @export var deep_color := Color(0.006, 0.05, 0.11)
 @export var horizon_color := Color(0.045, 0.16, 0.23)
 @export var crest_color := Color(0.065, 0.22, 0.27)
@@ -33,13 +33,16 @@ class_name Ocean
 @export var dev_time_keys := false
 
 # --- Underwater veil (display-space 2D colors) ---
-@export_range(0.0, 1.2) var under_alpha_max := 0.78
+@export_range(0.0, 1.2) var under_alpha_max := 0.34
 @export var under_top_color := Color(0.05, 0.25, 0.40)
 @export var under_bottom_color := Color(0.008, 0.045, 0.12)
 
 var _under_layer: CanvasLayer = null
 var _under_rect: ColorRect = null
 var _under_mat: ShaderMaterial = null
+var _diving_background := false
+var _surface_background := Environment.BG_SKY
+var _surface_background_color := Color.BLACK
 
 @export var wave_height := 0.68
 @export var wave_speed := 0.52
@@ -48,7 +51,7 @@ var _time := 0.0
 var _sky3d: Node = null
 var _sky: Node = null
 var _mat: ShaderMaterial = null
-var _shore_zones := PackedVector4Array([Vector4.ZERO, Vector4.ZERO, Vector4.ZERO, Vector4.ZERO])
+var _shore_zones := PackedVector4Array([Vector4.ZERO, Vector4.ZERO, Vector4.ZERO, Vector4.ZERO,Vector4.ZERO,Vector4.ZERO,Vector4.ZERO])
 static var _wave_normals: NoiseTexture2D
 var _raft_ref: Node3D
 var _deck_texture: ImageTexture
@@ -57,7 +60,7 @@ var _deck_refresh := 0.0
 var _deck_signature := -1
 
 func register_island_shore(island: Node3D, height_texture: Texture2D, extent: float) -> void:
-	var index: int = ["Island","ReefIsle","DriftwoodCay","FarCove"].find(str(island.name))
+	var index: int = ["Island","ReefIsle","DriftwoodCay","FarCove","VolcanoIsle","WinterIsle","SpringIsle"].find(str(island.name))
 	if index < 0 or _mat == null: return
 	_shore_zones[index] = Vector4(island.global_position.x, island.global_position.z, extent, extent)
 	_mat.set_shader_parameter("island_shores", _shore_zones)
@@ -198,10 +201,16 @@ func _create_far_water() -> void:
 	builder.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for edge in range(4):
 		var next := (edge + 1) % 4
-		var points: Array[Vector3] = [corners[edge], outer[edge], outer[next], corners[edge], outer[next], corners[next]]
-		for point in points:
-			builder.set_normal(Vector3.UP)
-			builder.add_vertex(point)
+		# Match every near-patch edge vertex. A four-corner strip left slivers
+		# between its straight edge and the near mesh's animated wave heights.
+		for segment in 128:
+			var t0:=(_patch_axis(float(segment-64))+400.0)/800.0
+			var t1:=(_patch_axis(float(segment+1-64))+400.0)/800.0
+			var a:=corners[edge].lerp(corners[next],t0);var b:=corners[edge].lerp(corners[next],t1)
+			var c:=outer[edge].lerp(outer[next],t0);var d:=outer[edge].lerp(outer[next],t1)
+			for point in [a,c,d,a,d,b]:
+				builder.set_normal(Vector3.UP)
+				builder.add_vertex(point)
 	var far_water := MeshInstance3D.new()
 	far_water.name = "FarWater"
 	far_water.mesh = builder.commit()
@@ -259,6 +268,14 @@ func _update_underwater() -> void:
 		return
 	var water_level := get_height(cam.global_position)
 	var depth := water_level - cam.global_position.y
+	var diving:=depth>.3
+	if _env!=null and diving!=_diving_background:
+		_diving_background=diving
+		if diving:
+			_surface_background=_env.background_mode;_surface_background_color=_env.background_color
+			_env.background_mode=Environment.BG_COLOR;_env.background_color=Color(.012,.055,.085)
+		else:
+			_env.background_mode=_surface_background;_env.background_color=_surface_background_color
 	var amt := clampf(depth / 1.4, 0.0, 1.0)
 	amt = amt * amt * (3.0 - 2.0 * amt)  # smoothstep-like ramp
 	if amt <= 0.001:
@@ -278,7 +295,7 @@ func _ensure_underwater() -> void:
 		return
 	_under_layer = CanvasLayer.new()
 	_under_layer.name = "_OceanUnderwaterVei"
-	_under_layer.layer = 90
+	_under_layer.layer = 0 # Water tint stays behind readable health/air/touch HUD.
 	_under_layer.visible = false
 	add_child(_under_layer)
 	_under_mat = ShaderMaterial.new()
@@ -424,10 +441,10 @@ static func _ocean_patch() -> ArrayMesh:
 	var indices := PackedInt32Array()
 	for z in range(129):
 		var tz := float(z-64)
-		var pz := tz * (80.0/48.0) if absf(tz)<=48 else signf(tz)*(80+(absf(tz)-48)*20)
+		var pz := _patch_axis(tz)
 		for x in range(129):
 			var tx := float(x-64)
-			var px := tx * (80.0/48.0) if absf(tx)<=48 else signf(tx)*(80+(absf(tx)-48)*20)
+			var px := _patch_axis(tx)
 			vertices.append(Vector3(px,0,pz))
 			normals.append(Vector3.UP)
 			uvs.append(Vector2(px,pz)/800.0+Vector2.ONE*0.5)
@@ -444,3 +461,6 @@ static func _ocean_patch() -> ArrayMesh:
 	var result := ArrayMesh.new()
 	result.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,arrays)
 	return result
+
+static func _patch_axis(value: float) -> float:
+	return value*(80.0/48.0) if absf(value)<=48 else signf(value)*(80+(absf(value)-48)*20)

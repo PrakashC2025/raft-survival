@@ -3,11 +3,21 @@
 [ext_resource type="Script" path="res://scripts/build_socket.gd" id="2"]
 [sub_resource type="BoxShape3D" id="shape"]
 size = Vector3(0.7, 0.7, 0.65)
+[sub_resource type="BoxShape3D" id="mast"]
+size = Vector3(0.13, 1.9, 0.13)
+[sub_resource type="SphereShape3D" id="rotor"]
+radius = 0.79
 [node name="WindGenerator" type="StaticBody3D"]
 script = ExtResource("1")
 machine_type = "WindGenerator"
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]
 shape = SubResource("shape")
+[node name="CollisionMast" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.7, 0)
+shape = SubResource("mast")
+[node name="CollisionRotor" type="CollisionShape3D" parent="."]
+position = Vector3(0, 1.7, 0)
+shape = SubResource("rotor")
 [node name="BuildSockets" type="Node3D" parent="."]
 [node name="Socket_Base" type="Marker3D" parent="BuildSockets"]
 position = Vector3(0, -0.35, 0)

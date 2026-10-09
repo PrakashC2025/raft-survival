@@ -117,7 +117,7 @@ func _run() -> void:
 	# Cancelling must follow raft movement, and a save during dragging records its committed location.
 	var original: Transform3D = player._edit_original_local_transform
 	var saved: Array = player.call("_serialize_built_pieces")
-	check(saved[0].x[9] == original.origin.x and saved[0].x[11] == original.origin.z,"Saving during edit keeps the original committed foundation")
+	check(saved.any(func(entry: Dictionary):return entry.t=="Foundation" and entry.x[9]==original.origin.x and entry.x[11]==original.origin.z),"Saving during edit keeps the original committed foundation alongside the starter extension")
 	raft.position.x += 1.0
 	await frames()
 	player.call("_cancel_edit")
@@ -348,7 +348,7 @@ func _soil_feedback() -> void:
 	check(inv.total("Soil")==1990,"Testing Soil does not refill after spending")
 	inv.save_game({},"quick");inv.load_game("quick")
 	check(inv.testing_soil_granted and inv.total("Soil")==1990,"Continue preserves the one-time Soil grant")
-	inv.remove("Soil",1990);inv.testing_soil_granted=false
+	inv.remove("Soil",1990);inv.testing_soil_granted=false;inv.testing_soil_revision=0
 	var wood_before: int=inv.total("Wood")
 	inv.grant_testing_resources()
 	check(inv.total("Soil")==2000 and inv.total("Wood")==wood_before,"Older saves gain Soil without refilling spent Wood")
@@ -411,6 +411,15 @@ func _debris_visuals() -> void:
 		debris.freeze=true;debris.set_physics_process(false);debris.call("_set_visual_alpha",1.0)
 		var visual: Node3D=debris.get("_model_visual")
 		check(is_instance_valid(visual) and visual.find_children("*","MeshInstance3D",true,false).size()>0,"Floating "+item+" has a recognizable detailed model")
+		if item in ["Wood","Barrel"]:
+			var body:=visual.get_child(0) as MeshInstance3D
+			var arrays:=body.mesh.surface_get_arrays(0)
+			var normal:Vector3=(arrays[Mesh.ARRAY_NORMAL] as PackedVector3Array)[260]
+			print("SALVAGE NORMAL ",item," ",normal)
+			check(normal.x>0.5,"Smooth "+item+" surface normals face outward")
+		if item in ["Wood","Barrel","Plastic","Rope","Metal","Soil","Stone"]:
+			var body:=visual.get_child(0) as MeshInstance3D
+			check(body.material_override==null and body.get_active_material(0).shader==preload("res://shaders/debris_weathered.gdshader"),item+" visibly uses its weathered surface")
 		samples.append(debris)
 	if OS.get_cmdline_user_args().has("--preview"):
 		var viewport:=SubViewport.new();viewport.size=Vector2i(256,176);viewport.transparent_bg=true;viewport.own_world_3d=true

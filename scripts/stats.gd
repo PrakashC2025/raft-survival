@@ -6,8 +6,9 @@ signal stat_delta(stat_name: String, amount: float)
 
 const MAX_VALUE := 100.0
 
-@export_range(0.0, 1.0, 0.01) var hunger_drain_rate: float = 0.10
-@export_range(0.0, 1.0, 0.01) var thirst_drain_rate: float = 0.16
+@export_range(0.0, 1.0, 0.01) var hunger_drain_rate: float = 0.03
+@export_range(0.0, 1.0, 0.01) var thirst_drain_rate: float = 0.05
+const DEPRIVATION_DAMAGE_PER_SECOND := 0.20
 @export var enabled := true
 
 var health: float = MAX_VALUE
@@ -18,7 +19,7 @@ var damage_revision := 0
 
 
 func _process(delta: float) -> void:
-	if not enabled or _dead:
+	if not enabled or _dead or get_tree().paused:
 		return
 	# The autoload also exists in the title screen; only consume supplies while
 	# the actual survival world is active.
@@ -28,21 +29,22 @@ func _process(delta: float) -> void:
 	var previous_hunger := hunger
 	var previous_thirst := thirst
 	var player:=get_tree().get_first_node_in_group("player") as CharacterBody3D
+	var hud := player.get_node_or_null("CanvasLayer/SurvivalHUD") if player != null else null
+	# Reading inventory and survival menus should not spend food or water.
+	if hud != null and hud.call("gameplay_input_blocked"):
+		return
 	var effort:=1.0
 	if player!=null:
 		if player.get("is_swimming")==true:effort=2.0
 		elif Vector2(player.velocity.x,player.velocity.z).length()>3.4:effort=1.6
 	hunger = clampf(hunger - hunger_drain_rate * delta * effort, 0.0, MAX_VALUE)
 	thirst = clampf(thirst - thirst_drain_rate * delta * effort, 0.0, MAX_VALUE)
-	var previous_health:=health
-	health=clampf(health-.003*delta*effort,0,MAX_VALUE)
-	if int(previous_health)!=int(health):stat_changed.emit("health",health)
 	if int(previous_hunger) != int(hunger):
 		stat_changed.emit("hunger", hunger)
 	if int(previous_thirst) != int(thirst):
 		stat_changed.emit("thirst", thirst)
 	if hunger <= 0.0 or thirst <= 0.0:
-		change_health(-1.5 * delta)
+		change_health(-DEPRIVATION_DAMAGE_PER_SECOND * delta)
 	if health<=0.0 and not _dead:
 		_dead=true
 		player_died.emit()

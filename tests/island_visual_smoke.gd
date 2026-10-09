@@ -72,7 +72,7 @@ func _run() -> void:
 	var ocean := get_first_node_in_group("ocean")
 	var water := (ocean as MeshInstance3D).get_active_material(0) as ShaderMaterial
 	var zones: PackedVector4Array = water.get_shader_parameter("island_shores")
-	check(zones.size() == 4 and zones[0].z > 0 and zones[3].z > 0,"All four terrain shore masks reach the actual ocean material")
+	check(zones.size() == 6 and zones[0].z > 0 and zones[3].z > 0,"Original four shore masks retain their slots beside two new biomes")
 	for index in range(4):
 		var texture: Texture2D = water.get_shader_parameter("shore_height_" + str(index))
 		check(texture != null and texture.get_width() == 32 and texture.get_height() == 32,"Shore " + str(index) + " uses a compact 32-square height texture")

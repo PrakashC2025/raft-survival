@@ -58,6 +58,8 @@ func interact_survival(player: Node) -> void:
 	if _preview: return
 	var progress := player.get_node("SurvivalProgression")
 	var selected := str(player.get("active_item"))
+	if selected=="Stone":
+		player.get_node("FireActions").start("snuff_fire" if burning else "ignite_fire",self);return
 	if selected == "Wood":
 		player.call("_hud_toast","TAKE THE TORCH TO A BONFIRE OR COOKING SETUP TO RELIGHT")
 	else:
@@ -69,6 +71,7 @@ func interact_survival(player: Node) -> void:
 			player.call("_hud_toast","BAG FULL · TORCH STAYS ON WALL")
 			return
 		Inventory.add(item,1)
+		player.call("play_action","grab",.8,global_position,item)
 		if burning: progress.set("torch_fuel",fuel);progress.set("torch_end_time",end_time)
 		player.get_node("SurvivalServices").equip_owned(item)
 		fuel = 0.0
@@ -81,6 +84,18 @@ func interact_survival(player: Node) -> void:
 
 func save_survival_state() -> Dictionary:
 	return {"fuel":fuel,"burning":burning,"end_time":end_time}
+
+func exposed_to_rain() -> bool:
+	var rain:=get_tree().get_first_node_in_group("rain_system")
+	if rain==null or not rain.call("is_raining"):return false
+	var at:=to_global(Vector3(0,.58,0))
+	return get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(at,at+Vector3.UP*8,1,[get_rid()])).is_empty()
+func extinguish() -> void:
+	burning=false;_update_flame()
+func interaction_caption() -> String:
+	var player:=get_tree().get_first_node_in_group("player")
+	if player!=null and player.active_item=="Stone":return "PUT OUT FIRE" if burning else "LIGHT FIRE"
+	return "TAKE TORCH"
 
 func restore_survival_state(data: Dictionary) -> void:
 	fuel = clampf(float(data.get("fuel",0.0)),0.0,86400.0)

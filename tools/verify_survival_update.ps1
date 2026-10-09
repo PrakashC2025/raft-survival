@@ -3,7 +3,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 & (Join-Path $PSScriptRoot 'verify_source.ps1') -GodotPath $GodotPath -GodotUserArgs @('--mobile-effects') -Tests @(
-    'survival_services_smoke.gd', 'portable_electronics_smoke.gd', 'island_wild_plants_smoke.gd',
+    'survival_services_smoke.gd', 'food_action_smoke.gd', 'portable_electronics_smoke.gd', 'island_wild_plants_smoke.gd',
     'action_farming_smoke.gd', 'mobile_smoke.gd', 'survival_loop_smoke.gd', 'advanced_survival_smoke.gd',
     'crop_torch_smoke.gd', 'shelter_farming_ui_smoke.gd', 'planter_onion_smoke.gd', 'island_visual_smoke.gd',
     'environment_smoke.gd', 'testing_resources_smoke.gd', 'mobile_clear_air_smoke.gd',

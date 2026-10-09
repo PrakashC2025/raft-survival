@@ -76,7 +76,7 @@ func _run() -> void:
 	check(inv.call("total","Clean Water Can")==1 and filtering.job.is_empty(),"Filter completion awards once even if requested twice")
 	hold("Clean Water Can");service.use_item("Clean Water Can")
 	check(stats.thirst==100 and inv.call("total","Can")==2,"Clean can fills thirst and returns the reusable container")
-	var fire:=station("cooking_setup",Vector3(-1,0,0));service.open_cooking(fire)
+	var fire:=station("cooking_setup",Vector3(-1,0,0));fire.burning=true;service.open_cooking(fire)
 	check(service.menu_open and service.ui._rows.size()==RULES.RECIPES.size(),"Cooking Setup lists every dish from the single configuration")
 	player.get_node("CanvasLayer/SurvivalHUD").call("handle_back")
 	check(not service.menu_open and not paused,"Android Back closes cooking without opening pause")
@@ -132,8 +132,10 @@ func _run() -> void:
 	hold("Torch");player.aim_valid=false;progress.use_torch()
 	check(progress.torch_fuel==0 and not progress._torch_light.visible,"Unlit torch cannot light without aiming at a fire")
 	var sky:=current_scene.get_node("Sky3D");sky.set_process(false);sky.get_node("TimeOfDay").set_process(false);sky.current_time=23.0;sky.get_node("TimeOfDay").current_time=23.0
+	# The completed meal now puts out its fire. Relight before the torch test.
+	fire.burning=true;fire.fuel=100;fire.call("_process",0.0)
 	player.aim_valid=true;player.aim_collider=fire;player.aim_distance=1.0;player.aim_point=fire.global_position
-	progress.use_torch();progress._process(.01)
+	progress.use_torch();player.get_node("FireActions")._process(.93);player.get_node("FireActions")._process(.40);progress._process(.01)
 	check(inv.call("has","Burning Torch",1) and player.active_item=="Burning Torch" and progress._torch_light.visible,"Aimed Cooking Setup lights and equips a Burning Torch with real light")
 	put("Torch");hold("Torch");progress._process(.01)
 	check(not progress._torch_light.visible and player.interaction_caption()=="LIGHT TORCH","An unlit torch stays dark while another Burning Torch is in the bag")
@@ -150,7 +152,7 @@ func _run() -> void:
 	stats.call("load_state",{"health":80,"hunger":80,"thirst":80});player.is_swimming=true;stats.call("_process",10)
 	check(is_equal_approx(80-stats.hunger,idle*2),"Swimming uses the higher survival drain")
 	stats.call("load_state",{"health":80,"hunger":0,"thirst":0});stats.call("_process",1)
-	check(stats.health<79,"Starvation and dehydration damage health over time")
+	check(is_equal_approx(stats.health,79.8),"Empty hunger/water cause the slower 0.2 health damage per second")
 	stats.enabled=false;player.is_swimming=false;player.velocity=Vector3.ZERO
 	stats.call("load_state",{"health":{},"hunger":NAN,"thirst":9999})
 	check(stats.health==100 and stats.hunger==100 and stats.thirst==100,"Stats reject invalid types and NaN and clamp valid values")

@@ -5,6 +5,7 @@ render_mode diffuse_burley;
 uniform vec4 base_color : source_color = vec4(0.5, 0.4, 0.3, 1.0);
 uniform float surface_roughness = 0.8;
 uniform float surface_metallic = 0.0;
+uniform float surface_wear = 0.0;
 uniform int surface_kind = 0; // wood, metal, stone, cloth, plastic, skin, food, soil
 varying vec3 local_position;
 
@@ -57,6 +58,15 @@ void fragment() {
         relief *= 0.12;
     } else {
         color *= 0.82 + broad * 0.22 + fine * 0.07;
+    }
+    if (surface_wear > 0.0) {
+        float damage = smoothstep(0.48,0.74,noise(p*38.0+vec3(6.1)));
+        float scratches = (1.0-smoothstep(0.02,0.055,abs(sin(p.x*220.0+p.y*37.0))))*smoothstep(0.48,0.7,noise(p*60.0));
+        scratches *= 1.0-smoothstep(0.5,1.5,fwidth(p.x*220.0+p.y*37.0));
+        vec3 aged = surface_kind == 1 ? vec3(0.26,0.105,0.032) : vec3(0.27,0.26,0.21);
+        color = mix(color,aged,damage*surface_wear*0.62);
+        color = mix(color,color*1.18+vec3(0.02),scratches*surface_wear*0.30);
+        rough = max(rough,0.8*surface_wear); metal *= 1.0-damage*surface_wear*0.6;
     }
     ALBEDO = color;
     ROUGHNESS = clamp(rough, 0.05, 1.0);

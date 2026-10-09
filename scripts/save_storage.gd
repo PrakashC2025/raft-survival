@@ -42,6 +42,23 @@ static func _valid_tree(value: Variant,depth: int=0) -> bool:
 
 static func _valid_save(data: Dictionary) -> bool:
 	if not _valid_tree(data) or not data.get("slots") is Array:return false
+	var air:Variant=data.get("progression",{}).get("air_tank_seconds",0)
+	if not _number(air) or float(air)<0 or float(air)>180:return false
+	if not data.get("underwater_creatures",{}) is Dictionary:return false
+	for creature in data.get("underwater_creatures",{}).values():
+		if not creature is Dictionary:return false
+		if not _number(creature.get("health",0)) or not _number(creature.get("respawn",0)):return false
+		if float(creature.get("health",0))<0 or float(creature.get("health",0))>30 or float(creature.get("respawn",0))<0 or float(creature.get("respawn",0))>600:return false
+	if data.has("raft_anchored") and not data.raft_anchored is bool:return false
+	if data.has("winter_exposure") and not _number(data.winter_exposure):return false
+	if not data.get("biome_resources",{}) is Dictionary:return false
+	for hits in data.get("biome_resources",{}).values():
+		if not _number(hits) or float(hits)<0 or float(hits)>4:return false
+	if not data.get("biome_tree_growth",{}) is Dictionary:return false
+	for tree in data.get("biome_tree_growth",{}).values():
+		if not tree is Dictionary:return false
+		if not _number(tree.get("wait",0)) or not _number(tree.get("growth",1)):return false
+		if float(tree.get("wait",0))<0 or float(tree.get("wait",0))>360 or float(tree.get("growth",1))<0 or float(tree.get("growth",1))>1:return false
 	if data.get("version",1)!=1 or data.slots.size()>30:return false
 	for field in ["calendar_year","calendar_month","calendar_day","game_day"]:
 		var maximum:=9999 if field=="calendar_year" else (12 if field=="calendar_month" else (31 if field=="calendar_day" else 9999999))

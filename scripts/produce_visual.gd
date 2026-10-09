@@ -37,7 +37,10 @@ static func _round(tomato: bool) -> ArrayMesh:
 			var ripple:=1.0+0.045*cos(angle*7.0)*radius if tomato else 1.0+0.055*sin(angle*3.0+latitude*4.0)+0.035*cos(angle*5.0-latitude*3.0)
 			var size:=Vector3(0.084,0.067,0.084) if tomato else Vector3(0.08,0.055,0.115)
 			st.set_uv(Vector2(u,v))
-			st.add_vertex(Vector3(cos(angle)*radius*ripple,cos(latitude),sin(angle)*radius*ripple)*size)
+			var y := cos(latitude)
+			if tomato: y *= 1.0-0.12*pow(absf(y),12.0)
+			else: y += sin(angle*2.0+latitude)*radius*0.055
+			st.add_vertex(Vector3(cos(angle)*radius*ripple,y,sin(angle)*radius*ripple)*size)
 	for ring in rings:
 		for side in sides:
 			var a:=ring*(sides+1)+side;var b:=a+sides+1

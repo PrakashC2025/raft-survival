@@ -28,8 +28,10 @@ func _process_modification() -> void:
 			var thumb := rig.find_bone("Thumb2."+side)
 			if thumb>=0:_thumb_bones.append(thumb)
 	var curl := 0.8 if holding else 0.0
+	if acting and str(action.get("kind")) in ["eat","drink","cook"]:curl=.8
 	if acting and str(action.get("kind")) in ["grab","pick","harvest","plant"]:
-		curl=0.85*smoothstep(0.18,0.65,float(action.get("elapsed"))/float(action.get("duration")))
+		var progress:=float(action.get("elapsed"))/float(action.get("duration"))
+		curl=.85*smoothstep(.28,.42,progress)*(1.0-smoothstep(.92,1.0,progress))
 	if acting and _spine>=0:
 		var torso := rig.get_bone_pose_rotation(_spine)
 		rig.set_bone_pose_rotation(_spine,Quaternion.from_euler(pose.torso)*torso)

@@ -40,6 +40,8 @@
 [ext_resource type="Script" path="res://scripts/fish_school.gd" id="40_fish"]
 
 [ext_resource type="Script" path="res://scripts/ocean_atmosphere.gd" id="atmosphere"]
+[ext_resource type="Script" path="res://scripts/biome_island.gd" id="biome"]
+[ext_resource type="Script" path="res://scripts/underwater_world.gd" id="undersea"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
 render_priority = 0
@@ -272,7 +274,7 @@ margin = 0.1
 current = true
 fov = 75.0
 near = 0.1
-far = 1000.0
+far = 4000.0
 
 [node name="HandPivot" type="Node3D" parent="Player/CamPivot/SpringArm3D/Camera3D" unique_id=658310106]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.18, -0.3, -0.55)
@@ -431,8 +433,8 @@ pickup_seed = 88402
 
 [node name="SharkSpawner" type="Node3D" parent="."]
 script = ExtResource("32_sharks")
-shark_count = 3
-patrol_radius = 32.0
+shark_count = 2
+patrol_radius = 110.0
 
 [node name="Sky3D" type="WorldEnvironment" parent="." unique_id=9361917]
 environment = SubResource("Environment_kq58d")
@@ -480,13 +482,15 @@ cumulus_coverage = 0.48
 cumulus_noise_freq = 2.15
 cumulus_thickness = 0.019
 cumulus_size = 0.7
-cirrus_coverage = 0.28
+cirrus_coverage = 0.37
+cirrus_thickness = 1.1
+cirrus_intensity = 1.15
 moon_azimuth = 3.4208453
 moon_altitude = 0.17772332
-moon_size = 0.11
+moon_size = 0.03
 moon_light_color = Color(0.75, 0.86, 1, 1)
 moon_light_energy = 0.3
-atm_night_tint = Color(0.26, 0.31, 0.45, 1)
+atm_night_tint = Color(0.10, 0.16, 0.28, 1)
 atm_moon_mie_intensity = 2.0
 fog_visible = false
 fog_density = 0.00045
@@ -495,10 +499,16 @@ wind_direction = 2.35619451204804
 [node name="TimeOfDay" type="Node" parent="Sky3D" unique_id=1075981311]
 script = ExtResource("18_a6jrf")
 dome_path = NodePath("../SkyDome")
-minutes_per_day = 24.0
+minutes_per_day = 20.0
+update_interval = 0.1
+smooth_celestial_motion = true
 current_time = 9.5
 day = 5
-celestials_calculations = 0
+celestials_calculations = 1
+compute_moon_coords = false
+latitude = 0.13962634
+longitude = 1.43989663
+utc = 5.5
 
 [node name="MobilePerformance" type="Node" parent="."]
 script = ExtResource("27_performance")
@@ -511,3 +521,21 @@ script = ExtResource("30_ocean_audio")
 
 [node name="OceanAtmosphere" type="Node3D" parent="."]
 script = ExtResource("atmosphere")
+
+[node name="VolcanoIsle" type="Node3D" parent="."]
+position = Vector3(-1500, 0, 900)
+script = ExtResource("biome")
+biome = "volcano"
+
+[node name="WinterIsle" type="Node3D" parent="."]
+position = Vector3(1100, 0, -1300)
+script = ExtResource("biome")
+biome = "winter"
+
+[node name="SpringIsle" type="Node3D" parent="."]
+position = Vector3(600, 0, 1100)
+script = ExtResource("biome")
+biome = "spring"
+
+[node name="UnderwaterWorld" type="Node3D" parent="."]
+script = ExtResource("undersea")

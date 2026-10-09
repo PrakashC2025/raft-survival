@@ -5,8 +5,8 @@ signal cancelled
 
 const FILM: VideoStream = preload("res://video/new_game_intro.ogv")
 const ARRIVAL: Texture2D = preload("res://video/intro_arrival.jpg")
-const FILM_SIZE := Vector2(848, 480)
-const DURATION := 31.041667
+const FILM_SIZE := Vector2(720, 408)
+const DURATION := 31.033333
 # Captions follow scene cuts and decoder position, never accumulated wall time.
 const CUES := [
 	[0.5, 3.65, "A stone from space was falling toward Earth."],

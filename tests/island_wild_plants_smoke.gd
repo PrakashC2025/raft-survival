@@ -54,8 +54,12 @@ func _run() -> void:
 	for kind in 8:
 		var mesh: Mesh=garden.meshes[kind]
 		check(mesh!=null and mesh.get_aabb().position.y>=-0.001,"Kit variant %d has grounded normalized roots"%kind)
-		var leaf := mesh.surface_get_material(0) as BaseMaterial3D
-		check(leaf!=null and leaf.albedo_texture!=null and leaf.transparency==BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR,"Kit variant %d has textured cutout leaves"%kind)
+		if kind==5:
+			var petals:=mesh.surface_get_material(0) as ShaderMaterial
+			check(petals!=null and petals.shader==load("res://shaders/flower_petals.gdshader"),"Flowers use curved opaque petals and a shared breeze shader")
+		else:
+			var leaf := mesh.surface_get_material(0) as BaseMaterial3D
+			check(leaf!=null and leaf.albedo_texture!=null and leaf.transparency==BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR,"Kit variant %d has textured cutout leaves"%kind)
 	check(garden.meshes[0].surface_get_material(0)==garden.meshes[4].surface_get_material(0),"Kit shares one leaf atlas across trees and small plants")
 	var small := 10
 	aim(small)

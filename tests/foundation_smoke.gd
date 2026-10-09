@@ -48,6 +48,8 @@ func _run() -> void:
 	root.size = Vector2i(1280, 720)
 	inventory = root.get_node("Inventory")
 	inventory.call("new_game_reset", true)
+	# Verify legacy/custom 2m rafts here; the larger New Game deck has its own suite.
+	inventory.loaded_meta={"built":[]}
 	root.get_node("Stats").set("enabled", false)
 	change_scene_to_file("res://scenes/main.tscn")
 	await scene_changed

@@ -2,7 +2,9 @@ extends RefCounted
 ## Original quiet fire bed, cached PCM. Existing waves/footsteps are recordings.
 static var _fire: AudioStreamWAV
 static var _electronics: Dictionary = {}
-static func electronic_stream(kind: String) -> AudioStreamWAV:
+const CONTACT := preload("res://scripts/contact_audio.gd")
+static func electronic_stream(kind: String) -> AudioStream:
+	if kind in ["switch","battery"]:return CONTACT.pick("casing" if kind=="switch" else "metal")
 	if _electronics.has(kind):return _electronics[kind]
 	var duration:=0.12 if kind=="switch" else (0.38 if kind=="battery" else 1.3)
 	var samples:=int(duration*22050)

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="512" viewBox="0 0 256 512">
+<defs><linearGradient id="leaf"><stop stop-color="#727345"/><stop offset=".45" stop-color="#425929"/><stop offset=".55" stop-color="#8c8951"/><stop offset="1" stop-color="#3f542b"/></linearGradient><filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".16 .37" numOctaves="3" seed="17"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".17"/></feComponentTransfer></filter></defs>
+<path fill="url(#leaf)" d="M0 0h256v512H0z"/>
+<path d="M127 0Q132 128 126 256T129 512" stroke="#b4aa63" opacity=".65" stroke-width="3" fill="none"/>
+<path d="M129 42Q82 58 0 36M128 75Q176 92 256 67M128 111Q68 123 0 98M127 151Q178 166 256 134M126 186Q72 201 0 170M126 224Q178 239 256 205M126 263Q71 281 0 246M127 305Q184 316 256 288M128 341Q76 359 0 319M129 381Q178 399 256 362M129 424Q72 438 0 404M129 468Q176 485 256 447" stroke="#a59b58" stroke-width="1.5" opacity=".42" fill="none"/>
+</svg>

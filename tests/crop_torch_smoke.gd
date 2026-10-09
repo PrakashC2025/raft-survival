@@ -4,7 +4,9 @@ var failures := 0
 var player: Node3D
 var raft: Node3D
 var built: Node3D
-func _initialize() -> void: call_deferred("_run")
+func _initialize() -> void:
+	create_timer(100).timeout.connect(func(): push_error("FAIL: crop/torch timeout"); quit(1))
+	call_deferred("_run")
 func check(ok: bool,label: String) -> void:
 	checks += 1
 	if ok: print("PASS: "+label)
@@ -37,7 +39,15 @@ func _run() -> void:
 		var model: Node3D = plant._container.get_node_or_null(crop_id+"PlantModel")
 		check(model!=null,crop_id+" sprout uses textured 3D crop model")
 		var meshes: Array[Node] = model.find_children("*","MeshInstance3D",true,false)
-		check(meshes.size()<=6,crop_id+" model has at most six shared surfaces")
+		var imported_surfaces := 0
+		for part in meshes:
+			var parent := part.get_parent()
+			var produce_part := false
+			while parent != null and parent != model:
+				if str(parent.name).ends_with("Produce"): produce_part = true; break
+				parent = parent.get_parent()
+			if not produce_part: imported_surfaces += 1
+		check(imported_surfaces<=6,crop_id+" imported foliage retains at most six surfaces beside updated produce")
 		var leaf := model.find_child("TomatoLeaf*",true,false) as MeshInstance3D
 		check(leaf!=null and (leaf.get_active_material(0) as BaseMaterial3D).albedo_texture!=null,crop_id+" leaf vein texture survived import")
 		for part in meshes:
@@ -48,7 +58,8 @@ func _run() -> void:
 		check(is_equal_approx(plant._grow,1.0),crop_id+" mature growth restores normally")
 		if crop_id=="Potato":
 			var tubers := model.find_child("PotatoTuber*",true,false) as MeshInstance3D
-			var local_bounds: AABB=tubers.mesh.get_aabb()
+			var skin: MeshInstance3D = tubers.get_node("PotatoProduce").get_child(0)
+			var local_bounds: AABB=(model.global_transform.affine_inverse()*skin.global_transform)*skin.get_aabb()
 			check(local_bounds.end.y<0,"Potatoes are attached underneath the soil-line root")
 			var count: int=inventory.call("total","Potato")
 			plant.call("_do_dig")
@@ -73,6 +84,8 @@ func _run() -> void:
 	progress.set_process(false);progress.restore_state({"torch_fuel":150.0})
 	var owned: int=inventory.call("total","Torch")
 	progress.call("use_torch")
+	player.get_node("FireActions").call("_process",.93)
+	player.get_node("FireActions").call("_process",.40)
 	var mounted:=built.find_child("WallTorch_*",false,false) as Node3D
 	check(mounted!=null and int(inventory.call("total","Torch"))==owned-1,"Mount transfers an owned torch without charging a second recipe")
 	check(mounted.burning and mounted.fuel==150.0 and progress.torch_fuel==0.0,"Mount transfers flame and remaining fuel")

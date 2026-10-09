@@ -41,6 +41,8 @@ uniform vec3 moon_texture_alignment = vec3(7.0, 1.4, 4.8);
 uniform bool moon_texture_flip_u;
 uniform bool moon_texture_flip_v;
 uniform float moon_size = 0.07;
+// Project night presentation is driven by the existing celestial clock.
+uniform float night_moon_visibility = 1.0;
 
 group_uniforms moon_mie;
 uniform vec4 atm_moon_mie_tint: source_color = vec4(0.137, 0.184, 0.292, 1.0);
@@ -63,6 +65,9 @@ uniform sampler2D star_field_texture: source_color;
 uniform float star_scintillation = 0.75;
 uniform float star_scintillation_speed = 0.01;
 uniform sampler2D noise_tex: source_color;
+uniform bool shooting_stars_enabled = true;
+// Negative uses normal shader time. Isolated previews can freeze a streak.
+uniform float shooting_star_preview_time = -1.0;
 
 /* Sky alignment values for a star map that is in galactic coordinates. Works for most star maps.
 X: 2.6555
@@ -330,6 +335,40 @@ vec4 render_cumulus_clouds(vec3 ro, vec3 rd, float am, vec3 sun_pos, vec3 moon_p
 // Main
 //------------------------------------------------------------------------------
 
+vec3 shooting_stars(vec3 direction, float sky_time) {
+	vec3 light = vec3(0.0);
+	if (!shooting_stars_enabled || night_moon_visibility < 0.01) {
+		return light;
+	}
+	// Two staggered schedules: one brief meteor roughly every 14 seconds.
+	// Inactive events skip the trail math; no emitters or extra sky pass.
+	for (int meteor = 0; meteor < 2; meteor++) {
+		float event_time = sky_time + float(meteor) * 13.5;
+		float event_index = floor(event_time / 27.0);
+		float age = mod(event_time, 27.0);
+		if (age > 1.35) {
+			continue;
+		}
+		float seed = event_index * 7.13 + float(meteor) * 19.7;
+		float azimuth = fract(sin(seed * 1.71) * 43758.5453) * TAU;
+		vec3 start = normalize(vec3(-0.65, 0.70, -0.50));
+		start = create_rotation_matrix(vec3(0.0, azimuth, 0.0)) * start;
+		vec3 tangent = normalize(cross(start, vec3(0.0, 1.0, 0.0)) * 0.9 - (vec3(0.0, 1.0, 0.0) - start * start.y) * 0.45);
+		vec3 side = normalize(cross(start, tangent));
+		float along = atan(dot(direction, tangent), dot(direction, start));
+		float across = asin(clamp(dot(direction, side), -1.0, 1.0));
+		float head = age * 0.31;
+		float behind = head - along;
+		float width = max(fwidth(across), 0.00065);
+		float trail = (1.0 - smoothstep(width * 0.5, width * 1.7, abs(across))) * exp(-max(behind, 0.0) * 27.0);
+		trail *= step(0.0, behind) * (1.0 - smoothstep(0.12, 0.19, behind));
+		float glow = exp2(-pow((along - head) / (width * 2.2), 2.0) - pow(across / (width * 2.2), 2.0));
+		float fade = smoothstep(0.0, 0.12, age) * (1.0 - smoothstep(0.95, 1.35, age));
+		light += (vec3(0.68, 0.83, 1.0) * trail * 1.7 + vec3(1.0, 0.95, 0.84) * glow * 3.0) * fade;
+	}
+	return light;
+}
+
 vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, float p_time) {
 	vec3 col = vec3(0.0);
 
@@ -362,7 +401,9 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 
 	// Moon
 	float moon_intersect = simple_sphere_intersect(world_pos, moon_pos, moon_size);
-	float moon_mask = moon_intersect > (-1. + sqrt(moon_size)) ? 1.0 : 0.0;
+	float moon_edge = length(cross(world_pos, moon_pos));
+	float moon_aa = max(fwidth(moon_edge), 0.00015);
+	float moon_mask = (1.0 - smoothstep(moon_size - moon_aa, moon_size + moon_aa, moon_edge)) * step(0.0, dot(world_pos, moon_pos));
 	vec3 moon_normal = normalize(world_pos * moon_intersect - moon_pos);
 
 	float moon_ndotl = clamp(dot(moon_normal, sun_pos), 0.0, 1.0);
@@ -374,6 +415,10 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	float moon_ang = max(0.0, 1.0 - dot(moon_pos, world_pos));
 	float halo = exp2(-moon_ang / max(moon_size * moon_size * 3.0, 1e-4));
 	moon_output += moon_color.rgb * (moon_intensity * moon_glow_intensity) * halo * 0.1 * (1.0 - moon_mask);
+	moon_output *= night_moon_visibility;
+	// Thin the sky clouds around the moon, keeping its surface readable on
+	// all profiles without a second pass, fog or extra particle effects.
+	float night_cloud_visibility = mix(1.0, 0.72, night_moon_visibility) * (1.0 - halo * night_moon_visibility * 0.95);
 	float moonMask = (1.0 - moon_mask);
 
 	// Deep space
@@ -397,7 +442,7 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	vec3 deep_space_background = textureLod(starmap_texture, deep_space_uv, 0.0).rgb;
 	deep_space_background *= starmap_color.rgb;
 	deep_space_background = adjust_contrast(deep_space_background, starmap_color.a);
-	vec3 deep_space = deep_space_background.rgb * moonMask + moon_output;
+	vec3 deep_space = deep_space_background.rgb * moonMask;
 
 	// Star Field
 	float star_scint = textureLod(noise_tex, deep_space_uv + (p_time * star_scintillation_speed), 0.0).r;
@@ -407,14 +452,18 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	star_field = clamp_rgb_to_unit(mix(star_field.rgb, star_field.rgb * star_scint, star_scintillation));
 	star_field = clamp_rgb_to_unit(star_field.rgb);
 	//deep_space.rgb -= clamp_to_unit(star_field.r * 10.0);
-	deep_space.rgb += star_field.rgb * moonMask;
+	deep_space.rgb += star_field.rgb * moonMask * 1.5;
 	deep_space.rgb *= angle_mult.z;
 	col.rgb += sun_disk.rgb + deep_space.rgb * horizonBlend;
+	// The star field fades near the horizon; the moon keeps its full disc.
+	col.rgb += moon_output * smoothstep(0.02, 0.10, world_pos.y);
+	float meteor_time = shooting_star_preview_time < 0.0 ? p_time : shooting_star_preview_time;
+	col.rgb += shooting_stars(world_pos, meteor_time) * night_moon_visibility * horizonBlend;
 
 	// Clouds
 	if (cirrus_visible) {
 		vec4 cirrus_clouds = render_cirrus_clouds(clouds_pos);
-		cirrus_clouds.a = clamp_to_unit(cirrus_clouds.a);
+		cirrus_clouds.a = clamp_to_unit(cirrus_clouds.a) * night_cloud_visibility;
 		vec3 cloud_tint = sun_light_color.rgb;
 		cloud_tint = mix(cloud_tint, clouds_night_color.rgb, angle_mult.w);
 		cirrus_clouds.rgb *= cloud_tint * cirrus_intensity;
@@ -424,7 +473,7 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 
 	if (cumulus_visible) {
 		vec4 cumulus_clouds = render_cumulus_clouds(vec3(0.0), clouds_pos, angle_mult.z, sun_pos, moon_pos);
-		cumulus_clouds.a = clamp_to_unit(cumulus_clouds.a);
+		cumulus_clouds.a = clamp_to_unit(cumulus_clouds.a) * night_cloud_visibility;
 		vec3 cloud_tint = sun_light_color.rgb;
 		cloud_tint = mix(cloud_tint, clouds_night_color.rgb, angle_mult.w);
 		cumulus_clouds.rgb *= cloud_tint * cumulus_intensity;
@@ -432,6 +481,17 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 		// above erases almost all cloud volume in a normal gameplay view.
 		cumulus_clouds.a = mix(0.0, cumulus_clouds.a, horizonBlendCumulus);
 		col.rgb = mix(col.rgb, cumulus_clouds.rgb + mix(vec3(0.0), scatter, cumulus_sky_tint_fade), cumulus_clouds.a);
+	} else if (cirrus_visible && world_pos.y > 0.0) {
+		// Two filtered samples retain soft low clouds on phone profiles without
+		// the volumetric march. This is sky colour only, never screen fog.
+		vec2 uv = world_pos.xz / max(world_pos.y + 0.22,0.22);
+		float broad = texture(cirrus_texture,uv*0.12+cirrus_position1*0.35).r;
+		float detail = texture(cirrus_texture,uv*0.31+cirrus_position2*0.55).r;
+		float threshold=mix(0.67,0.30,cumulus_coverage);
+		float density = smoothstep(threshold,threshold+0.23,broad*0.76+detail*0.24);
+		vec3 tint = mix(vec3(0.62,0.66,0.69),vec3(0.018,0.028,0.05),angle_mult.w);
+		tint = mix(tint,scatter,0.35);
+		col.rgb = mix(col.rgb,tint,density*0.56*horizonBlendCumulus*night_cloud_visibility);
 	}
 
 	col.rgb = mix(col.rgb, ground_color.rgb * scatter, clamp_to_unit((-world_pos.y - atm_level_params.z) * 100.0));
@@ -508,7 +568,9 @@ void sky() {
 	vec3 world_pos = EYEDIR; // Original shader set this up in the vertex() function. For sky shaders the overall equivalent is EYEDIR.
 	vec3 clouds_pos = EYEDIR; // The same is used for cloud rendering.
 	vec3 sun_pos = LIGHT0_DIRECTION; // Redefined from now-deprecated _sun_direction.
-	vec3 moon_pos = LIGHT1_DIRECTION; // Redefined from now-deprecated _moon_direction.
+	// The moon must not depend on the directional-light slot: when its light
+	// has zero energy, another light can occupy that slot on Mobile.
+	vec3 moon_pos = normalize(transpose(moon_matrix) * vec3(0.0, 0.0, 1.0));
 
 	if (sky_visible) {
 		col = render_sky(world_pos, clouds_pos, sun_pos, moon_pos, current_time);

@@ -34,12 +34,13 @@ static func _prepare_meshes() -> void:
 	for label in VARIANTS:
 		var part := source.find_child(label, true, false) as MeshInstance3D
 		meshes.append(part.mesh if part != null else null)
+	meshes[5]=preload("res://scripts/flower_visual.gd").meadow_mesh()
 	source.free()
 
 func prepare() -> void:
 	_prepare_meshes()
 	var island := island_node()
-	radius = 15.0 if island.name == "Island" else 9.0
+	radius = 28.0 if island.name=="SpringIsle" else (15.0 if island.name == "Island" else 9.0)
 	var saved: Variant = Inventory.loaded_meta.get("wild_plants", {}).get(str(island.name), {})
 	if saved is Dictionary and saved.get("records") is Array:
 		_restore_records(saved.records)
@@ -65,6 +66,7 @@ func prepare() -> void:
 					if _flat_distance(at, other.at) < separation: spaced = false; break
 				if spaced and _terrain_hit(hit.collider):
 					var kind := rng.randi_range(0,1) if tree else rng.randi_range(2,7)
+					if not tree and records.size() in [TREE_COUNT,TREE_COUNT+1]:kind=5
 					records.append({"at":at,"kind":kind,"yaw":rng.randf()*TAU,"size":rng.randf_range(0.82,1.14),
 						"growth":1.0,"wait":0.0,"health":4 if tree else 1,"cycle":0})
 			# Four islands prepare concurrently; bound all terrain-query work.
@@ -223,7 +225,7 @@ func caption(index: int) -> String:
 	if int(entry.kind) < 2: return "CHOP %d/4" % (5-int(entry.health))
 	return "GATHER PLANT"
 
-func collect(index: int, actor: Node3D) -> bool:
+func collect(index: int, actor: Node3D,animate: bool=true) -> bool:
 	if index < 0 or index >= records.size() or not _can_use(actor) or _cooldown > 0.0: return false
 	var aimed: Variant = actor.get("aim_collider")
 	if not is_instance_valid(aimed) or aimed.get_script()!=TARGET or aimed.garden!=self \
@@ -231,13 +233,15 @@ func collect(index: int, actor: Node3D) -> bool:
 	var entry := records[index]
 	var tree := int(entry.kind) < 2
 	var rewards := {"Wood":4} if tree else {"Rope":1}
-	if int(entry.health) <= 1 and not Inventory.try_exchange({},rewards):
+	var damage := 2 if tree and actor.get("active_item")=="Axe" and Inventory.has("Axe",1) else 1
+	if int(entry.health) <= damage and not Inventory.try_exchange({},rewards):
 		actor.call("_hud_toast","BAG FULL · CLEAR SPACE TO COLLECT")
 		_cooldown = 0.8
 		return false
 	_cooldown = 0.8 if tree else 0.35
-	actor.call("play_action","chop" if tree else "grab",0.65,to_global(entry.at))
-	entry.health = int(entry.health)-1
+	if animate:actor.call("play_action","chop" if tree else "grab",0.65,to_global(entry.at))
+	if tree:actor.call("play_world_sfx",preload("res://audio/chop.ogg"),-9.0)
+	entry.health = int(entry.health)-damage
 	if int(entry.health) <= 0:
 		entry.growth = 0.0
 		entry.wait = _delay(entry)

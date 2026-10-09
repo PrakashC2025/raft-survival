@@ -5,6 +5,27 @@ const ATLAS := preload("res://textures/ui/survival_items.png")
 const ROPE_LAUNCHER := preload("res://textures/ui/rope_launcher.png")
 const ADVANCED_IMAGES := {"Raw Meat":"raw_meat", "Cooked Meat":"cooked_meat", "Raw Crab":"raw_crab", "Cooked Crab":"cooked_crab", "Diving Tank":"diving_tank", "Bandage":"bandage", "Torch":"torch", "Onion":"onion", "Potato":"potato", "Tomato":"tomato", "Banana":"banana"}
 static var _pictures: Dictionary = {}
+# Bounds follow the original photographic cutouts, including the fish tails.
+# All recipes share one cached GPU texture; each gets its own square thumbnail.
+const MEAL_REGIONS := {
+	"Cooked Potato":Rect2(0,.035,.168,.300), "Cooked Tomato":Rect2(.172,.063,.163,.266),
+	"Cooked Fish":Rect2(.325,.030,.173,.305), "Potato Tomato Stew":Rect2(.500,.054,.170,.275),
+	"Fish Potato Meal":Rect2(.667,.050,.167,.275), "Fish Potato Tomato Soup":Rect2(.835,.050,.165,.283),
+	"Fish Tomato Curry":Rect2(0,.359,.177,.290), "Banana Mash":Rect2(.187,.380,.147,.268),
+	"Roasted Carrot":Rect2(.326,.350,.184,.325), "Cooked Onion":Rect2(.515,.383,.156,.253),
+	"Tropical Fruit Stew":Rect2(.669,.357,.166,.299), "Root Vegetable Soup":Rect2(.839,.388,.161,.254),
+	"Roast Bird":Rect2(0,.659,.172,.300), "Cooked Meat":Rect2(.175,.680,.165,.290),
+	"Cooked Crab":Rect2(.337,.666,.170,.294), "Grilled Fish and Onion":Rect2(.510,.650,.165,.309),
+	"Coconut Fish Stew":Rect2(.668,.665,.170,.295), "Crab Tomato Broth":Rect2(.842,.675,.158,.280)
+}
+const STATION_IMAGES := {"Bonfire":"bonfire","RainCollector":"rain_collector","SandFilter":"sand_filter","CookingSetup":"cooking_setup","WindGenerator":"wind_generator"}
+static func station_texture(item: String) -> Texture2D:
+	if not STATION_IMAGES.has(item):return null
+	var key:="station:"+item
+	if not _pictures.has(key):
+		var path:="res://textures/ui/stations/"+str(STATION_IMAGES[item])+".png"
+		if ResourceLoader.exists(path):_pictures[key]=load(path)
+	return _pictures.get(key) as Texture2D
 const REGIONS := {
 	"Wood": Rect2(0.000, 0.002, 0.207, 0.176),
 	"Rope": Rect2(0.210, 0.014, 0.190, 0.163),
@@ -45,8 +66,52 @@ static var _outlines := {
 	"Sail Kit": PackedVector2Array([Vector2(0.403, 0.796), Vector2(0.419, 0.725), Vector2(0.576, 0.643), Vector2(0.599, 0.638), Vector2(0.609, 0.819), Vector2(0.403, 0.819)]),
 }
 
+static func food_texture(item: String) -> Texture2D:
+	if item=="Baked Potato":item="Cooked Potato"
+	if not preload("res://scripts/food_rules.gd").RECIPES.has(item) and not item.ends_with("Tumbler") and item!="Diving Tank":return null
+	var key:="dish:"+item
+	if _pictures.has(key):return _pictures[key]
+	if MEAL_REGIONS.has(item) and ResourceLoader.exists("res://textures/ui/food/recipe_atlas.png"):
+		if not _pictures.has("meal_atlas"):_pictures["meal_atlas"]=load("res://textures/ui/food/recipe_atlas.png")
+		var atlas:=_pictures["meal_atlas"] as Texture2D
+		var region: Rect2=MEAL_REGIONS[item]
+		var thumbnail:=AtlasTexture.new()
+		thumbnail.atlas=atlas
+		thumbnail.region=Rect2((region.position*atlas.get_size()).floor(),(region.size*atlas.get_size()).ceil())
+		var size:=thumbnail.region.size
+		var square:=Vector2.ONE*maxf(size.x,size.y)*1.08
+		thumbnail.margin=Rect2((square-size)*.5,square-size)
+		thumbnail.filter_clip=true
+		_pictures[key]=thumbnail
+		return thumbnail
+	var path:="res://textures/ui/food/"+item.to_lower().replace(" ","_")+".png"
+	if not ResourceLoader.exists(path):return null
+	var texture:=load(path) as Texture2D
+	_pictures[key]=texture
+	return texture
+
 static func draw(canvas: CanvasItem, item: String, center: Vector2, radius: float) -> bool:
+	if item in ["Solar Torch","Walkie Talkie","Binoculars","Repair Kit"]:
+		var key:="electronics:"+item
+		if not _pictures.has(key):
+			var path:="res://textures/ui/tools/"+item.to_lower().replace(" ","_")+".png"
+			if ResourceLoader.exists(path):_pictures[key]=load(path)
+		var picture:=_pictures.get(key) as Texture2D
+		if picture!=null:canvas.draw_texture_rect(picture,Rect2(center-Vector2.ONE*radius,Vector2.ONE*radius*2),false);return true
+	var station:=station_texture(item)
+	if station!=null:canvas.draw_texture_rect(station,Rect2(center-Vector2.ONE*radius,Vector2.ONE*radius*2),false);return true
+	if item in preload("res://scripts/survival_tool_visual.gd").ITEMS:
+		var key:="tool:"+item
+		if not _pictures.has(key):
+			var path:="res://textures/ui/tools/"+item.to_lower()+".png"
+			if ResourceLoader.exists(path):_pictures[key]=load(path)
+		var texture:=_pictures.get(key) as Texture2D
+		if texture!=null:canvas.draw_texture_rect(texture,Rect2(center-Vector2.ONE*radius,Vector2.ONE*radius*2),false);return true
 	if item.ends_with(" Seed"): item = item.trim_suffix(" Seed")
+	var meal:=food_texture(item)
+	if meal!=null:
+		canvas.draw_texture_rect(meal,Rect2(center-Vector2.ONE*radius,Vector2.ONE*radius*2),false)
+		return true
 	if ADVANCED_IMAGES.has(item):
 		var texture := _pictures.get(item) as Texture2D
 		var path := "res://textures/ui/advanced_"+str(ADVANCED_IMAGES[item])+".png"

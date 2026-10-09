@@ -66,9 +66,10 @@ func _run() -> void:
 	var pot_deck:=piece("Foundation",Vector3(-2,0,0));await frames()
 	var pot_placement:=aim("PlanterPot",Vector3(-2,0.15,0.5),pot_deck)
 	check(pot_placement.get("valid",false),"Pot can be placed on top of a foundation without a centre socket")
+	var soil_before:int=inventory.call("total","Soil")
 	player.call("_try_build");await frames()
 	var pot:=built.find_child("PlanterPot_*",false,false) as Node3D
-	check(pot!=null and inventory.call("total","Wood")==stock-4 and inventory.call("total","Soil")==28,"Placed pot is visible, solid and spends four wood plus two soil")
+	check(pot!=null and inventory.call("total","Wood")==stock-4 and inventory.call("total","Soil")==soil_before-2,"Placed pot is visible, solid and spends four wood plus two soil")
 	if pot!=null:
 		check(pot.find_child("LivingSoil",true,false)!=null,"The real placed pot contains its soil visual")
 		check(not aim("PlanterPot",Vector3(-2,0.15,0.5),pot_deck).get("valid",false),"A pot overlapping an existing pot gets a red preview")
@@ -99,7 +100,7 @@ func _run() -> void:
 	check(hud.RESOURCE_PILL_ITEMS.is_empty() and hud.STATS[1][0]=="thirst","Survival percentages replace resource counters at the top")
 	var controls:=player.get_node("CanvasLayer/MobileControls")
 	controls.call("_layout")
-	check(controls._btn_use.size.x>controls._btn_run.size.x*1.2 and not controls._btn_use.get_global_rect().intersects(controls._btn_climb.get_global_rect()),"Larger Use button has a separate reachable position")
+	check(controls._btn_use.size.x>=123.9 and controls._btn_use.size.x>controls._btn_run.size.x and controls._btn_use.position.x<640 and not (controls._btn_use.visible and controls._btn_climb.visible),"Large left Use target shares its position only with mutually exclusive Climb")
 	if preview:
 		hud._toast=""
 		player.get_node("SurvivalAction").call("stop")
@@ -206,7 +207,7 @@ func _run() -> void:
 	await frames()
 	var physical:PhysicsDirectSpaceState3D=current_scene.get_world_3d().direct_space_state
 	var clear:=true
-	for z in [3.6,4.5,5.5,6.05]:
+	for z in [3.6,4.5,5.5,5.8]:
 		var q:=PhysicsRayQueryParameters3D.create(raft.to_global(Vector3(4,3.0,z)),raft.to_global(Vector3(4,2.5,z)),1)
 		var hit:=physical.intersect_ray(q)
 		if not hit.is_empty() and str(hit.collider.name).begins_with("Roof"):clear=false
@@ -231,13 +232,15 @@ func _run() -> void:
 	player.global_position=raft.to_global(Vector3(4,1.05,2.5));player.velocity=Vector3.ZERO;player.is_swimming=false
 	for step in 210:
 		await physics_frame
-		player.velocity=Vector3(0,player.velocity.y-18.0/60,1.6)
+		player.velocity=Vector3(0,player.velocity.y-18.0*player.get_physics_process_delta_time(),1.6)
 		player.call("_try_step_up");player.move_and_slide()
-	check(raft.to_local(player.global_position).y>3.55 and raft.to_local(player.global_position).z>7.1,"Player walks up the stairs through the ceiling without jumping or obstruction")
+		if raft.to_local(player.global_position).z>6.4:break
+	check(raft.to_local(player.global_position).y>3.55 and raft.to_local(player.global_position).z>6.1,"Player walks up the stairs through the ceiling without jumping or obstruction")
 	for step in 210:
 		await physics_frame
-		player.velocity=Vector3(0,player.velocity.y-18.0/60,-1.6)
+		player.velocity=Vector3(0,player.velocity.y-18.0*player.get_physics_process_delta_time(),-1.6)
 		player.move_and_slide()
+		if raft.to_local(player.global_position).z<2.65:break
 	check(raft.to_local(player.global_position).y<1.2 and raft.to_local(player.global_position).z<3.2,"Player walks back down through the same opening")
 	flight.queue_free();await frames(15)
 	var closed:=PhysicsRayQueryParameters3D.create(raft.to_global(Vector3(4,3,4.5)),raft.to_global(Vector3(4,2.5,4.5)),1)

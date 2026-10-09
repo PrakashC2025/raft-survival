@@ -19,8 +19,13 @@ $config = '[application]' + [Environment]::NewLine + 'config/use_custom_user_dir
 foreach ($test in $Tests) {
     $testPath = Join-Path (Join-Path $projectRoot 'tests') $test
     $logPath = Join-Path (Join-Path $projectRoot 'build') ('source-' + [IO.Path]::GetFileNameWithoutExtension($test) + '.log')
-    $processOutput = & $GodotPath --headless --path $sourceRoot --script $testPath --log-file $logPath -- @GodotUserArgs 2>&1 | Out-String
-    $testExit = $LASTEXITCODE
+    # Windows PowerShell treats native stderr as an ErrorRecord. Capture the
+    # complete fixture result before interpreting it, including failures.
+    $ErrorActionPreference = 'Continue'
+    try {
+        $processOutput = & $GodotPath --headless --path $sourceRoot --script $testPath --log-file $logPath -- @GodotUserArgs 2>&1 | Out-String
+        $testExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = 'Stop' }
     $consolePath = Join-Path (Join-Path $projectRoot 'build') ('source-' + [IO.Path]::GetFileNameWithoutExtension($test) + '-console.log')
     [IO.File]::WriteAllText($consolePath, $processOutput)
     $stream = [IO.File]::Open($logPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)

@@ -4,13 +4,16 @@ signal changed
 
 const SETTINGS_PATH := "user://settings.cfg"
 const UI_SURFACE := preload("res://scripts/ui_surface.gd")
+const DEFAULT_DAY_MINUTES := 20.0
+const MIN_DAY_MINUTES := 12.0
+const MAX_DAY_MINUTES := 30.0
 var quality := 0 # Auto, Battery Saver, Balanced, High
 var target_fps := 60
 var look_speed := 1.0
 var invert_look := false
 var volume := 0.8
 var third_person := false
-var day_minutes := 24.0
+var day_minutes := DEFAULT_DAY_MINUTES
 var head_bob := true
 var is_open := false
 var _previous_paused := false
@@ -39,7 +42,7 @@ func _ready() -> void:
 		invert_look = bool(config.get_value("game", "invert_look", false))
 		volume = clampf(float(config.get_value("game", "volume", 0.8)), 0.0, 1.0)
 		third_person = bool(config.get_value("game", "third_person", false))
-		day_minutes = clampf(float(config.get_value("game", "day_minutes", 24.0)), 6.0, 96.0)
+		day_minutes = valid_day_minutes(float(config.get_value("game", "day_minutes", DEFAULT_DAY_MINUTES)))
 		head_bob = bool(config.get_value("game", "head_bob", true))
 	_apply()
 
@@ -52,7 +55,7 @@ func update_setting(key: String, value: Variant) -> void:
 		"invert_look": invert_look = bool(value)
 		"volume": volume = clampf(float(value), 0.0, 1.0)
 		"third_person": third_person = bool(value)
-		"day_minutes": day_minutes = clampf(float(value), 6.0, 96.0)
+		"day_minutes": day_minutes = clampf(float(value), MIN_DAY_MINUTES, MAX_DAY_MINUTES)
 		"head_bob": head_bob = bool(value)
 	_apply()
 	var config := ConfigFile.new()
@@ -62,6 +65,12 @@ func update_setting(key: String, value: Variant) -> void:
 	if config.save(SETTINGS_PATH) != OK:
 		push_warning("Could not save game settings.")
 	changed.emit()
+
+
+func valid_day_minutes(value: float) -> float:
+	# Existing choices inside the owner's slower range survive. Older fast/invalid
+	# cycles use the new default without changing any saved calendar or time.
+	return value if is_finite(value) and value >= MIN_DAY_MINUTES and value <= MAX_DAY_MINUTES else DEFAULT_DAY_MINUTES
 
 
 func _apply() -> void:
@@ -199,13 +208,13 @@ func _build_panel() -> void:
 	bob.toggled.connect(func(value: bool): update_setting("head_bob", value))
 	_add_row(content, "", bob)
 	var day_length := SpinBox.new()
-	day_length.min_value = 6
-	day_length.max_value = 96
-	day_length.step = 6
+	day_length.min_value = MIN_DAY_MINUTES
+	day_length.max_value = MAX_DAY_MINUTES
+	day_length.step = 1
 	day_length.suffix = "minutes"
 	day_length.value = day_minutes
 	day_length.value_changed.connect(func(value: float): update_setting("day_minutes", value))
-	_add_row(content, "Day length", day_length)
+	_add_row(content, "Day + night length", day_length)
 	var tip := Label.new()
 	tip.text = "For a slower phone, choose Battery Saver and 30 FPS.\nChanges are saved automatically."
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

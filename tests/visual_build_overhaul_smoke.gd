@@ -211,7 +211,7 @@ func _run() -> void:
 	clock.current_time = 22
 	lamp.call("advance",1)
 	check(lamp.get("_light").visible and is_equal_approx(generator.charge,9.92),"Automatic lamp lights at night and charges normal power cost")
-	check(clock.minutes_per_day == 24.0,"Default day/night cycle takes 24 real minutes")
+	check(clock.minutes_per_day == 20.0,"Default day/night cycle takes twenty real minutes")
 	# Warm caches, then repeated >50-object batches must return to the same node
 	# and resource counts. Shared static caches are bounded and intentionally live.
 	for piece in built.get_children(): piece.queue_free()

@@ -1,11 +1,11 @@
 extends Node3D
 ## Activity-based chapters. Materials granted for testing never advance missions.
 const UNLOCKS := {"WaterPurifier": 2, "WindGenerator": 3, "ElectricLamp": 3,
-	"ElectricPurifier": 4, "Diving Tank": 4, "RescueRadio": 5}
+	"ElectricPurifier": 4, "RescueRadio": 5}
 const CHAPTERS := [
 	["MAKE CAMP", "Craft a fishing rod and spear; build a campfire.", {"craft:Fishing Rod": 1, "craft:Spear": 1, "build:Bonfire": 1}],
 	["SAFE WATER", "Build a Water Purifier; collect two distilled waters.", {"build:WaterPurifier": 1, "purify": 2}],
-	["HARNESS THE WIND", "Build a Wind Generator and lamp; generate power.", {"build:WindGenerator": 1, "build:ElectricLamp": 1, "power": 1}],
+	["HARNESS THE WIND", "Build a Wind Generator; generate power.", {"build:WindGenerator": 1, "power": 1}],
 	["POWERED CAMP", "Build an Electric Purifier; collect two powered waters.", {"build:ElectricPurifier": 1, "electric_water": 2}],
 	["SEND A SIGNAL", "Build a Rescue Radio; power and transmit an SOS.", {"build:RescueRadio": 1, "signal": 1}],
 	["OCEAN SURVIVOR", "Rescue signal sent. Explore, hunt and expand your camp.", {}]
@@ -13,6 +13,12 @@ const CHAPTERS := [
 var level := 1
 var events: Dictionary = {}
 var diving_tank := false
+const AIR_CAPACITY := 180.0
+var air_tank_seconds := 0.0
+var _air_refill := 0.0
+var _refill_damage := 0
+var _refill_start := Vector3.ZERO
+var _back_tank: Node3D
 var oxygen := 100.0
 var stamina := 100.0
 var wetness := 0.0
@@ -30,6 +36,8 @@ var player: CharacterBody3D
 
 func _ready() -> void:
 	player = get_parent() as CharacterBody3D
+	var fire_actions:=preload("res://scripts/fire_actions.gd").new()
+	fire_actions.name="FireActions";player.add_child(fire_actions)
 	add_to_group("survival_progression")
 	var saved: Variant = Inventory.loaded_meta.get("progression", {})
 	if saved is Dictionary:
@@ -62,6 +70,9 @@ func _ready() -> void:
 	var material:=StandardMaterial3D.new();material.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA;material.albedo_color=Color(.2,1,.4,.45);material.shading_mode=BaseMaterial3D.SHADING_MODE_UNSHADED
 	_mount_preview.material_override=material;_mount_preview.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_mount_preview);_mount_preview.hide()
+	_back_tank=preload("res://scripts/dive_visual.gd").tank()
+	_back_tank.name="EquippedAirTank";player.get_node("Body").add_child(_back_tank)
+	_back_tank.position=Vector3(0,.20,.23)
 
 func _recover_existing_camp() -> void:
 	await get_tree().physics_frame
@@ -112,6 +123,16 @@ func objective() -> String:
 	return str(CHAPTERS[level - 1][1])
 
 func _process(delta: float) -> void:
+	var scene:=get_tree().current_scene
+	if scene==null:return
+	if is_instance_valid(_back_tank): _back_tank.visible=diving_tank and player.cam_mode==1
+	if _air_refill>0:
+		var hud:=player.get_node_or_null("CanvasLayer/SurvivalHUD")
+		if player.is_swimming or GameSettings.is_open or Stats.damage_revision!=_refill_damage or player.global_position.distance_squared_to(_refill_start)>1 or (hud!=null and hud.call("gameplay_input_blocked")):
+			_air_refill=0;player.get_node("SurvivalAction").call("stop")
+		else:
+			_air_refill=maxf(0,_air_refill-delta)
+			if _air_refill==0:air_tank_seconds=AIR_CAPACITY;player.call("_hud_toast","AIR TANK REFILLED · 3:00");player.call("_queue_save")
 	var equipped := str(player.get("active_item")) in ["Torch","Burning Torch"]
 	var construction: bool = bool(player.get("build_mode")) or is_instance_valid(player.get("_editing"))
 	if torch_fuel>0 or torch_end_time>0:
@@ -124,13 +145,14 @@ func _process(delta: float) -> void:
 	if lit and not _crackle.playing: _crackle.play()
 	elif not lit and _crackle.playing: _crackle.stop()
 	_torch_light.visible = lit and not construction
-	_third_torch.visible = equipped and int(player.get("cam_mode")) == 1 and not construction
+	var fire_pose: bool=player.get_node("SurvivalAction").kind in ["ignite_fire","snuff_fire","torch_light","torch_off","torch_mount"]
+	_third_torch.visible = equipped and int(player.get("cam_mode")) == 1 and not construction and not fire_pose
 	_third_torch.call("set_burning",lit)
 	var held := player.get_node_or_null("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist/HandItem/Torch")
 	if held != null: held.call("set_burning",lit)
 	_preview_tick+=delta
 	if _preview_tick>=.1:
-		_preview_tick=0.0;_update_mount_preview(equipped and lit and not construction)
+		_preview_tick=0.0;_update_mount_preview(equipped and not construction and not fire_pose)
 	if Stats.health <= 0.0:
 		return
 	_tick += delta
@@ -152,16 +174,32 @@ func _process(delta: float) -> void:
 	stamina = clampf(stamina + (-5.0 if swimming and moving > 1.8 else (-3.0 if moving > 4.0 else 7.0)) * step, 0, 100)
 	wetness = clampf(wetness + (12.0 if swimming else (3.0 if exposed else (-3.0 if lit else -0.8))) * step, 0, 100)
 	var camera := player.get_node("CamPivot/SpringArm3D/Camera3D") as Camera3D
-	var ocean := get_tree().current_scene.get_node_or_null("Ocean")
+	var ocean := scene.get_node_or_null("Ocean")
 	var underwater := ocean != null and camera.global_position.y < float(ocean.call("get_height", camera.global_position)) - 0.30
-	var breath_rate := (-1.2 if diving_tank else -5.0) if underwater else 18.0
+	var supplied := underwater and diving_tank and air_tank_seconds>0
+	if supplied: air_tank_seconds=maxf(0,air_tank_seconds-step)
+	var breath_rate := (1.0 if supplied else -5.0) if underwater else 18.0
 	oxygen = clampf(oxygen + breath_rate * step, 0, 100)
 	if underwater and oxygen <= 0.0:
 		Stats.change_health(-8.0 * step)
 
+func can_refill_air() -> bool:
+	return diving_tank and air_tank_seconds<AIR_CAPACITY-1 and _air_refill<=0 and not player.is_swimming and player.is_on_floor()
+
+func _notification(what: int) -> void:
+	if what in [NOTIFICATION_PAUSED,NOTIFICATION_APPLICATION_FOCUS_OUT] and _air_refill>0:
+		_air_refill=0
+		if is_instance_valid(player):player.get_node("SurvivalAction").call("stop")
+
+func refill_air() -> bool:
+	if not can_refill_air(): return false
+	_air_refill=6.0;_refill_damage=Stats.damage_revision;_refill_start=player.global_position
+	player.call("play_action","pump",6.0,player.global_position)
+	return true
+
 func save_state() -> Dictionary:
 	return {"level": level, "events": events.duplicate(), "diving_tank": diving_tank,
-		"oxygen": oxygen, "stamina": stamina, "wetness": wetness, "torch_fuel": torch_fuel,"torch_end_time":torch_end_time,"legacy_torch":legacy_torch}
+		"oxygen": oxygen,"air_tank_seconds":air_tank_seconds, "stamina": stamina, "wetness": wetness, "torch_fuel": torch_fuel,"torch_end_time":torch_end_time,"legacy_torch":legacy_torch}
 
 func restore_state(data: Dictionary) -> void:
 	level = clampi(int(data.get("level", 1)), 1, CHAPTERS.size())
@@ -171,6 +209,7 @@ func restore_state(data: Dictionary) -> void:
 		for key in stored:
 			events[str(key)] = clampi(int(stored[key]), 0, 10000)
 	diving_tank = bool(data.get("diving_tank", false))
+	air_tank_seconds=clampf(float(data.get("air_tank_seconds",AIR_CAPACITY if diving_tank else 0.0)),0,AIR_CAPACITY)
 	oxygen = clampf(float(data.get("oxygen", 100)), 10, 100)
 	stamina = clampf(float(data.get("stamina", 100)), 10, 100)
 	wetness = clampf(float(data.get("wetness", 0)), 0, 100)
@@ -190,22 +229,16 @@ func use_torch() -> void:
 		if str(player.call("_find_piece_name",target)) == "WallTorch" and player.global_position.distance_to(target.global_position) <= 3.2:
 			target.call("interact_survival",player)
 			return
-	if is_held_lit() and bool(player.call("mount_held_torch")): return
+	if bool(player.call("_resolve_wall_torch").get("valid",false)):
+		player.get_node("FireActions").start("torch_mount",player.aim_collider);return
 	if is_held_lit():
-		extinguish_torch()
-		player.call("_hud_toast","TORCH EXTINGUISHED")
+		player.get_node("FireActions").start("torch_off")
 	else:
 		var fire:=player.get("aim_collider") as Node3D
 		if bool(player.get("aim_valid")) and fire!=null and fire.is_in_group("campfire") \
 			and fire.global_position.distance_to(player.global_position)<=3.5 and fire.get("burning")==true \
 			and float(fire.get("fuel"))>0 and not fire.call("exposed_to_rain"):
-			if Inventory.try_exchange({"Torch":1},{"Burning Torch":1}):
-				legacy_torch=false
-				torch_end_time=TORCH_CYCLE.next_dawn(player);torch_fuel=TORCH_CYCLE.seconds_left(player,torch_end_time)
-				player.get_node("SurvivalServices").equip_owned("Burning Torch")
-				player.call("play_action","fire",.8,fire.global_position)
-				player.call("_hud_toast","BURNING TORCH · LASTS UNTIL DAWN")
-			else:player.call("_hud_toast","BAG FULL · CLEAR A SLOT FOR THE BURNING TORCH")
+			player.get_node("FireActions").start("torch_light",fire)
 		else:player.call("_hud_toast","AIM AT A BURNING BONFIRE OR COOKING SETUP TO LIGHT")
 	player.call("_queue_save")
 

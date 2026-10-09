@@ -41,7 +41,15 @@ func _run() -> void:
 		last_frame = now
 	check(menu.get("_packed_game") != null and menu.get("_error") == "", "Real asynchronous model/script/game loading completes")
 	check(heartbeats > menu.MODEL_WARM_PATHS.size(), "Loading keeps producing render-frame heartbeats")
-	check(menu.get("_warm_resources").size() == menu.MODEL_WARM_PATHS.size()+menu.SCRIPT_WARM_PATHS.size(), "Prepared models stay cached before serial script compilation")
+	var warmed: Array=menu.get("_warm_resources")
+	var retained:=true
+	for path in menu.MODEL_WARM_PATHS+menu.SCRIPT_WARM_PATHS:
+		retained=retained and ResourceLoader.has_cached(path) and warmed.has(load(path))
+	var art:=preload("res://scripts/item_art.gd")
+	for station in art.STATION_IMAGES:retained=retained and warmed.has(art.station_texture(station))
+	for dish in ["Tumbler","Ocean Water Tumbler","Boiled Water Tumbler","Diving Tank"]:retained=retained and warmed.has(art.food_texture(dish))
+	var thumbnail:=art.food_texture("Cooked Potato") as AtlasTexture
+	check(retained and thumbnail!=null and warmed.has(thumbnail.atlas), "Prepared models, scripts, stations and the shared food atlas stay cached")
 	print("LOAD DIAGNOSTIC: %d ms, %d heartbeats, largest observed frame %d ms (desktop only)" % [Time.get_ticks_msec()-started,heartbeats,worst_load_frame])
 	var packed := menu.get("_packed_game") as PackedScene
 	if packed == null:

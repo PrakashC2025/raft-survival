@@ -120,7 +120,7 @@ func _run() -> void:
 	player.velocity.y = player.JUMP_VELOCITY
 	for i in range(70):
 		await physics_frame
-		player.velocity.y -= player.GRAVITY / 60.0
+		player.velocity.y -= player.GRAVITY * player.get_physics_process_delta_time()
 		player.move_and_slide()
 		maximum = maxf(maximum, player.position.y)
 	check(maximum - start_y > 0.40 and maximum - start_y < 0.65, "Actual land jump rises about half a metre")
@@ -132,14 +132,18 @@ func _run() -> void:
 		player.velocity = Vector3(0, -2, 2.4)
 		player.call("_try_step_up")
 		player.move_and_slide()
-		if player.position.z >= 1003.25:
+		if player.position.z >= 1002.85:
 			break
 	print("STAIR ASCENT ", player.position)
-	check(player.position.z > 1003.05 and player.position.y > 7.2, "Player walks to the stair landing without jumping")
+	check(player.position.z > 1002.75 and player.position.y > 7.2, "Player walks to the compact stair landing without jumping")
 	for i in range(185):
 		await physics_frame
-		player.velocity = Vector3(0, -2, -2.4)
+		player.velocity = Vector3(0, minf(player.velocity.y, 0.0), -2.4)
+		if not player.is_on_floor(): player.velocity.y -= player.GRAVITY * player.get_physics_process_delta_time()
+		player.call("_try_step_up")
 		player.move_and_slide()
+		if player.position.z < 999.75: break
+	print("STAIR DESCENT ", player.position)
 	check(player.position.z < 1000.0 and player.position.y < 5.1, "Player walks back down the stairs")
 	stairs.rotation.y = PI / 2.0
 	player.global_position = Vector3(999.25, 4.92, 1000)
@@ -150,10 +154,10 @@ func _run() -> void:
 		player.velocity = Vector3(2.4, -2, 0)
 		player.call("_try_step_up")
 		player.move_and_slide()
-		if player.position.x >= 1003.25:
+		if player.position.x >= 1002.85:
 			break
 	print("ROTATED ASCENT ", player.position)
-	check(player.position.x > 1003.05 and player.position.y > 7.2, "Rotated stairs are also walkable")
+	check(player.position.x > 1002.75 and player.position.y > 7.2, "Rotated compact stairs are also walkable")
 	var rain := player.get_node("RainSystem")
 	rain.call("start_rain", 120.0)
 	var time_of_day := current_scene.get_node("Sky3D/TimeOfDay")
@@ -166,7 +170,7 @@ func _run() -> void:
 	paused = false
 	await frames(3)
 	check(float(time_of_day.get("current_time")) - clock_before < 0.01, "Resuming does not skip the paused minutes")
-	check(is_equal_approx(float(time_of_day.get("minutes_per_day")), 24.0), "Default day lasts twenty-four active minutes")
+	check(is_equal_approx(float(time_of_day.get("minutes_per_day")), 20.0), "Default full day/night cycle lasts twenty active minutes")
 	var pot := (load("res://scenes/planter_pot.tscn") as PackedScene).instantiate()
 	current_scene.add_child(pot)
 	pot.position = Vector3(1008, 4.3, 1005)
@@ -216,7 +220,7 @@ func _run() -> void:
 	var fire_state: Dictionary = fire.call("save_survival_state")
 	fire.fuel = 0
 	fire.call("restore_survival_state", fire_state)
-	check(fire.fuel > 150 and fire.burning, "Saved fire state restores remaining fuel")
+	check(is_equal_approx(fire.fuel, float(fire_state.fuel)) and fire.fuel > 0 and not fire.burning, "Saved completed cooking restores fuel and keeps the fire off")
 	var collector := (load("res://scenes/rain_collector.tscn") as PackedScene).instantiate()
 	current_scene.add_child(collector)
 	collector.position = Vector3(1008, 4.35, 1007)

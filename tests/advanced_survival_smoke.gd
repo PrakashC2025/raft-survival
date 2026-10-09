@@ -36,7 +36,7 @@ func _run() -> void:
 	progress.set_process(false)
 	check(progress.level == 1,"Testing materials do not skip progression")
 	check(not inv.call("can_afford","WaterPurifier"),"Purifier cannot be built before level 2")
-	check(not inv.call("craft_item","Diving Tank"),"Locked tank never consumes crafting materials")
+	check(progress.call("unlocked","Diving Tank"),"Handmade tank is available for early diving")
 	check(inv.call("craft_item","Fishing Rod") and inv.call("craft_item","Spear"),"Starter equipment records actual successful crafts")
 	progress.call("record","build:Bonfire")
 	check(progress.level == 2 and inv.call("recipe_unlocked","WaterPurifier"),"Completing camp unlocks water level")
@@ -129,7 +129,7 @@ func _run() -> void:
 	camera.global_position = Vector3(1200,-4,1200)
 	progress.oxygen = 50
 	progress.call("_process",1.0)
-	check(progress.oxygen < 50 and progress.oxygen > 48,"Tank slows actual underwater breath consumption")
+	check(progress.oxygen == 51 and progress.air_tank_seconds==179,"Tank supplies underwater breath and drains its limited air")
 	progress.diving_tank = false
 	progress.oxygen = 1
 	var stats := root.get_node("Stats")
@@ -178,6 +178,8 @@ func _run() -> void:
 	wood_before = int(inv.call("total","Wood"))
 	player.set("aim_valid",true);player.set("aim_collider",fire);player.set("aim_point",fire.global_position)
 	progress.call("use_torch")
+	player.get_node("FireActions").call("_process",.93)
+	player.get_node("FireActions").call("_process",.40)
 	check(progress.torch_fuel > 0 and int(inv.call("total","Wood")) == wood_before and inv.call("has","Burning Torch",1),"Aimed fire lights a Burning Torch until dawn without an extra crafting charge")
 	var lit_fuel: float=progress.torch_fuel
 	progress.call("_process",0.5)
@@ -217,6 +219,9 @@ func _run() -> void:
 	raft.set_physics_process(false)
 	var built := raft.get_node("BuiltPieces")
 	# A continuous path to the raft is required, just as in real construction.
+	for component in ["Screw","Wire","Motor","Battery"]: inv.call("add",component,8)
+	# An owned old lamp kit may still restore/install; new lamps are not made.
+	inv.call("add","ElectricLamp",1)
 	for cell_x in range(1, 12):
 		var support_tile := (load("res://scenes/foundation.tscn") as PackedScene).instantiate() as Node3D
 		support_tile.name = "Foundation_AdvancedFixture_"+str(cell_x)
@@ -241,10 +246,11 @@ func _run() -> void:
 		var kind: String = player.BUILD_RECIPE_NAMES[index]
 		check(player.build_valid,"Real supported machine preview: "+kind)
 		var metal_before := int(inv.call("total","Metal"))
+		var actual_cost: Dictionary=inv.call("recipe_cost",kind)
 		if player.build_valid:
 			player.call("_try_build")
 		var placed := built.find_child(kind+"_*",false,false)
-		check(placed != null and int(inv.call("total","Metal")) == metal_before-int(inv.RECIPES[kind].get("Metal",0)),"Real placement spends exact recipe: "+kind)
+		check(placed != null and int(inv.call("total","Metal")) == metal_before-int(actual_cost.get("Metal",0)),"Real placement spends exact recipe: "+kind)
 		if placed != null:
 			placed.set_process(false)
 			placed.set("charge",41.0)

@@ -5,16 +5,16 @@ extends Node3D
 
 @export var debris_scene: PackedScene
 @export var current_direction: Vector3 = Vector3(0, 0, 1)
-@export var current_speed: float = 1.2
-@export var spawn_width: float = 60.0
-@export var upstream_distance: float = 80.0
-@export var downstream_distance: float = 120.0
+@export var current_speed: float = 0.32
+@export var spawn_width: float = 28.0
+@export var upstream_distance: float = 52.0
+@export var downstream_distance: float = 34.0
 @export var max_debris: int = 80
 @export var prewarm_count: int = 35
 
-# Staggered timing — 1 piece every 0.2–0.5 seconds
-@export var spawn_interval_min: float = 0.2
-@export var spawn_interval_max: float = 0.5
+# Current spacing avoids filling the far edge with a single dense clump.
+@export var spawn_interval_min: float = 2.5
+@export var spawn_interval_max: float = 4.5
 
 var _timer: float = 0.0
 var _next_interval: float = 0.0
@@ -22,6 +22,12 @@ var _active: Array = []
 var player: Node3D
 var _direction: Vector3 = Vector3.ZERO
 var _side: Vector3 = Vector3.ZERO
+var _raft: Node3D
+var _spawn_serial := 0
+const NEAR_RADIUS := 24.0
+# Guarantees regular building/soil supplies instead of random dry spells.
+const SUPPLY_CYCLE := ["Wood","Rope","Plastic","Wood","Metal","Stone","Soil","Barrel","Wood","Rope","Plastic","Salvage"]
+const SALVAGE_POOL := ["Sponge","Potato Seed","Coconut Seed","Banana Seed","Tomato Seed","Carrot Seed","Onion Seed","WindGenerator","Screw","Wire","Motor","Battery","Solar Torch","Walkie Talkie","Binoculars"]
 
 const ITEM_POOL := [
 	"Wood", "Wood", "Wood", "Wood", "Wood", "Wood",
@@ -35,6 +41,9 @@ const ITEM_POOL := [
 	"Sponge", "Sponge", "Potato Seed",
 	"Coconut Seed",
 	"Banana Seed",
+	"Tomato Seed", "Carrot Seed", "Onion Seed",
+	# Complete equipment occasionally washes up, ready to install on a deck.
+	"WindGenerator", "Solar Torch", "Walkie Talkie", "Binoculars",
 ]
 
 func _ready() -> void:
@@ -44,6 +53,7 @@ func _ready() -> void:
 		max_debris = mini(max_debris, 48)
 		prewarm_count = mini(prewarm_count, 24)
 	player = get_tree().get_first_node_in_group("player")
+	_raft = get_tree().get_first_node_in_group("raft")
 	_direction = Vector3(current_direction.x, 0.0, current_direction.z).normalized()
 	if _direction.length() < 0.001:
 		_direction = Vector3(0, 0, 1)
@@ -56,6 +66,28 @@ func _get_player() -> Node3D:
 	if player == null or not is_instance_valid(player):
 		player = get_tree().get_first_node_in_group("player")
 	return player
+
+func _origin() -> Vector3:
+	# Continue supplying the raft while the player explores an island, not land.
+	if not is_instance_valid(_raft):_raft=get_tree().get_first_node_in_group("raft")
+	if is_instance_valid(_raft):return _raft.global_position
+	var p:=_get_player()
+	return p.global_position if p!=null else Vector3.ZERO
+
+func _near_count() -> int:
+	var count:=0
+	var origin:=_origin()
+	for d in _active:
+		if not is_instance_valid(d) or d.collected or d.is_hooked or d._is_fading_out:continue
+		var offset: Vector3=d.global_position-origin
+		offset.y=0
+		if offset.length_squared()<=NEAR_RADIUS*NEAR_RADIUS:count+=1
+	return count
+
+func _next_item() -> String:
+	var kind: String=SUPPLY_CYCLE[_spawn_serial%SUPPLY_CYCLE.size()]
+	_spawn_serial+=1
+	return str(SALVAGE_POOL.pick_random()) if kind=="Salvage" else kind
 
 
 func _process(delta: float) -> void:
@@ -71,38 +103,41 @@ func _process(delta: float) -> void:
 # Fill the upstream corridor at startup — debris visible from frame 1.
 func _prewarm() -> void:
 	for i in mini(prewarm_count, max_debris):
-		if not is_inside_tree():
+		if not is_inside_tree() or _active.size()>=max_debris:
 			return
-		# Spread evenly from upstream to just past the player
-		var dist := randf_range(-upstream_distance, downstream_distance * 0.5)
-		_spawn_at(dist)
+		# Populate the existing current behind the loading screen. Runtime
+		# arrivals never appear in the near lane, even when supplies run low.
+		var fraction := float(i) / float(maxi(1,prewarm_count-1))
+		_spawn_at(lerpf(-6.0,-upstream_distance,fraction),8.0)
 		if i % 2 == 1:
 			await get_tree().process_frame
 
 
 # New debris always enters from upstream.
 func _spawn_upstream() -> void:
-	_spawn_at(-randf_range(upstream_distance * 0.8, upstream_distance))
+	_spawn_at(-randf_range(upstream_distance,upstream_distance+6.0),8.0)
 
 
-func _spawn_at(along_t: float) -> void:
-	if not debris_scene:
+func _spawn_at(along_t: float, half_width: float=-1.0) -> void:
+	if not debris_scene or _active.size()>=max_debris:
 		return
 
 	var d = debris_scene.instantiate()
 
-	var p := _get_player()
-	var origin := p.global_position if p != null else Vector3.ZERO
+	var origin := _origin()
 
 	# Random lateral position + small along-current jitter
-	var lateral := randf_range(-spawn_width * 0.5, spawn_width * 0.5)
-	var jitter := randf_range(-5.0, 5.0)
+	var width:=spawn_width*.5 if half_width<0 else half_width
+	var lateral := randf_range(-width,width)
+	var jitter := randf_range(-1.0,1.0)
+	if absf(along_t)<5.0 and absf(lateral)<3.0:lateral=3.5 if lateral>=0 else -3.5
 	var spawn_point := origin + _direction * (along_t + jitter) + _side * lateral
 
-	d.item_name = ITEM_POOL.pick_random()
+	d.item_name = _next_item()
 	d.current_direction = _direction
-	d.current_speed = current_speed * randf_range(0.7, 1.3)
+	d.current_speed = clampf(current_speed,0.1,0.45) * randf_range(0.85, 1.10)
 	d.travel_start = spawn_point
+	d._fade_duration = 4.0
 	d.rotation = Vector3(randf_range(-0.3, 0.3), randf() * TAU, randf_range(-0.3, 0.3))
 
 	d.position = spawn_point
@@ -113,15 +148,19 @@ func _spawn_at(along_t: float) -> void:
 
 
 func _cleanup() -> void:
+	var origin:=_origin()
 	for i in range(_active.size() - 1, -1, -1):
 		var d = _active[i]
 		if not is_instance_valid(d):
 			_active.remove_at(i)
 			continue
-		if d.freeze:
+		if d.freeze or d.is_hooked or d.collected:
 			continue
-		var travelled: float = (Vector3(d.global_position) - Vector3(d.travel_start)).dot(_direction)
-		if travelled > downstream_distance and not d._is_fading_out:
+		var offset: Vector3=d.global_position-origin
+		offset.y=0
+		var along:=offset.dot(_direction)
+		# Relative to the sailing raft, so distant bodies cannot fill the cap.
+		if (along>downstream_distance or along< -upstream_distance-10 or absf(offset.dot(_side))>spawn_width*.8) and not d._is_fading_out:
 			d.start_fade_out()
 		if d.is_fade_done():
 			d.queue_free()
