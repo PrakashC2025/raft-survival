@@ -1,4 +1,4 @@
-param([string]$GodotPath = 'C:\Program Files\Godot\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64_console.exe', [ValidateSet('food','tools','stations')][string]$IconFolder='food')
+param([string]$GodotPath = 'C:\Program Files\Godot\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64_console.exe', [ValidateSet('food','tools','stations','garden')][string]$IconFolder='food')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 # A small real directory, with no junctions or game save files.

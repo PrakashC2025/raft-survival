@@ -72,8 +72,8 @@ func _net_point(row: int, column: int) -> Vector3:
 
 func _strand(transforms: Array[Transform3D], a: Vector3, b: Vector3) -> void:
 	var direction := b-a
-	var basis := Basis(Quaternion(Vector3.UP,direction.normalized()))*Basis.from_scale(Vector3(1,direction.length(),1))
-	transforms.append(Transform3D(basis,(a+b)/2))
+	var strand_basis := Basis(Quaternion(Vector3.UP,direction.normalized()))*Basis.from_scale(Vector3(1,direction.length(),1))
+	transforms.append(Transform3D(strand_basis,(a+b)/2))
 
 func _add_batch(mesh: Mesh, transforms: Array[Transform3D], label: String) -> void:
 	var multi := MultiMesh.new()

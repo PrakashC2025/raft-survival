@@ -24,9 +24,13 @@ func _ready() -> void:
 	ui=preload("res://scripts/survival_service_ui.gd").new();ui.service=self;add_child(ui)
 	call_deferred("_restore_drops")
 func is_modal() -> bool:
+	var garden:=player.get_node_or_null("GardenPrep")
+	if garden!=null and garden.menu_open:return true
 	var repairs:=player.get_node_or_null("EquipmentRepairs")
 	return menu_open or (repairs!=null and repairs.menu_open)
 func busy() -> bool:
+	var garden:=player.get_node_or_null("GardenPrep")
+	if garden!=null and garden.busy():return true
 	var fire_actions:=player.get_node_or_null("FireActions")
 	var repairs:=player.get_node_or_null("EquipmentRepairs")
 	return not action.is_empty() or (fire_actions!=null and fire_actions.busy()) or (repairs!=null and repairs.busy())
@@ -143,6 +147,8 @@ func _open_menu() -> void:
 	menu_open=true
 	GameSettings.release_gameplay_input();Input.mouse_mode=Input.MOUSE_MODE_VISIBLE
 func close_menu() -> void:
+	var garden:=player.get_node_or_null("GardenPrep")
+	if garden!=null and garden.menu_open:garden.close()
 	var repairs:=player.get_node_or_null("EquipmentRepairs")
 	if repairs!=null and repairs.menu_open:repairs.close()
 	menu_open=false;storage=null;station=null;ui.close()

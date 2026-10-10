@@ -50,6 +50,7 @@ var testing_soil_revision := 0
 
 # What each craftable/placeable thing costs.
 const RECIPES := {
+	"SeedDryingTray":{"Wood":3,"Rope":1},
 	"WallTorch": {"Wood": 2, "Rope": 1},
 	"StorageBox": {"Wood":6,"Rope":2,"Metal":1},
 	"CookingSetup": {"Wood":8,"Stone":4,"Metal":2},
@@ -70,6 +71,7 @@ const RECIPES := {
 	"SandFilter": {"Wood": 6, "Sand": 4, "Sponge": 2, "Plastic": 2},
 	"WaterPurifier": {"Metal": 4, "Stone": 3, "Plastic": 2},
 	"WindGenerator": {"Wood":8,"Metal":4,"Screw":4,"Wire":2,"Motor":1,"Battery":1},
+	"FishingNet": {"Wood":4,"Rope":6,"Stone":2},
 	"ElectricLamp": {"Metal": 2, "Plastic": 2},
 	"ElectricPurifier": {"Metal": 8, "Plastic": 5, "Rope": 2},
 	"RescueRadio": {"Metal": 10, "Plastic": 6, "Rope": 2},
@@ -84,6 +86,7 @@ const ITEM_RECIPES := {
 	"Paddle": {"Wood":4,"Plastic":2,"Rope":1},
 	"Anchor": {"Metal":4,"Stone":4,"Rope":4},
 	"Fishing Rod": {"Wood": 3, "Rope": 2, "Plastic": 1},
+	"Barrel": {"Wood": 6, "Metal": 2, "Rope": 2},
 	"Spear": {"Wood": 3, "Stone": 2, "Rope": 1},
 	"Sail Kit": {"Wood": 8, "Rope": 4, "Plastic": 2},
 	"Motor Kit": {"Wood": 10, "Rope": 2, "Plastic": 5, "Metal": 4},
@@ -175,9 +178,12 @@ func total_count() -> int:
 	return t
 
 
-static func canonical_item(item: String) -> String:
+func canonical_item(item: String) -> String:
 	var crop := item.trim_suffix(" Seed")
 	return crop if crop in ["Potato","Coconut","Banana","Carrot","Tomato","Onion"] else item
+
+func notify_pickup(item: String, amount: int) -> void:
+	pickup_received.emit(canonical_item(item), amount)
 
 func total(item: String) -> int:
 	item = canonical_item(item)
@@ -341,8 +347,8 @@ func recipe_cost(recipe: String) -> Dictionary:
 	return cost
 
 func can_afford(recipe: String) -> bool:
-	# Old owned lamp kits/saved structures remain recoverable, but new lamps
-	# are excluded from crafting and salvage at the owner's request.
+	# Recovered LED kits and old saved lamps remain placeable. New LEDs
+	# wash up as salvage; their electronics are not manufactured from scraps.
 	if recipe=="ElectricLamp" and not has(recipe,1):return false
 	if not recipe_unlocked(recipe):
 		return false
@@ -503,6 +509,15 @@ func recipe_unlocked(recipe: String) -> bool:
 	return progress == null or bool(progress.call("unlocked", recipe))
 
 ## Commit costs and rewards together; a full inventory never loses ingredients.
+func can_exchange(costs: Dictionary, rewards: Dictionary) -> bool:
+	_ensure_slots()
+	var proposed:=slots.duplicate(true)
+	for item in costs:
+		if _simulate_remove(proposed,str(item),maxi(0,int(costs[item])))>0:return false
+	for item in rewards:
+		if _simulate_add(proposed,str(item),maxi(0,int(rewards[item])))>0:return false
+	return true
+
 func try_exchange(costs: Dictionary, rewards: Dictionary) -> bool:
 	_ensure_slots()
 	var proposed := slots.duplicate(true)

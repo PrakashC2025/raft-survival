@@ -1,7 +1,7 @@
 extends Control
 ## ============================================================
 ## MAIN MENU — survival-styled ocean start screen.
-## Original dusk sea shader behind cached matte panels and warm metal trim.
+## Animated open water behind a clear title and large ocean-coloured buttons.
 ##   - No saves            -> NEW GAME only
 ##   - Autosave present    -> CONTINUE (resumes it)
 ##   - Quick-save present  -> QUICK SAVE (second resume option)
@@ -240,6 +240,10 @@ const MODEL_WARM_PATHS := [
 	"res://addons/sky_3d/assets/textures/noiseClouds.png",
 ]
 var _warm_resources: Array[Resource] = []
+const RESOURCE_BATCH_SIZE := 8
+var _load_worker: Thread
+var _prepare_paths: Array = []
+var _prepare_index := 0
 var _load_requested := false
 var _load_progress := 0.0
 var _packed_game: PackedScene = null
@@ -277,7 +281,7 @@ func _ready() -> void:
 	_buttons.append({"id": "settings", "label": "SETTINGS", "sub": ""})
 	# Build the hit rects right away: the first tap must never arrive before
 	# the first _draw() has run.
-	_vp = size
+	_vp = size / _ui_scale()
 	_layout_buttons()
 	# Start warming the game scene on a worker thread.
 	_request_game_load()
@@ -292,7 +296,7 @@ func _is_mobile() -> bool:
 func _notification(what: int) -> void:
 	# Rotation / split-screen / foldables resize the viewport at runtime.
 	if what == NOTIFICATION_RESIZED:
-		_vp = size
+		_vp = size / _ui_scale()
 		_layout_buttons()
 		queue_redraw()
 
@@ -329,7 +333,7 @@ func _process(delta: float) -> void:
 			return
 	if not visible:
 		return
-	_vp = size
+	_vp = size / _ui_scale()
 	# hover tracking (mouse only — phones have no hover)
 	if not _is_mobile():
 		_hover = _hit(get_local_mouse_position())
@@ -411,6 +415,7 @@ func _to_local(pos: Vector2) -> Vector2:
 
 func _hit(pos: Vector2) -> int:
 	_ensure_layout()
+	pos/=_ui_scale()
 	for i in range(_btn_rects.size()):
 		if (_btn_rects[i] as Rect2).has_point(pos):
 			return i
@@ -420,8 +425,8 @@ func _hit(pos: Vector2) -> int:
 ## The rects are normally built during _draw(); make sure they exist before
 ## any hit test so a tap on the very first frame still lands.
 func _ensure_layout() -> void:
-	if size != _vp or _btn_rects.size() != _buttons.size():
-		_vp = size
+	if size / _ui_scale() != _vp or _btn_rects.size() != _buttons.size():
+		_vp = size / _ui_scale()
 		_layout_buttons()
 
 
@@ -576,11 +581,14 @@ func _fail(msg: String) -> void:
 	_remove_cancel_button()
 	# Real resource errors unlock retry. An in-progress request is kept; launching
 	# another request for the same path would not restart the existing work.
-	_load_requested = ResourceLoader.load_threaded_get_status(GAME_SCENE) == ResourceLoader.THREAD_LOAD_IN_PROGRESS
+	_load_requested = _load_worker != null and _load_worker.is_started()
 	queue_redraw()
 
 
-## Kick off a background (threaded) load of main.tscn so the tap is instant.
+## Load on one explicitly joined worker at a time. Godot 4.7.1's threaded
+## request API leaks an internal zero-reference token per uncached request.
+## Reading resources with ResourceLoader.load on our own worker avoids it
+## while retaining serial script compilation and a responsive menu.
 func _request_game_load() -> void:
 	if _load_requested:
 		return
@@ -589,62 +597,88 @@ func _request_game_load() -> void:
 		_fail("MISSING  " + GAME_SCENE)
 		return
 	_warming_scripts = true
-	var warm_paths: Array = MODEL_WARM_PATHS + SCRIPT_WARM_PATHS
+	_prepare_paths = MODEL_WARM_PATHS + SCRIPT_WARM_PATHS
+	_warm_resources.clear()
+	_prepare_index = 0
+	_load_progress = 0.0
 	for image in preload("res://scripts/item_art.gd").STATION_IMAGES.values():
-		warm_paths.append("res://textures/ui/stations/"+str(image)+".png")
+		_prepare_paths.append("res://textures/ui/stations/"+str(image)+".png")
 	for item in ["solar_torch","walkie_talkie","binoculars","repair_kit"]:
-		warm_paths.append("res://textures/ui/tools/"+item+".png")
+		_prepare_paths.append("res://textures/ui/tools/"+item+".png")
 	if ResourceLoader.exists("res://textures/ui/food/recipe_atlas.png"):
-		warm_paths.append("res://textures/ui/food/recipe_atlas.png")
+		_prepare_paths.append("res://textures/ui/food/recipe_atlas.png")
 	else:
 		for dish in preload("res://scripts/food_rules.gd").RECIPES:
-			warm_paths.append("res://textures/ui/food/"+str(dish).to_lower().replace(" ","_")+".png")
+			_prepare_paths.append("res://textures/ui/food/"+str(dish).to_lower().replace(" ","_")+".png")
 	for dish in ["Tumbler","Ocean Water Tumbler","Boiled Water Tumbler","Diving Tank"]:
-		warm_paths.append("res://textures/ui/food/"+str(dish).to_lower().replace(" ","_")+".png")
-	for path in warm_paths:
-		var prepare_started := Time.get_ticks_msec()
-		if ResourceLoader.load_threaded_request(path) != OK:
-			_warming_scripts = false
-			_fail("COULD NOT PREPARE GAME FILES")
-			return
-		while true:
-			await get_tree().process_frame
-			if not is_inside_tree(): return
-			var model_status := ResourceLoader.load_threaded_get_status(path)
-			if model_status == ResourceLoader.THREAD_LOAD_IN_PROGRESS: continue
-			if model_status != ResourceLoader.THREAD_LOAD_LOADED:
-				_warming_scripts = false
-				_fail("COULD NOT PREPARE GAME FILES")
-				return
-			_warm_resources.append(ResourceLoader.load_threaded_get(path))
-			break
-		if "--profile-loading" in OS.get_cmdline_user_args():
-			print("LOAD RESOURCE ", path, " ", Time.get_ticks_msec()-prepare_started, " ms")
-		_load_progress = 0.60 * float(_warm_resources.size()) / float(warm_paths.size())
-	_warming_scripts = false
-	if ResourceLoader.load_threaded_request(GAME_SCENE) != OK:
-		_fail("COULD NOT START LOADING  " + GAME_SCENE)
+		_prepare_paths.append("res://textures/ui/food/"+str(dish).to_lower().replace(" ","_")+".png")
+	_start_resource_load(str(_prepare_paths[0]))
+
+
+func _start_resource_load(path: String) -> void:
+	var paths: Array = _prepare_paths.slice(_prepare_index, _prepare_index + RESOURCE_BATCH_SIZE) if _warming_scripts else [path]
+	_load_worker = Thread.new()
+	var error := _load_worker.start(_load_resource_worker.bind(paths))
+	if error != OK:
+		_load_worker = null
+		_warming_scripts = false
+		_fail("COULD NOT START LOADING  " + path)
+
+
+func _load_resource_worker(paths: Array) -> Dictionary:
+	# Worker code never accesses the scene tree or gameplay state.
+	# Keep dependency/script order, without a frame and thread launch per file.
+	var resources: Array[Resource] = []
+	var timings: Array = []
+	for path: String in paths:
+		var started := Time.get_ticks_msec()
+		var resource := ResourceLoader.load(path)
+		if resource == null: return {"resources": resources, "failed": path, "timings": timings}
+		resources.append(resource)
+		timings.append([path, Time.get_ticks_msec() - started])
+	return {"resources": resources, "failed": "", "timings": timings}
 
 
 func _poll_game_load() -> void:
-	if not _load_requested or _warming_scripts or _packed_game != null:
+	if not _load_requested or _packed_game != null or _load_worker == null:
 		return
-	var prog: Array = [0.0]
-	var st := ResourceLoader.load_threaded_get_status(GAME_SCENE, prog)
-	if st == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
-		if prog.size() > 0:
-			_load_progress = 0.60 + 0.40 * clampf(float(prog[prog.size() - 1]), 0.0, 1.0)
+	if _load_worker.is_alive():
 		return
-	if st == ResourceLoader.THREAD_LOAD_LOADED:
-		var res: Resource = ResourceLoader.load_threaded_get(GAME_SCENE)
-		if res is PackedScene:
-			_packed_game = res
-			_load_progress = 1.0
-			queue_redraw()
-			return
+	# Join only after completion; this never blocks a normal render frame.
+	var result: Dictionary = _load_worker.wait_to_finish()
+	_load_worker = null
+	if not str(result.failed).is_empty():
+		_warming_scripts = false
+		_fail("COULD NOT PREPARE GAME FILES · " + str(result.failed))
+		return
+	if "--profile-loading" in OS.get_cmdline_user_args():
+		for timing in result.timings: print("LOAD RESOURCE ", timing[0], " ", timing[1], " ms")
+	var resources: Array = result.resources
+	if _warming_scripts:
+		_warm_resources.append_array(resources)
+		_prepare_index += resources.size()
+		_load_progress = 0.60 * float(_prepare_index) / float(_prepare_paths.size())
+		if _prepare_index < _prepare_paths.size():
+			_start_resource_load(str(_prepare_paths[_prepare_index]))
+		else:
+			_warming_scripts = false
+			_start_resource_load(GAME_SCENE)
+		return
+	var prepared: Resource = resources[0]
+	if prepared is PackedScene:
+		_packed_game = prepared
+		_load_progress = 1.0
+		queue_redraw()
+	else:
 		_fail(GAME_SCENE + "  IS NOT A SCENE")
-		return
-	_fail("GAME FILES FAILED TO LOAD · install the updated APK (code %d)" % int(st))
+
+
+func _exit_tree() -> void:
+	# Closing the menu/program mid-load must join its owned thread before the
+	# script is freed. Cancel Loading keeps it alive to finish in the lobby.
+	if _load_worker != null and _load_worker.is_started():
+		_load_worker.wait_to_finish()
+	_load_worker = null
 
 
 # ============================================================
@@ -655,38 +689,42 @@ func _layout_buttons() -> void:
 	var s := _vp
 	if s.x <= 0.0 or s.y <= 0.0:
 		return
-	var bw: float = minf(s.x * 0.78, 440.0)
-	var bhs: Array = []
-	for b in _buttons:
-		bhs.append(clampf(s.y * 0.12, 56.0, 84.0) if str(b["sub"]) != "" else clampf(s.y * 0.10, 52.0, 72.0))
-	var gap: float = clampf(s.y * 0.02, 10.0, 16.0)
-	var total_h: float = 0.0
-	for h in bhs:
-		total_h += float(h)
-	total_h += gap * float(maxi(0, bhs.size() - 1))
-	var y: float = maxf(s.y * 0.31, (s.y * 0.5) - total_h * 0.5 + s.y * 0.10)
+	var landscape:=s.x/s.y>1.3 and s.x>=600
+	var short_screen:=landscape and s.y<570
+	var bw:=minf(s.x*.38,420) if landscape else minf(s.x-40,420)
+	var gap:=8.0 if s.y<570 else 10.0
+	var bh:=clampf((s.y*.48-gap*maxi(0,_buttons.size()-1))/maxi(_buttons.size(),1),48,72)
+	if short_screen:bh=clampf((s.y-100-gap*maxi(0,_buttons.size()-1))/maxi(_buttons.size(),1),48,68)
+	var total_h:=_buttons.size()*bh+gap*maxi(0,_buttons.size()-1)
+	var x:=s.x*.065 if landscape else (s.x-bw)*.5
+	if short_screen:x=s.x*.54
+	var y:=s.y*.42 if landscape else s.y*.39
+	if short_screen:y=(s.y-total_h)*.5
+	y=minf(y,s.y-total_h-54)
 	for i in range(_buttons.size()):
-		var w2: float = bw
-		if str(_buttons[i]["sub"]) != "":
-			w2 = bw  # same width; subs are short
-		_btn_rects.append(Rect2((s.x - w2) * 0.5, y, w2, bhs[i]))
-		y += bhs[i] + gap
+		_btn_rects.append(Rect2(x,y,bw,bh))
+		y+=bh+gap
 
 
 # ============================================================
 # DRAW — sky / sun / ocean / title / buttons
 # ============================================================
 func _draw() -> void:
+	draw_set_transform(Vector2.ZERO,0,Vector2.ONE*_ui_scale())
 	if _vp.x <= 0.0:
-		_vp = size
+		_vp = size / _ui_scale()
 	if _vp.x <= 0.0:
 		return
 	_layout_buttons()
 	var s := _vp
+	_draw_lobby_scene(s)
 	_draw_title(s)
 	_draw_buttons(s)
 	_draw_error(s)
 	_draw_footer(s)
+
+func _ui_scale() -> float:
+	return preload("res://scripts/ocean_ui.gd").scale_for(get_viewport())
 
 
 func _lerp_color(a: Color, b: Color, k: float) -> Color:
@@ -761,108 +799,90 @@ func _draw_ocean(s: Vector2, horizon: float) -> void:
 		draw_rect(Rect2(gx - gw * 0.5, gy, gw, 3.0), Color(1.0, 0.9, 0.6, ga))
 
 
+func _draw_lobby_scene(s: Vector2) -> void:
+	if s.x/s.y<1.3:return
+	# A distant island and navigation rose are original vector artwork.
+	var centre:=Vector2(s.x*.87,s.y*.458)
+	var ink:=Color(.07,.23,.28,.65)
+	draw_colored_polygon(PackedVector2Array([centre+Vector2(-68,2),centre+Vector2(-44,-8),centre+Vector2(-9,-13),centre+Vector2(23,-7),centre+Vector2(58,2)]),ink)
+	var palm:=centre+Vector2(-5,-10)
+	draw_polyline(PackedVector2Array([palm,palm+Vector2(4,-22),palm+Vector2(11,-35)]),ink,2,true)
+	var crown:=palm+Vector2(11,-35)
+	for direction in [Vector2(-22,-2),Vector2(-15,-10),Vector2(14,-12),Vector2(22,-1),Vector2(19,8)]:
+		draw_polyline(PackedVector2Array([crown,crown+direction*.55+Vector2(0,-4),crown+direction]),ink,2,true)
+	if s.y<570:return
+	var rose:=Vector2(s.x*.90,s.y*.82)
+	draw_arc(rose,38,0,TAU,48,Color(.68,.90,.89,.18),1,true)
+	for index in 8:
+		var direction:=Vector2.from_angle(index*TAU/8)
+		draw_line(rose+direction*30,rose+direction*36,Color(.68,.90,.89,.35),1,true)
+	draw_colored_polygon(PackedVector2Array([rose+Vector2(0,-27),rose+Vector2(7,0),rose+Vector2(0,19),rose+Vector2(-7,0)]),Color(.72,.96,.93,.38))
+	_draw_text("N",rose+Vector2(-5,-45),13,Color(.72,.96,.93,.7))
+
 func _draw_title(s: Vector2) -> void:
-	var font := ThemeDB.fallback_font
-	var fs: int = int(clampf(s.y * 0.075, 28.0, 54.0))
-	var title := "OCEAN SURVIVAL"
-	var tw: float = font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-	_title_w = tw
-	var cx: float = s.x * 0.5
-	var ty: float = s.y * 0.08 + fs
-	# wooden plaque behind the title
-	var pad: float = fs * 0.8
-	var plaque := Rect2(cx - tw * 0.5 - pad, ty - fs * 1.15, tw + pad * 2.0, fs * 1.9)
-	_draw_rounded(plaque, 10.0, UI_SURFACE.INK)
-	_draw_rounded(plaque, 10.0, UI_SURFACE.BRASS, false, 1.0)
-	# wood grain: a few faint darker streaks
-	for i in range(6):
-		var gy2: float = plaque.position.y + 6.0 + float(i) * (plaque.size.y - 12.0) / 5.0
-		draw_line(Vector2(plaque.position.x + 8.0, gy2), Vector2(plaque.end.x - 8.0, gy2 + 1.5),
-			Color(0.0, 0.0, 0.0, 0.18), 2.0)
-	# rivets at the plaque corners
-	var rr2: float = 3.4
-	for pt in [plaque.position + Vector2(10, 10), Vector2(plaque.end.x - 10, plaque.position.y + 10),
-			Vector2(plaque.position.x + 10, plaque.end.y - 10), Vector2(plaque.end.x - 10, plaque.end.y - 10)]:
-		draw_circle(pt, rr2, Color(0.55, 0.5, 0.32, 0.9))
-	# title text with a soft shadow
-	_draw_text(title, Vector2(cx - tw * 0.5 + 3.0, ty + fs * 0.32 + 3.0), fs, Color(0.0, 0.0, 0.0, 0.55))
-	_draw_text(title, Vector2(cx - tw * 0.5, ty + fs * 0.32), fs, Color(1.0, 0.87, 0.58, 1.0))
-	# subtitle
-	var sub := "A LIFE BEYOND THE SHORE"
-	var sfs: int = int(fs * 0.32)
-	var sw2: float = font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x
-	_draw_text(sub, Vector2(cx - sw2 * 0.5, ty + fs * 1.35), sfs, Color(0.55, 0.88, 0.95, 0.95))
+	var landscape:=s.x/s.y>1.3 and s.x>=600
+	var short_screen:=landscape and s.y<570
+	var width:=s.x*.42 if landscape else s.x-40
+	var fs:=int(clampf(s.y*.095,38,78))
+	var font:=ThemeDB.fallback_font
+	fs=mini(fs,int(fs*width/maxf(font.get_string_size("OCEAN",HORIZONTAL_ALIGNMENT_LEFT,-1,fs).x,1)))
+	var x:=s.x*.065 if landscape else (s.x-font.get_string_size("OCEAN",HORIZONTAL_ALIGNMENT_LEFT,-1,fs).x)*.5
+	var y:=s.y*.12+fs*.72
+	if short_screen:y=s.y*.25
+	var tag:="OPEN WATER · A NEW BEGINNING"
+	var tag_size:=12 if short_screen else 13
+	var tag_x:=x if landscape else (s.x-font.get_string_size(tag,HORIZONTAL_ALIGNMENT_LEFT,-1,tag_size).x)*.5
+	_draw_text(tag,Vector2(tag_x,y-fs-16),tag_size,Color("82d9d3"))
+	_draw_text("OCEAN",Vector2(x+2,y+3),fs,Color(0,.03,.06,.35))
+	_draw_text("OCEAN",Vector2(x,y),fs,Color("f0fafb"))
+	var sub_fs:=int(fs*.64)
+	var title_width:=font.get_string_size("SURVIVAL",HORIZONTAL_ALIGNMENT_LEFT,-1,sub_fs).x
+	var second_x:=x if landscape else (s.x-title_width)*.5
+	_draw_text("SURVIVAL",Vector2(second_x,y+fs*.72),sub_fs,Color("8febe0"))
+	_title_w=maxf(title_width,font.get_string_size("OCEAN",HORIZONTAL_ALIGNMENT_LEFT,-1,fs).x)
+	var line_y:=y+fs*.94
+	var line_x:=x if landscape else s.x*.5-30
+	draw_line(Vector2(line_x,line_y),Vector2(line_x+60,line_y),Color("79e1d6"),2,true)
+	var caption:="Build a home. Find your horizon."
+	var caption_size:=13 if short_screen else 16
+	var caption_x:=x if landscape else (s.x-font.get_string_size(caption,HORIZONTAL_ALIGNMENT_LEFT,-1,caption_size).x)*.5
+	_draw_text(caption,Vector2(caption_x,line_y+29),caption_size,Color("b6d4df"))
 
 
 func _draw_buttons(_s: Vector2) -> void:
-	for i in range(_btn_rects.size()):
-		var r2 := _btn_rects[i] as Rect2
-		var b: Dictionary = _buttons[i]
-		var label: String = b["label"]
-		var sub: String = b["sub"]
-		var is_resume: bool = b["id"] != "new"
-		var hovered: bool = i == _hover
-		var pressed: bool = i == _press
-		var off: float = 3.0 if pressed else 0.0
-		var rr := Rect2(r2.position.x, r2.position.y + off, r2.size.x, r2.size.y)
-		# drop shadow
-		_draw_rounded(Rect2(rr.position + Vector2(0, 5), rr.size), rr.size.y * 0.22,
-			Color(0.0, 0.0, 0.0, 0.4))
-		# plank body + border
-		var base := Color(0.075, 0.105, 0.105, 0.97)
-		if is_resume:
-			base = Color(0.2, 0.23, 0.16, 0.97) if b["id"] == "quick" else base
-		if hovered:
-			base = base.lightened(0.12)
-		if pressed:
-			base = base.darkened(0.14)
-		_draw_rounded(rr, rr.size.y * 0.2, base)
-		var border_c := UI_SURFACE.BRASS
-		if hovered:
-			border_c = Color(0.95, 0.72, 0.32, 0.95)
-		elif is_resume:
-			border_c = Color(0.62, 0.5, 0.28, 0.9)
-		_draw_rounded(rr, rr.size.y * 0.2, border_c, false, 2.0)
-		# top edge catch-light (plank highlight)
-		draw_line(Vector2(rr.position.x + 8.0, rr.position.y + 2.0),
-			Vector2(rr.end.x - 8.0, rr.position.y + 2.0), Color(1.0, 1.0, 1.0, 0.14), 2.0)
-		# side icon
-		var icon_c := Vector2(rr.position.x + rr.size.y * 0.5, rr.position.y + rr.size.y * 0.5)
-		_draw_button_icon(icon_c, rr.size.y * 0.42, b["id"],
-			Color(1.0, 0.9, 0.65, 0.95) if hovered else Color(0.85, 0.72, 0.45, 0.9))
-		# label + sub (centered, pushed right of the icon)
-		var font := ThemeDB.fallback_font
-		var fs: int = int(clampf(rr.size.y * 0.3, 20.0, 30.0))
-		var show_label := label
-		var show_sub := sub
-		var running: bool = _busy and i == _pending_idx
+	for i in _btn_rects.size():
+		var rect:Rect2=_btn_rects[i]
+		var button:Dictionary=_buttons[i]
+		var hovered:=i==_hover
+		var pressed:=i==_press
+		var primary: bool=i==0 and button.id!="settings" and button.id!="cancel"
+		var rr:=Rect2(rect.position+Vector2(0,2 if pressed else 0),rect.size)
+		var base:=Color("176879") if primary else Color(.035,.13,.19,.88)
+		if hovered:base=base.lightened(.12)
+		if pressed:base=base.darkened(.10)
+		_draw_rounded(Rect2(rr.position+Vector2(0,5),rr.size),14,Color(0,.025,.05,.25))
+		_draw_rounded(rr,14,base)
+		_draw_rounded(rr,14,Color("72ded5") if primary or hovered else Color(.37,.64,.72,.35),false,1)
+		var icon:=rr.position+Vector2(30,rr.size.y*.5)
+		_draw_button_icon(icon,17,button.id,Color("c4f3ed") if primary else Color("8fbdcb"))
+		var label:String=button.label
+		var sub:String=button.sub
+		if sub.is_empty():sub={"new":"Begin your voyage","settings":"Make it yours","cancel":"Return to the lobby"}.get(button.id,"")
+		var running:=_busy and i==_pending_idx
 		if running:
-			# Immediate feedback: the tap registered, the world is loading.
-			show_label = "LOADING…"
-			show_sub = "%d%%" % int(roundf(_load_progress * 100.0))
-			if _wait_seconds >= LONG_LOAD_NOTICE_AFTER:
-				show_sub += " · STILL LOADING"
-		var lw2: float = font.get_string_size(show_label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		var lx: float = rr.position.x + (rr.size.x - lw2) * 0.5 + rr.size.y * 0.2
-		var ly: float = rr.position.y + rr.size.y * 0.44
-		_draw_text(show_label, Vector2(lx, ly + fs * 0.3), fs, Color(1.0, 0.98, 0.92, 1.0))
-		if show_sub != "":
-			var sfs: int = int(clampf(rr.size.y * 0.2, 13.0, 18.0))
-			var sw3: float = font.get_string_size(show_sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x
-			_draw_text(show_sub, Vector2(rr.position.x + (rr.size.x - sw3) * 0.5, ly + fs * 0.55 + sfs * 0.85),
-				sfs, Color(0.6, 0.85, 0.95, 0.85))
+			label="LOADING…";sub="Preparing ocean · %d%%"%roundi(_load_progress*100)
+			if _wait_seconds>=LONG_LOAD_NOTICE_AFTER:sub="%d%% · Still loading"%roundi(_load_progress*100)
+		var fs:=20 if rr.size.y>=60 else 17
+		var label_y:=rr.position.y+rr.size.y*.44 if not sub.is_empty() else rr.position.y+rr.size.y*.5+fs*.35
+		_draw_text(label,Vector2(rr.position.x+60,label_y),fs,Color("eef8fa"))
+		if not sub.is_empty():_draw_text(sub,Vector2(rr.position.x+60,label_y+20),12,Color("a8ced8"))
+		draw_polyline(PackedVector2Array([rr.position+Vector2(rr.size.x-27,rr.size.y*.5-5),rr.position+Vector2(rr.size.x-22,rr.size.y*.5),rr.position+Vector2(rr.size.x-27,rr.size.y*.5+5)]),Color("91d3d5"),2,true)
 		if running:
-			# thin progress bar along the bottom of the plank
-			var bar := Rect2(rr.position.x + 14.0, rr.end.y - 12.0, rr.size.x - 28.0, 5.0)
-			_draw_rounded(bar, 2.5, Color(0.0, 0.0, 0.0, 0.45))
-			var fill_w: float = bar.size.x * clampf(_load_progress, 0.0, 1.0)
-			if fill_w > 2.0:
-				_draw_rounded(Rect2(bar.position, Vector2(fill_w, bar.size.y)), 2.5,
-					Color(1.0, 0.78, 0.35, 0.95))
+			var bar:=Rect2(rr.position.x+16,rr.end.y-6,rr.size.x-32,2)
+			draw_rect(bar,Color(.02,.1,.15,.5))
+			draw_rect(Rect2(bar.position,Vector2(bar.size.x*clampf(_load_progress,0,1),2)),Color("64e3d5"))
 
 
-## Red banner shown when the game scene could not be opened — a visible reason
-## beats a menu that silently ignores every tap.
 func _draw_error(s: Vector2) -> void:
 	if _error == "":
 		return
@@ -913,11 +933,14 @@ func _draw_button_icon(c: Vector2, r: float, id: String, col: Color) -> void:
 
 
 func _draw_footer(s: Vector2) -> void:
-	var fs := 14
-	var foot := "BUILD. SURVIVE. SAIL ON.  •  v" + str(ProjectSettings.get_setting("application/config/version", "1.1.7"))
-	var font := ThemeDB.fallback_font
-	var tw: float = font.get_string_size(foot, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-	_draw_text(foot, Vector2((s.x - tw) * 0.5, s.y - fs * 1.4), fs, Color(1, 1, 1, 0.28))
+	var foot:="YOUR OCEAN. YOUR STORY."
+	var fs:=11 if s.x<700 else 12
+	var font:=ThemeDB.fallback_font
+	var x:=s.x*.065 if s.x/s.y>1.3 and s.x>=600 else (s.x-font.get_string_size(foot,HORIZONTAL_ALIGNMENT_LEFT,-1,fs).x)*.5
+	_draw_text(foot,Vector2(x,s.y-22),fs,Color(.65,.83,.87,.75))
+	if s.x>=600:
+		var version:="v"+str(ProjectSettings.get_setting("application/config/version","1.1.7"))
+		_draw_text(version,Vector2(s.x-80,s.y-22),12,Color(.65,.83,.87,.65))
 
 
 func _draw_text(text: String, top_left: Vector2, font_size: int, color: Color) -> void:

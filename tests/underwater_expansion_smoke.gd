@@ -71,7 +71,12 @@ func _run() -> void:
 	check(spring.get_node("BiomeTerrain").material_override.get_shader_parameter("spring")==true,"Spring terrain has its own grass and beach material")
 	check(current_scene.get_node("WinterIsle").find_children("GlacialIce*","MeshInstance3D",true,false).size()==8,"Winter has grounded blue glacial outcrops")
 	var floor_node:=sea.get_node("CollectibleSeabed") as StaticBody3D
-	var from:=Vector3(145,-20,85)
+	player.global_position=Vector3(145,-2,85)
+	sea.stream.call("request_position",Vector2(145,85))
+	for unused in 240:
+		await frames(1)
+		if sea.stream.call("ready_at",Vector2(145,85)):break
+	var from:=Vector3(145,float(sea.call("surface_height",Vector2(145,85)))+3,85)
 	var hit:=player.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from,from+Vector3.DOWN*40,1))
 	check(not hit.is_empty() and hit.collider==floor_node and absf(Vector3(hit.position).y-float(sea.call("surface_height",Vector2(145,85))))<.01,"Sand floor collision matches interpolated mesh heights")
 	check(sea.get_node("OceanSandFloor").mesh.surface_get_array_len(0)==4225,"The broad ocean floor has a fixed mesh budget")
@@ -179,7 +184,7 @@ func _run() -> void:
 	player.camera.global_position=player.global_position+Vector3(2,1.3,3);player.camera.look_at(player.global_position+Vector3(0,.3,0));await shot("swimmer")
 	player.cam_mode=0;player.call("_apply_camera_mode");player._body_visual.rotation.x=0;player.is_swimming=false
 	player.global_position=spring.global_position+Vector3(0,7,32);player.camera.global_position=player.global_position+Vector3.UP*.9;player.camera.look_at(spring.global_position+Vector3(0,4,0));await shot("spring")
-	hud._craft_open=true;hud._craft_page=0;hud._craft_selected="Diving Tank";hud.call("_compute_layout");await shot("craft");hud._craft_open=false
+	hud.toggle_crafting();hud._craft_menu.select_item("Diving Tank");await shot("craft");hud._close_crafting()
 	if preview:
 		player.global_position=raft.global_position+Vector3.UP*1.0;player.is_swimming=false;player.cam_mode=1;player.call("_apply_camera_mode")
 		var review_camera:=Camera3D.new();review_camera.fov=65;current_scene.add_child(review_camera);review_camera.current=true

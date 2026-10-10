@@ -40,15 +40,12 @@ func _run() -> void:
 	player.set_process(false)
 	player.set_physics_process(false)
 	check(int(inv.call("total", "Carrot Seed")) == 4 and int(inv.call("total", "Tomato Seed")) == 4, "New Game grants the new crop seeds")
-	check(player.BUILD_RECIPE_NAMES.size() == 22 and player.BUILD_RECIPE_NAMES[3] == "Stairs" and player.BUILD_RECIPE_NAMES[16] == "HalfWall" and player.BUILD_RECIPE_NAMES[18] == "WallTorch" and player.BUILD_RECIPE_NAMES[19] == "SandFilter" and player.BUILD_RECIPE_NAMES[20]=="StorageBox" and player.BUILD_RECIPE_NAMES[21]=="CookingSetup", "New structures append without changing legacy build indexes")
+	check(player.BUILD_RECIPE_NAMES.size() == 24 and player.BUILD_RECIPE_NAMES[3] == "Stairs" and player.BUILD_RECIPE_NAMES[16] == "HalfWall" and player.BUILD_RECIPE_NAMES[18] == "WallTorch" and player.BUILD_RECIPE_NAMES[19] == "SandFilter" and player.BUILD_RECIPE_NAMES[20]=="StorageBox" and player.BUILD_RECIPE_NAMES[21]=="CookingSetup", "New structures append without changing legacy build indexes")
 	var hud := player.get_node("CanvasLayer/SurvivalHUD")
-	hud.set("_craft_open", true)
-	hud.call("_compute_layout")
-	var cards: Array = hud.get("_craft_card_rects")
-	var panel: Rect2 = hud.get("_craft_panel_rect")
-	check(cards.size() == hud.CRAFT_PAGE_SIZE and panel.encloses(cards[-1]), "Paged crafting cards fit inside the panel with room for material confirmation")
-	hud.set("_craft_open", false)
-	hud.call("_compute_layout")
+	hud.toggle_crafting()
+	await frames(5)
+	check(hud._craft_menu.cards.size() == hud.CRAFT_ORDER.size()+3 and hud._craft_menu._list.get_v_scroll_bar().max_value > hud._craft_menu._list.size.y, "All crafting products share a scrolling list")
+	hud._close_crafting()
 	# Exercise real placement and saved state, rather than only instantiating props.
 	var raft := current_scene.get_node("Raft") as Node3D
 	var container := raft.get_node("BuiltPieces")
@@ -132,10 +129,10 @@ func _run() -> void:
 		player.velocity = Vector3(0, -2, 2.4)
 		player.call("_try_step_up")
 		player.move_and_slide()
-		if player.position.z >= 1002.85:
+		if player.position.z >= 1000+stairs.run+.08:
 			break
 	print("STAIR ASCENT ", player.position)
-	check(player.position.z > 1002.75 and player.position.y > 7.2, "Player walks to the compact stair landing without jumping")
+	check(player.position.z > 1000+stairs.run and player.position.y > 7.2, "Player walks to the compact stair landing without jumping")
 	for i in range(185):
 		await physics_frame
 		player.velocity = Vector3(0, minf(player.velocity.y, 0.0), -2.4)
@@ -154,10 +151,10 @@ func _run() -> void:
 		player.velocity = Vector3(2.4, -2, 0)
 		player.call("_try_step_up")
 		player.move_and_slide()
-		if player.position.x >= 1002.85:
+		if player.position.x >= 1000+stairs.run+.08:
 			break
 	print("ROTATED ASCENT ", player.position)
-	check(player.position.x > 1002.75 and player.position.y > 7.2, "Rotated compact stairs are also walkable")
+	check(player.position.x > 1000+stairs.run and player.position.y > 7.2, "Rotated compact stairs are also walkable")
 	var rain := player.get_node("RainSystem")
 	rain.call("start_rain", 120.0)
 	var time_of_day := current_scene.get_node("Sky3D/TimeOfDay")
@@ -274,6 +271,7 @@ func _run() -> void:
 	check(equipment.get("aiming") and bow_camera.fov < normal_fov, "Tapping AIM zooms the actual camera")
 	var bow_yaw := player.rotation.y
 	player.call("add_look_input", Vector2(20, 0), 0.003)
+	player.call("_advance_look",1.0)
 	check(is_equal_approx(player.rotation.y - bow_yaw, -20.0 * 0.003 * 0.55), "Aiming reduces look sensitivity for precise hunting")
 	bow_touch(controls, shoot_button, true)
 	player.call("_handle_pickup")

@@ -3,6 +3,7 @@ extends RefCounted
 const RULES := preload("res://scripts/food_rules.gd")
 const SKIN := preload("res://shaders/meal_surface.gdshader")
 const COLORS := {"Potato":Color(.80,.65,.37),"Tomato":Color(.72,.075,.025),"Carrot":Color(.94,.31,.035),
+	"Bell Pepper":Color(.64,.075,.03),"Cucumber":Color(.63,.77,.36),"Pumpkin":Color(.87,.46,.08),"Strawberry":Color(.77,.10,.065),"Corn":Color(.88,.68,.18),"Papaya":Color(.88,.54,.12),
 	"Onion":Color(.84,.78,.57),"Banana":Color(.91,.77,.43),"Coconut":Color(.91,.86,.73),
 	"Fish":Color(.75,.67,.49),"Raw Meat":Color(.49,.14,.065),"Raw Bird":Color(.71,.44,.24),"Raw Crab":Color(.83,.27,.095)}
 static var _meshes: Dictionary={}
@@ -23,7 +24,7 @@ static func create(dish: String,radius: float=.108,progress: float=1.0,unique_ma
 	if RULES.RECIPES[dish].ingredients.has("Clean Water Can"):
 		var broth:=MeshInstance3D.new();broth.name="Broth";var disc:=CylinderMesh.new()
 		disc.top_radius=radius;disc.bottom_radius=radius;disc.height=.008;disc.radial_segments=32;broth.mesh=disc
-		var liquid:=StandardMaterial3D.new();liquid.roughness=.23;liquid.albedo_color=Color(.62,.22,.055) if RULES.RECIPES[dish].ingredients.has("Tomato") else Color(.58,.39,.15)
+		var liquid:=StandardMaterial3D.new();liquid.roughness=.23;liquid.albedo_color=Color(.62,.22,.055) if RULES.RECIPES[dish].ingredients.has("Tomato") or RULES.RECIPES[dish].ingredients.has("Sliced Tomato") else Color(.58,.39,.15)
 		if dish=="Tropical Fruit Stew":liquid.albedo_color=Color(.73,.62,.36)
 		broth.material_override=liquid;root.add_child(broth)
 	return root
@@ -42,7 +43,7 @@ static func _ingredients(dish: String) -> ArrayMesh:
 	var types: Array=RULES.RECIPES[dish].ingredients.keys();types.erase("Clean Water Can")
 	var surface:=SurfaceTool.new();surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for index in 18:
-		var kind: String=types[index%types.size()]
+		var kind: String=str(types[index%types.size()]).trim_prefix("Sliced ")
 		var angle:=index*2.39996;var distance_value:=sqrt((index+.5)/18.0)*.19
 		var at:=Vector3(cos(angle)*distance_value,.012+float(index%3)*.004,sin(angle)*distance_value)
 		var basis:=Basis(Vector3.UP,angle)*Basis(Vector3.RIGHT,float(index%3-1)*.10)
@@ -58,8 +59,8 @@ static func _ingredients(dish: String) -> ArrayMesh:
 			var centre:=CylinderMesh.new();centre.top_radius=.009;centre.bottom_radius=.009;centre.height=.001;centre.radial_segments=10
 			_append(surface,centre,Transform3D(basis,at+Vector3.UP*.007),Color(.94,.57,.12) if kind=="Carrot" else Color(.80,.20,.035))
 		if kind=="Tomato":
-			var seed:=SphereMesh.new();seed.radius=.0023;seed.height=.0017;seed.radial_segments=6;seed.rings=3
+			var seed_mesh:=SphereMesh.new();seed_mesh.radius=.0023;seed_mesh.height=.0017;seed_mesh.radial_segments=6;seed_mesh.rings=3
 			for side in 5:
 				var seed_angle:=side*TAU/5+angle
-				_append(surface,seed,Transform3D(Basis.IDENTITY,at+Vector3(cos(seed_angle)*.016,.007,sin(seed_angle)*.016)),Color(.93,.75,.33))
+				_append(surface,seed_mesh,Transform3D(Basis.IDENTITY,at+Vector3(cos(seed_angle)*.016,.007,sin(seed_angle)*.016)),Color(.93,.75,.33))
 	surface.index();return surface.commit()

@@ -24,26 +24,25 @@ var _direction: Vector3 = Vector3.ZERO
 var _side: Vector3 = Vector3.ZERO
 var _raft: Node3D
 var _spawn_serial := 0
+var _rare_day:=1
+var _rare_cycle:=0
+const GARDEN:=preload("res://scripts/garden_items.gd")
 const NEAR_RADIUS := 24.0
 # Guarantees regular building/soil supplies instead of random dry spells.
-const SUPPLY_CYCLE := ["Wood","Rope","Plastic","Wood","Metal","Stone","Soil","Barrel","Wood","Rope","Plastic","Salvage"]
-const SALVAGE_POOL := ["Sponge","Potato Seed","Coconut Seed","Banana Seed","Tomato Seed","Carrot Seed","Onion Seed","WindGenerator","Screw","Wire","Motor","Battery","Solar Torch","Walkie Talkie","Binoculars"]
+const SUPPLY_CYCLE := ["Wood","Rope","Plastic","Wood","Metal","Stone","Soil","Metal","Wood","Rope","Plastic","Salvage"]
+const SALVAGE_POOL := ["Sponge","Potato","Coconut","Banana","Tomato","Carrot","Onion","ElectricLamp","Screw","Wire","Motor","Battery","Solar Torch","Walkie Talkie","Binoculars"]
 
 const ITEM_POOL := [
 	"Wood", "Wood", "Wood", "Wood", "Wood", "Wood",
 	"Rope", "Rope", "Rope",
 	"Plastic", "Plastic",
 	"Soil", "Soil",
-	"Barrel",
 	"Stone", "Stone",
 	"Metal",
-	# Rare starter seeds wash up too — one source of new plants without crafting.
-	"Sponge", "Sponge", "Potato Seed",
-	"Coconut Seed",
-	"Banana Seed",
-	"Tomato Seed", "Carrot Seed", "Onion Seed",
-	# Complete equipment occasionally washes up, ready to install on a deck.
-	"WindGenerator", "Solar Torch", "Walkie Talkie", "Binoculars",
+	# Whole produce drifts in occasionally. Distinct planting seeds use rare crates.
+	"Sponge", "Sponge", "Potato", "Coconut", "Banana", "Tomato", "Carrot", "Onion",
+	# Small worn electronics wash up; barrels/turbines must be built.
+	"ElectricLamp", "Screw", "Wire", "Motor", "Battery", "Solar Torch", "Walkie Talkie", "Binoculars",
 ]
 
 func _ready() -> void:
@@ -53,6 +52,9 @@ func _ready() -> void:
 		max_debris = mini(max_debris, 48)
 		prewarm_count = mini(prewarm_count, 24)
 	player = get_tree().get_first_node_in_group("player")
+	var garden: Dictionary=Inventory.loaded_meta.get("garden_supply",{}) if Inventory.loaded_meta.get("garden_supply",{}) is Dictionary else {}
+	_rare_day=maxi(1,int(garden.get("last_day",Inventory.loaded_meta.get("game_day",1))))
+	_rare_cycle=maxi(0,int(garden.get("cycle",0)))
 	_raft = get_tree().get_first_node_in_group("raft")
 	_direction = Vector3(current_direction.x, 0.0, current_direction.z).normalized()
 	if _direction.length() < 0.001:
@@ -96,12 +98,24 @@ func _process(delta: float) -> void:
 		_timer = 0.0
 		_next_interval = randf_range(spawn_interval_min, spawn_interval_max)
 		_cleanup()
+		_tick_rare_supply()
 		if _active.size() < max_debris:
 			_spawn_upstream()
 
 
 # Fill the upstream corridor at startup — debris visible from frame 1.
 func _prewarm() -> void:
+	var saved: Variant=Inventory.loaded_meta.get("garden_supply",{})
+	if saved is Dictionary and saved.get("boxes",[]) is Array:
+		for entry in saved.get("boxes",[]).slice(0,4):
+			if not entry is Dictionary or not entry.get("p") is Array or entry.p.size()!=3 or GARDEN.box_crop(str(entry.get("item",""))).is_empty():continue
+			var valid:=true
+			for value in entry.p:if not (value is float or value is int) or not is_finite(float(value)):valid=false
+			if not valid:continue
+			var at:=Vector3(float(entry.p[0]),float(entry.p[1]),float(entry.p[2]))
+			if at.length()>200000:continue
+			var box:=_spawn_at(-upstream_distance,8,str(entry.item))
+			if box!=null:box.global_position=at;box.travel_start=at
 	for i in mini(prewarm_count, max_debris):
 		if not is_inside_tree() or _active.size()>=max_debris:
 			return
@@ -118,9 +132,9 @@ func _spawn_upstream() -> void:
 	_spawn_at(-randf_range(upstream_distance,upstream_distance+6.0),8.0)
 
 
-func _spawn_at(along_t: float, half_width: float=-1.0) -> void:
+func _spawn_at(along_t: float, half_width: float=-1.0, forced_item: String="") -> Debris:
 	if not debris_scene or _active.size()>=max_debris:
-		return
+		return null
 
 	var d = debris_scene.instantiate()
 
@@ -133,7 +147,7 @@ func _spawn_at(along_t: float, half_width: float=-1.0) -> void:
 	if absf(along_t)<5.0 and absf(lateral)<3.0:lateral=3.5 if lateral>=0 else -3.5
 	var spawn_point := origin + _direction * (along_t + jitter) + _side * lateral
 
-	d.item_name = _next_item()
+	d.item_name = _next_item() if forced_item.is_empty() else forced_item
 	d.current_direction = _direction
 	d.current_speed = clampf(current_speed,0.1,0.45) * randf_range(0.85, 1.10)
 	d.travel_start = spawn_point
@@ -145,6 +159,24 @@ func _spawn_at(along_t: float, half_width: float=-1.0) -> void:
 
 	add_child(d)
 	_active.append(d)
+	return d
+
+func _tick_rare_supply() -> void:
+	var actor:=_get_player()
+	if actor==null or not actor.restoration_complete or _active.size()>=max_debris:return
+	var day: int=actor.get_survival_day()
+	if day-_rare_day<3:return
+	var item: String=GARDEN.NEW_CROPS[_rare_cycle%GARDEN.NEW_CROPS.size()]+" Garden Box"
+	if _spawn_at(-randf_range(upstream_distance,upstream_distance+6),2.5,item)==null:return
+	_rare_day=day;_rare_cycle+=1;actor.call("_queue_save")
+
+func save_garden_supply() -> Dictionary:
+	var boxes: Array=[]
+	for debris in _active:
+		if not is_instance_valid(debris) or debris.collected or debris._is_fading_out or GARDEN.box_crop(debris.item_name).is_empty():continue
+		var at: Vector3=debris.global_position
+		boxes.append({"item":debris.item_name,"p":[at.x,at.y,at.z]})
+	return {"last_day":_rare_day,"cycle":_rare_cycle,"boxes":boxes}
 
 
 func _cleanup() -> void:

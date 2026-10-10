@@ -24,6 +24,15 @@ func _ready() -> void:
 
 func _build_defs() -> void:
 	defs.clear()
+	for crop in preload("res://scripts/garden_items.gd").NEW_CROPS:
+		var tree: bool=crop=="Papaya"
+		_add({"id":crop,"display_name":crop,"category":Category.FRUIT_TREE if tree else Category.ROOT,
+			"harvest_type":HarvestType.PICK if tree else HarvestType.DIG,"seed_item":"Dry "+crop+" Seeds","yield_item":crop,
+			"yield_min":2,"yield_max":4,"grow_stage_time":[45.0,75.0,60.0] if tree else [30.0,45.0,45.0],
+			"dig_time":1.1,"leaf_color":Color(.12,.36,.10),"planter_categories":["tree_pot"] if tree else ["pot","box"],
+			"garden_crop":true,"fruit_regrow_time":90.0,"fruit_count":4,"trunk_height":2.6,"trunk_radius":.09,
+			"canopy_radius":.5,"fruit_radius":.13,"fruit_color":Color(.89,.56,.12),"chop_hits_required":3,"wood_yield":3,
+			"fell_drops":[["Wood",2,3],["Papaya",1,2]]})
 	for crop in ["Carrot", "Tomato", "Onion"]:
 		_add({"id": crop, "display_name": crop, "category": Category.ROOT,
 			"harvest_type": HarvestType.DIG, "seed_item": crop + " Seed", "yield_item": crop,
@@ -104,8 +113,10 @@ func _add(d: Dictionary) -> void:
 	defs[d["id"]] = d
 
 func crop_for_item(item: String) -> String:
+	var seed_crop:=preload("res://scripts/garden_items.gd").seed_crop(item)
+	if not seed_crop.is_empty():return seed_crop
 	var id := item.trim_suffix(" Seed")
-	return id if defs.has(id) else ""
+	return id if defs.has(id) and not bool(defs[id].get("garden_crop",false)) else ""
 
 
 func get_def(id: String) -> Dictionary:

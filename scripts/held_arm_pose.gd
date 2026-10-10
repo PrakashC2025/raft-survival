@@ -49,12 +49,12 @@ func _process_modification() -> void:
 	for bone in _thumb_bones:_curl_finger(rig,bone,curl*0.65)
 
 func _curl_finger(rig: Skeleton3D,bone: int,curl: float) -> void:
-	var transform := rig.get_bone_global_pose(bone)
+	var finger_pose := rig.get_bone_global_pose(bone)
 	# Finger bones extend along local Y; flexion is negative local X. The
 	# metacarpal stays almost straight while the actual phalanges wrap the grip.
 	var angle := -curl*0.1 if rig.get_bone_name(bone).contains("1.") else -curl
-	transform.basis=transform.basis*Basis(Vector3.RIGHT,angle)
-	rig.set_bone_global_pose(bone,transform)
+	finger_pose.basis=finger_pose.basis*Basis(Vector3.RIGHT,angle)
+	rig.set_bone_global_pose(bone,finger_pose)
 
 func _solve(rig: Skeleton3D,up: int,low: int,end: int,target: Vector3,side: float) -> void:
 	if up<0 or low<0 or end<0:return

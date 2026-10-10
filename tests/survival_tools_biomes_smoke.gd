@@ -84,7 +84,7 @@ func _run() -> void:
 		check(player._hand_item.find_child(item+"Tool",true,false)!=null,item+" is held in first person")
 		action.call("_sync_held")
 		check(action._held!=null and action._held.find_child(item+"Tool",true,false)!=null,item+" is held in third person")
-	hud._craft_open=true;hud._craft_page=0;hud._craft_selected="Pickaxe";hud.call("_compute_layout");await shot("crafting");hud._craft_open=false
+	hud.toggle_crafting();hud._craft_menu.select_item("Pickaxe");await shot("crafting");hud._close_crafting()
 	var deposit:=volcano.get_node("Mineral0") as Node3D
 	player.global_position=deposit.global_position+Vector3(0,1.5,2)
 	equip("Pickaxe");aim(deposit,deposit.global_position);tools.cooldown=0

@@ -112,7 +112,7 @@ func advance(delta: float) -> void:
 		"Shovel":
 			var item := "Soil" if Vector3(pending.at).y>1 else "Sand"
 			if Inventory.try_exchange({},{item:3}):
-				Inventory.pickup_received.emit(item,3);player.call("_hud_toast",item.to_upper()+" +3")
+				Inventory.notify_pickup(item,3);player.call("_hud_toast",item.to_upper()+" +3")
 			else:player.call("_hud_toast","BAG FULL")
 		"Paddle":
 			var progress := player.get_node("SurvivalProgression")

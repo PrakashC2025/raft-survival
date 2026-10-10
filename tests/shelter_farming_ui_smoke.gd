@@ -56,12 +56,13 @@ func _run() -> void:
 	player.get_node("CanvasLayer/MobileControls").force_show=true
 	inventory.call("add","Soil",30)
 	var stock:int=inventory.call("total","Wood")
-	hud.call("toggle_crafting");hud.call("_compute_layout")
-	tap(hud._craft_card_rects[0].get_center())
-	check(inventory.call("total","Wood")==stock and built.get_child_count()==0,"Recipe tap opens details without spending or placing")
-	check(hud._craft_selected=="PlanterPot" and hud.CRAFT_ORDER.has("TreePot"),"Plant pot and tree pot are visible in crafting")
+	var starting_pieces:int=built.get_child_count()
+	hud.call("toggle_crafting");hud._craft_menu.select_item("PlanterPot")
+	await frames()
+	check(inventory.call("total","Wood")==stock and built.get_child_count()==starting_pieces,"Recipe tap opens details without spending or placing")
+	check(hud._craft_menu.selected=="PlanterPot" and hud.CRAFT_ORDER.has("TreePot"),"Plant pot and tree pot are visible in crafting")
 	await shot("craft-confirmation")
-	tap(hud._craft_confirm_rect.get_center())
+	hud._craft_menu._build.pressed.emit()
 	check(player.build_mode and player.BUILD_RECIPE_NAMES[player.selected_piece_index]=="PlanterPot" and inventory.call("total","Wood")==stock,"Confirm pot chooses placement mode; PLACE owns the actual spend")
 	var pot_deck:=piece("Foundation",Vector3(-2,0,0));await frames()
 	var pot_placement:=aim("PlanterPot",Vector3(-2,0.15,0.5),pot_deck)
@@ -74,11 +75,11 @@ func _run() -> void:
 		check(pot.find_child("LivingSoil",true,false)!=null,"The real placed pot contains its soil visual")
 		check(not aim("PlanterPot",Vector3(-2,0.15,0.5),pot_deck).get("valid",false),"A pot overlapping an existing pot gets a red preview")
 		pot.queue_free();await frames()
-	hud.call("toggle_crafting");hud._craft_page=2;hud._craft_selected="Spear";hud.call("_compute_layout")
+	hud.call("toggle_crafting");hud._craft_menu.select_item("Spear")
 	var spear_before:int=inventory.call("total","Spear")
-	tap(hud._craft_card_rects[1].get_center())
+	await frames()
 	check(inventory.call("total","Spear")==spear_before,"Selecting equipment does not craft it")
-	tap(hud._craft_confirm_rect.get_center())
+	hud._craft_menu._build.pressed.emit()
 	check(inventory.call("total","Spear")==spear_before+1,"Separate equipment confirmation crafts exactly one item")
 	hud.call("_close_crafting")
 	if player.build_mode:player.call("_toggle_build")
@@ -207,7 +208,8 @@ func _run() -> void:
 	await frames()
 	var physical:PhysicsDirectSpaceState3D=current_scene.get_world_3d().direct_space_state
 	var clear:=true
-	for z in [3.6,4.5,5.5,5.8]:
+	for fraction in [.25,.55,.8,.98]:
+		var z:float=flight.position.z+float(flight.run)*fraction
 		var q:=PhysicsRayQueryParameters3D.create(raft.to_global(Vector3(4,3.0,z)),raft.to_global(Vector3(4,2.5,z)),1)
 		var hit:=physical.intersect_ray(q)
 		if not hit.is_empty() and str(hit.collider.name).begins_with("Roof"):clear=false

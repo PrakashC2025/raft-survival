@@ -17,14 +17,15 @@ class_name Ocean
 # deep navy in the foreground/troughs, saturated blue-cyan crests:
 #   day (0.035, 0.28, 0.58)     -> deep cobalt mid sea
 #   horizon (0.04, 0.45, 0.72)  -> bright azure toward the horizon
-#   deep (0.012, 0.10, 0.22)    -> near-black navy foreground/troughs
-#   night (0.018, 0.07, 0.17)   -> blue navy, alive under the moon
-@export var day_color := Color(0.012, 0.095, 0.155)
-@export var twilight_color := Color(0.04, 0.11, 0.22)
-@export var night_color := Color(0.024, 0.072, 0.12)
-@export var deep_color := Color(0.006, 0.05, 0.11)
-@export var horizon_color := Color(0.045, 0.16, 0.23)
-@export var crest_color := Color(0.065, 0.22, 0.27)
+#   deep (0.012, 0.10, 0.22)    -> blue navy foreground/troughs
+#   night (0.022, 0.078, 0.17)  -> readable navy under the moon
+# Compatibility converts these linear values to display space in the shader.
+@export var day_color := Color(0.035, 0.28, 0.58)
+@export var twilight_color := Color(0.035, 0.16, 0.33)
+@export var night_color := Color(0.022, 0.078, 0.17)
+@export var deep_color := Color(0.012, 0.10, 0.22)
+@export var horizon_color := Color(0.04, 0.45, 0.72)
+@export var crest_color := Color(0.10, 0.38, 0.54)
 @export var foam_color := Color(1.15, 1.25, 1.42)
 @export var haze_color := Color(0.45, 0.6, 0.75)
 @export var sparkle_strength := 1.8
@@ -40,6 +41,7 @@ class_name Ocean
 var _under_layer: CanvasLayer = null
 var _under_rect: ColorRect = null
 var _under_mat: ShaderMaterial = null
+var _dive_blend := 0.0
 var _diving_background := false
 var _surface_background := Environment.BG_SKY
 var _surface_background_color := Color.BLACK
@@ -83,11 +85,13 @@ shader_type canvas_item;
 uniform vec4 top_col : source_color;
 uniform vec4 bottom_col : source_color;
 void fragment() {
-	COLOR = mix(bottom_col, top_col, UV.y);
+	COLOR = mix(top_col, bottom_col, UV.y);
 }
 """
 
 func _ready() -> void:
+	# Displaced water must never project a moving wave silhouette onto a deck.
+	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# The broad, slow ocean swells do not need a 160x160 grid on a phone.
 	# Keep enough tessellation for a smooth silhouette while cutting roughly
 	# a third of the per-vertex wave work and triangle count.
@@ -184,7 +188,7 @@ func _process(delta: float) -> void:
 	var moon_factor := night * moon_up
 	_push_factors(night, twilight, moon_factor)
 	_update_debug_hud(night, twilight, moon_factor)
-	_update_underwater()
+	_update_underwater(delta)
 
 func _create_far_water() -> void:
 	if _mat == null:
@@ -260,7 +264,7 @@ func _force_time(hour: float) -> void:
 # Lightweight camera-underwater look: when the view dips below the wave
 # surface a blue veil fades in (darker with depth). Pure 2D overlay — no
 # gameplay rendering changes — with a smooth cross-fade at the surface.
-func _update_underwater() -> void:
+func _update_underwater(delta: float=0.0) -> void:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		if _under_layer != null:
@@ -278,15 +282,22 @@ func _update_underwater() -> void:
 			_env.background_mode=_surface_background;_env.background_color=_surface_background_color
 	var amt := clampf(depth / 1.4, 0.0, 1.0)
 	amt = amt * amt * (3.0 - 2.0 * amt)  # smoothstep-like ramp
+	_dive_blend=lerpf(_dive_blend,amt,1.0-exp(-delta*6.0)) if delta>0 else amt
+	amt=_dive_blend
 	if amt <= 0.001:
 		if _under_layer != null:
 			_under_layer.visible = false
 		return
 	_ensure_underwater()
 	_under_layer.visible = true
-	var alpha := under_alpha_max * (0.35 + 0.65 * amt)
-	var top := Color(under_top_color.r, under_top_color.g, under_top_color.b, alpha)
-	var bottom := Color(under_bottom_color.r, under_bottom_color.g, under_bottom_color.b, alpha * 1.15)
+	var deep:=smoothstep(8.0,65.0,maxf(0,depth))
+	var daylight:=1.0-_last_night
+	if _env!=null and diving:_env.background_color=Color(.045,.24,.29).lerp(Color(.007,.028,.065),deep)*(.25+.75*daylight)
+	var alpha := under_alpha_max * amt * (.34+.66*deep)
+	var tint:=Color(.075,.34,.38).lerp(under_top_color.darkened(.35),deep)
+	var top := Color(tint.r,tint.g,tint.b,alpha)
+	var bottom_tint:=Color(.025,.14,.20).lerp(under_bottom_color,deep)
+	var bottom := Color(bottom_tint.r,bottom_tint.g,bottom_tint.b,alpha*1.10)
 	_under_mat.set_shader_parameter("top_col", top)
 	_under_mat.set_shader_parameter("bottom_col", bottom)
 

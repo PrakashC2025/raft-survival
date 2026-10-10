@@ -68,14 +68,14 @@ func _apply_profile() -> void:
 	_slow_windows = 0
 	_fast_windows = 0
 	set_process(_mobile and GameSettings.quality == 0)
+	_limit_mobile_shadow_distance()
 	if not _mobile and GameSettings.quality == 0:
 		_set_render_scale(1.0)
 		_set_cumulus_visible(true)
 		return
-	var initial_scale: float = [0.72, 0.65, 0.82, 1.0][GameSettings.quality]
+	var initial_scale: float = [0.72, 0.65, 0.82, 1.0, 1.0][GameSettings.quality]
 	_set_render_scale(initial_scale)
-	_set_cumulus_visible(GameSettings.quality == 3)
-	_limit_mobile_shadow_distance()
+	_set_cumulus_visible(GameSettings.quality >= 3)
 	var scene := get_tree().current_scene
 	if scene != null:
 		var ocean := get_tree().get_first_node_in_group("ocean") as MeshInstance3D
@@ -138,7 +138,7 @@ func _update_quality(avg_frame_seconds: float) -> void:
 			# only the explicitly selected High profile enables that expensive pass.
 			if _can_scale_3d and _render_scale < MAX_RENDER_SCALE:
 				_set_render_scale(_render_scale + SCALE_STEP_UP)
-			elif _cumulus_reduced and (not _mobile or GameSettings.quality == 3):
+			elif _cumulus_reduced and (not _mobile or GameSettings.quality >= 3):
 				_set_cumulus_visible(true)
 			_fast_windows = 0
 	else:
@@ -156,7 +156,7 @@ func refresh_foliage() -> void:
 	for node in get_tree().get_nodes_in_group("island_landscape_foliage"):
 		var batch := node as MultiMeshInstance3D
 		if batch == null or batch.multimesh == null: continue
-		var fraction: float = [1.0, 0.50, 0.75, 1.0][GameSettings.quality]
+		var fraction: float = [1.0, 0.50, 0.75, 1.0, 1.0][GameSettings.quality]
 		if _foliage_reduced: fraction *= 0.65
 		# Harvestable plants must remain visible wherever their interaction bodies exist.
 		if batch.get_meta("interactive_foliage",false): fraction = 1.0
@@ -165,7 +165,7 @@ func refresh_foliage() -> void:
 	if not _mobile:
 		return
 	var quality := GameSettings.quality
-	var budget: int = [1600, 800, 1600, 2400][quality]
+	var budget: int = [1600, 800, 1600, 2400, 2800][quality]
 	if _foliage_reduced:
 		budget = int(budget * 0.65)
 	for node in get_tree().get_nodes_in_group("island_grass_field"):
@@ -209,4 +209,5 @@ func _limit_mobile_shadow_distance() -> void:
 	for node in scene.find_children("*", "DirectionalLight3D", true, false):
 		var light := node as DirectionalLight3D
 		if light.shadow_enabled:
-			light.directional_shadow_max_distance = [60.0, 35.0, 60.0, 90.0][GameSettings.quality]
+			light.directional_shadow_max_distance = 35.0
+			light.shadow_opacity = 0.45

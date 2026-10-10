@@ -597,7 +597,7 @@ func _collect_one(d: RigidBody3D) -> void:
 	var amount:=maxi(1,int(d.get("amount"))) if "amount" in d else 1
 	var overflow:=Inventory.add(item_name,amount)
 	if overflow<amount:
-		Inventory.pickup_received.emit(Inventory.canonical_item(item_name),amount-overflow)
+		Inventory.notify_pickup(Inventory.canonical_item(item_name),amount-overflow)
 		_collected=true
 	if overflow > 0:
 		# Capacity can change while the rope reels in. Release the catch back to

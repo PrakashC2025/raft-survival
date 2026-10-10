@@ -31,8 +31,8 @@ static func create(item: String) -> Node3D:
 	var length := 1.20 if item == "Paddle" else (.90 if item == "Shovel" else .58)
 	ART.cylinder(root,Vector3(0,length*.20,0),.021,length,wood)
 	for index in range(5):
-		var wrap := TorusMesh.new();wrap.inner_radius=.020;wrap.outer_radius=.024;wrap.rings=12;wrap.ring_segments=6
-		ART.part(root,wrap,Vector3(0,-.035+index*.014,0),metal,"GripWrap")
+		var grip_wrap := TorusMesh.new();grip_wrap.inner_radius=.020;grip_wrap.outer_radius=.024;grip_wrap.rings=12;grip_wrap.ring_segments=6
+		ART.part(root,grip_wrap,Vector3(0,-.035+index*.014,0),metal,"GripWrap")
 	match item:
 		"Axe":
 			_blade(root,"axe",PackedVector2Array([Vector2(-.06,.0),Vector2(.10,-.02),Vector2(.24,-.10),Vector2(.27,.10),Vector2(.10,.13),Vector2(-.06,.11)]),.052,Vector3(0,.34,0),metal)

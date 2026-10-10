@@ -45,7 +45,12 @@ var _cue_times: Array[float] = []
 var _cue_sound := ""
 var _foley_count := 0
 var _anchor_raising := false
+var _garden_whole: Array[Node3D]=[]
+var _garden_cut: Array[Node3D]=[]
+var _garden_seeds: Array[Node3D]=[]
+var _garden_right: Node3D
 const LABELS := {"cast":"CASTING LINE", "reel":"REELING IN", "chop":"CHOPPING TIMBER",
+	"prepare_seed":"CUTTING FOOD · SAVING SEEDS","unpack":"OPENING RARE SUPPLIES",
 	"harvest":"PULLING ROOTS", "pick":"PICKING FRUIT", "grab":"COLLECTED",
 	"scoop":"GATHERING EARTH", "plant":"PLANTING SEED", "water":"WATERING SOIL",
 	"build":"ASSEMBLING", "craft":"CRAFTED", "eat":"EATING", "drink":"DRINKING",
@@ -70,6 +75,7 @@ func _ready() -> void:
 	_bar=ProgressBar.new();_bar.custom_minimum_size=Vector2(310,8);_bar.show_percentage=false;_bar.max_value=1.0
 	_panel.add_child(_label);_panel.add_child(_bar)
 	player.get_node("CanvasLayer").add_child(_panel);_panel.hide()
+	get_viewport().size_changed.connect(_fit_feedback)
 	_sound=AudioStreamPlayer.new();_sound.name="ActionFoley";_sound.bus=&"Master";add_child(_sound)
 	# Install the modifier even when the launcher is not selected.
 	for candidate in player.get_node("Body").find_children("*","Skeleton3D",true,false):
@@ -95,6 +101,8 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 	_clear_tools()
 	_cues_played=0;_cue_times.clear();_cue_sound=""
 	match action:
+		"prepare_seed":_cue_times.assign([.30,.48,.72]);_cue_sound="cloth"
+		"unpack":_cue_times.assign([.25,.60]);_cue_sound="cloth"
 		"eat":_cue_times.assign([0.36,0.63]);_cue_sound="bite"
 		"drink":_cue_times.assign([0.40,0.64]);_cue_sound="sip"
 		"cook":_cue_times.assign([0.30,0.58,0.78]);_cue_sound="stir"
@@ -155,7 +163,41 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 		_tool.get_node("AnimatedHandGrip").set("animated_tool",true)
 
 	if action in FIRE_KINDS:_make_fire_props(action)
+	if action in ["prepare_seed","unpack"]:_make_garden_props(food_item)
 	if action in ["repair","assemble_electronics"]:_make_repair_props(food_item)
+	_fit_feedback()
+
+func _fit_feedback() -> void:
+	if not is_instance_valid(_panel):return
+	var scale:=preload("res://scripts/ocean_ui.gd").scale_for(get_viewport())
+	var view:=get_viewport().get_visible_rect().size/scale
+	var width:=minf(390,view.x-32)
+	_panel.scale=Vector2.ONE*scale;_panel.size=Vector2(width,44)
+	_panel.position=Vector2((view.x-width)*.5,view.y*.5+(112 if kind in ["repair","assemble_electronics"] else 76))*scale
+	_bar.custom_minimum_size.x=width
+
+func _make_garden_props(item: String) -> void:
+	_view_tool=Node3D.new();_view_tool.name="SeedPreparationHands"
+	player.get_node("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist").add_child(_view_tool)
+	for is_left in [false,true]:
+		var holder:=Node3D.new();_view_tool.add_child(holder)
+		if not is_left:_garden_right=holder
+		var hand:=preload("res://models/human_hand.glb").instantiate() as Node3D
+		MAT.apply_model(hand,MAT.Kind.SKIN);hand.set_meta("first_person_hand",true)
+		if is_left:hand.scale.x=-1;hand.position=Vector3(-.33,-.11,-.08)
+		holder.add_child(hand)
+	_tool=_make_tool("prepare_seed");player.add_child(_tool);GRIP.attach(_tool,player.get_node("Body"));_tool.get_node("AnimatedHandGrip").set("animated_tool",true)
+	var knife:=_make_tool("prepare_seed");knife.position=Vector3(.025,-.04,-.13);_garden_right.add_child(knife)
+	if kind=="unpack":knife.hide();_tool.hide()
+	var crop:=preload("res://scripts/garden_items.gd").box_crop(item) if kind=="unpack" else item
+	var first:=Node3D.new();first.position=Vector3(-.24,-.13,-.27);_view_tool.add_child(first)
+	_left_tool=Node3D.new();player.add_child(_left_tool);GRIP.attach(_left_tool,player.get_node("Body"))
+	var grip:=_left_tool.get_node("AnimatedHandGrip");grip.set("wrist",grip.get("skeleton").find_bone("Wrist.L"));grip.set("animated_tool",true);grip.set("grip_offset",Vector3.ZERO)
+	for holder in [first,_left_tool]:
+		if kind=="prepare_seed":ART.timber_box(holder,Vector3(0,-.067,0),Vector3(.27,.016,.17))
+		var whole:=FOOD.create(item);holder.add_child(whole);_garden_whole.append(whole)
+		var cut:=preload("res://scripts/garden_visual.gd").produce(crop if kind=="unpack" else "Sliced "+crop);holder.add_child(cut);cut.hide();_garden_cut.append(cut)
+		var seeds:=preload("res://scripts/garden_visual.gd").seeds(crop,kind!="unpack");seeds.position=Vector3(.09,.045,-.04);holder.add_child(seeds);seeds.hide();_garden_seeds.append(seeds)
 
 func _make_repair_props(item: String) -> void:
 	_repair_item=item
@@ -292,6 +334,15 @@ func _make_consumption(item: String) -> void:
 
 func _advance_feedback() -> void:
 	var progress:=clampf(elapsed/maxf(duration,.01),0,1)
+	for whole in _garden_whole:if is_instance_valid(whole):whole.visible=progress<.48
+	for cut in _garden_cut:if is_instance_valid(cut):cut.visible=progress>=.48
+	for seeds in _garden_seeds:if is_instance_valid(seeds):seeds.visible=progress>=.70
+	if is_instance_valid(_garden_right):
+		var reach:=smoothstep(.04,.18,progress)*(1-smoothstep(.82,1.,progress))
+		var contact:=0.0
+		for strike in [.30,.48,.62]:contact=maxf(contact,maxf(0,1-absf(progress-strike)/.07))
+		_garden_right.position=Vector3(-.24,.035-.11*contact,.05)*reach
+		_garden_right.rotation=Vector3(-.10*contact,0,-.08*reach)
 	if kind in FIRE_KINDS:_advance_fire_feedback(progress)
 	if kind in ["repair","assemble_electronics"]:_advance_repair_feedback(progress)
 	for prop in [_pickup_first,_pickup_third]:
@@ -328,6 +379,8 @@ func stop() -> void:
 	if is_instance_valid(player.get("_third_person_launcher")):player.get("_third_person_launcher").visible=int(player.get("cam_mode"))==1
 
 func _clear_tools() -> void:
+	_garden_whole.clear();_garden_cut.clear();_garden_seeds.clear()
+	_garden_right=null
 	if is_instance_valid(_sound):_sound.stop()
 	for tool in [_tool,_view_tool,_left_tool]:
 		if is_instance_valid(tool): tool.hide();tool.queue_free()
@@ -363,7 +416,7 @@ func _process(delta: float) -> void:
 	var hand := player.get("_hand_item") as Node3D
 	if is_instance_valid(hand):hand.visible=not is_instance_valid(_view_tool)
 	if is_instance_valid(_held):_held.visible=not first and not is_instance_valid(_tool) and not construction
-	if is_instance_valid(player.get("_third_person_launcher")) and (kind in FIRE_KINDS or kind in ["chop","build","craft","scoop","grab","pick","harvest","plant","eat","drink","cook","mine","dig","paddle","anchor"]):
+	if is_instance_valid(player.get("_third_person_launcher")) and (kind in FIRE_KINDS or kind in ["chop","build","craft","scoop","grab","pick","harvest","plant","eat","drink","cook","prepare_seed","unpack","mine","dig","paddle","anchor"]):
 		player.get("_third_person_launcher").visible=false
 
 func _sync_held() -> void:
@@ -408,6 +461,12 @@ func sample_pose() -> Dictionary:
 	var view_rot := Vector3.ZERO
 	var torso := Vector3.ZERO
 	match kind:
+		"prepare_seed","unpack":
+			var reach:=smoothstep(.04,.18,t)*(1.-smoothstep(.85,1.,t))
+			var cut:=maxf(0,sin(t*TAU*3.))*reach if t<.62 else 0.
+			right=Vector3(.18,.18,-.32).lerp(Vector3(-.02,.12,-.42),reach);right.y-=cut*.07
+			left=Vector3(-.14,.10,-.39);torso.x=.055*reach
+			view_pos=Vector3(-.08*reach,-.04*cut,-.08*reach);view_rot=Vector3(.15*cut,0,-.16*reach)
 		"shake":
 			var jiggle:=sin(t*TAU*4)*smoothstep(.10,.25,t)*(1-smoothstep(.70,.90,t))
 			right=Vector3(.14,.34+jiggle*.09,-.31);left=Vector3(-.05,.24,-.34)
@@ -541,6 +600,11 @@ func sample_pose() -> Dictionary:
 	return {"right":right,"left":left,"weight":weight,"torso":torso*weight,"view_pos":view_pos*weight,"view_rot":view_rot*weight}
 
 func _make_tool(action: String) -> Node3D:
+	if action=="prepare_seed":
+		var knife:=Node3D.new();knife.name="SalvagedKitchenKnife"
+		ART.timber_box(knife,Vector3(0,0,-.09),Vector3(.024,.029,.14))
+		var blade:=ART.box(knife,Vector3(0,0,-.22),Vector3(.007,.045,.15),MAT.make(MAT.Kind.METAL,Color(.43,.46,.44),.62,.6));blade.rotation.x=-.10
+		return knife
 	var item:=str(player.get("active_item"))
 	if action=="strike":
 		var spear:=Node3D.new();spear.name="HuntingSpear"

@@ -10,6 +10,26 @@ uniform vec2 color_correction = vec2(0.0, 1.0);
 uniform vec4 ground_color: source_color = vec4(0.3, 0.3, 0.3, 1.0);
 uniform float horizon_offset = 0.0;
 
+// Original sunset panorama blended by the existing celestial clock.
+// A single filtered sky sample retains detailed cloud rims on phone profiles.
+group_uniforms evening;
+uniform sampler2D evening_panorama: source_color, filter_linear_mipmap, repeat_enable;
+uniform float evening_blend: hint_range(0.0, 1.0) = 0.0;
+uniform float evening_rotation = 0.0;
+uniform vec2 panorama_cloud_position = vec2(0.0);
+
+group_uniforms calm_night;
+uniform bool calm_night_enabled = false;
+uniform sampler2D night_clouds: source_color, filter_linear_mipmap, repeat_enable;
+uniform float night_cloud_opacity: hint_range(0.0, 1.0) = 0.35;
+uniform float night_cloud_coverage: hint_range(0.0, 1.0) = 0.35;
+
+group_uniforms reference_day;
+uniform sampler2D morning_panorama: source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2D afternoon_panorama: source_color, filter_linear_mipmap, repeat_enable;
+uniform float daylight_panorama_blend: hint_range(0.0, 1.0) = 0.0;
+uniform float morning_panorama_blend: hint_range(0.0, 1.0) = 0.0;
+
 group_uniforms atmosphere;
 uniform float atm_darkness = 0.5;
 uniform float atm_sun_intensity = 18.0;
@@ -335,17 +355,34 @@ vec4 render_cumulus_clouds(vec3 ro, vec3 rd, float am, vec3 sun_pos, vec3 moon_p
 // Main
 //------------------------------------------------------------------------------
 
+float night_star_hash(vec2 cell) {
+	return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+vec3 sparse_night_stars(vec2 uv, float sky_time) {
+	// A few tiny, steady points instead of either dense galaxy photograph.
+	vec2 grid = fract(uv) * vec2(180.0, 90.0);
+	vec2 cell = floor(grid);
+	float seed = night_star_hash(cell);
+	vec2 centre = 0.15 + vec2(night_star_hash(cell + 7.3), night_star_hash(cell + 23.1)) * 0.7;
+	float distance_to_star = length(fract(grid) - centre);
+	float aa = max(length(fwidth(grid)) * 0.5, 0.004);
+	float point = 1.0 - smoothstep(0.035 - aa, 0.035 + aa, distance_to_star);
+	float twinkle = 0.94 + 0.06 * sin(sky_time * 0.35 + seed * TAU);
+	return vec3(0.40, 0.44, 0.50) * point * step(0.983, seed) * twinkle;
+}
+
 vec3 shooting_stars(vec3 direction, float sky_time) {
 	vec3 light = vec3(0.0);
 	if (!shooting_stars_enabled || night_moon_visibility < 0.01) {
 		return light;
 	}
-	// Two staggered schedules: one brief meteor roughly every 14 seconds.
+	// A rare brief meteor roughly every ninety seconds keeps nights calm.
 	// Inactive events skip the trail math; no emitters or extra sky pass.
 	for (int meteor = 0; meteor < 2; meteor++) {
-		float event_time = sky_time + float(meteor) * 13.5;
-		float event_index = floor(event_time / 27.0);
-		float age = mod(event_time, 27.0);
+		float event_time = sky_time + float(meteor) * 90.0;
+		float event_index = floor(event_time / 180.0);
+		float age = mod(event_time, 180.0);
 		if (age > 1.35) {
 			continue;
 		}
@@ -395,7 +432,25 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	float night_lift = 1.0 - smoothstep(-0.30, -0.02, sun_pos.y);
 	col.rgb += vec3(0.016, 0.024, 0.055) * night_lift;
 
-	// Sun
+	if (daylight_panorama_blend > 0.001) {
+		vec2 day_uv = vec2(fract(0.5 + atan(world_pos.z, world_pos.x) * INV_TAU + evening_rotation + panorama_cloud_position.x * 0.018), acos(clamp(world_pos.y, -1.0, 1.0)) * INV_PI);
+		vec3 day_photo = texture(afternoon_panorama, day_uv).rgb;
+		if (morning_panorama_blend > 0.001) {
+			day_photo = mix(day_photo, texture(morning_panorama, day_uv).rgb, morning_panorama_blend);
+		}
+		float edge = min(day_uv.x, 1.0 - day_uv.x);
+		if (edge < 0.018) {
+			vec2 other_uv = vec2(1.0 - day_uv.x, day_uv.y);
+			vec3 other_edge = texture(afternoon_panorama, other_uv).rgb;
+			if (morning_panorama_blend > 0.001) {
+				other_edge = mix(other_edge, texture(morning_panorama, other_uv).rgb, morning_panorama_blend);
+			}
+			day_photo = mix(day_photo, other_edge, 0.5 * (1.0 - smoothstep(0.0, 0.018, edge)));
+		}
+		col = mix(col, day_photo, daylight_panorama_blend * smoothstep(-0.1, 0.015, world_pos.y));
+	}
+
+	// Sun remains live, independent of all cloud photographs.
 	vec3 sun_disk = calc_disk_mask(world_pos, sun_pos, sun_disk_size) * sun_disk_color.rgb * scatter.rgb;
 	sun_disk *= sun_disk_intensity;
 
@@ -407,6 +462,11 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	vec3 moon_normal = normalize(world_pos * moon_intersect - moon_pos);
 
 	float moon_ndotl = clamp(dot(moon_normal, sun_pos), 0.0, 1.0);
+	if (calm_night_enabled) {
+		// The requested bright full moon retains crater detail and soft limbs.
+		float limb = sqrt(max(0.0, 1.0 - pow(clamp(moon_edge / moon_size, 0.0, 1.0), 2.0)));
+		moon_ndotl = mix(moon_ndotl, 0.45 + limb * 0.55, night_moon_visibility);
+	}
 	vec3 moon_tex = sample_moon_texture(moon_normal);
 	vec3 moon_output = moon_mask * moon_ndotl * exp2(1.0) * moon_tex * moon_color.rgb;
 	moon_output *= moon_intensity;
@@ -438,22 +498,24 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	// Now generate UV coordinates for the texture.
 	vec2 deep_space_uv = calc_equirect_uv(normalize(final_alignment));
 
-	// Star map
-	vec3 deep_space_background = textureLod(starmap_texture, deep_space_uv, 0.0).rgb;
-	deep_space_background *= starmap_color.rgb;
-	deep_space_background = adjust_contrast(deep_space_background, starmap_color.a);
-	vec3 deep_space = deep_space_background.rgb * moonMask;
-
-	// Star Field
-	float star_scint = textureLod(noise_tex, deep_space_uv + (p_time * star_scintillation_speed), 0.0).r;
-	star_scint = mix(1.0, star_scint * 1.5, star_scintillation);
-
-	vec3 star_field = textureLod(star_field_texture, deep_space_uv, 0.0).rgb * star_field_color.rgb;
-	star_field = clamp_rgb_to_unit(mix(star_field.rgb, star_field.rgb * star_scint, star_scintillation));
-	star_field = clamp_rgb_to_unit(star_field.rgb);
-	//deep_space.rgb -= clamp_to_unit(star_field.r * 10.0);
-	deep_space.rgb += star_field.rgb * moonMask * 1.5;
-	deep_space.rgb *= angle_mult.z;
+	float calm_night = calm_night_enabled ? night_moon_visibility : 0.0;
+	vec2 night_uv = vec2(fract(0.5 + atan(world_pos.z, world_pos.x) * INV_TAU + 0.18), acos(clamp(world_pos.y, -1.0, 1.0)) * INV_PI);
+	vec3 deep_space;
+	if (calm_night_enabled) {
+		// Soft navy with a slightly lighter sea horizon; no Milky Way layer.
+		vec3 navy = mix(vec3(0.014, 0.024, 0.045), vec3(0.004, 0.009, 0.021), smoothstep(0.0, 0.85, world_pos.y));
+		col = mix(col, navy, calm_night);
+		deep_space = sparse_night_stars(deep_space_uv, p_time) * calm_night * moonMask;
+	} else {
+		// Preserve the addon's original star presentation for other users.
+		vec3 background = textureLod(starmap_texture, deep_space_uv, 0.0).rgb * starmap_color.rgb;
+		background = adjust_contrast(background, starmap_color.a);
+		float scint = textureLod(noise_tex, deep_space_uv + p_time * star_scintillation_speed, 0.0).r;
+		scint = mix(1.0, scint * 1.5, star_scintillation);
+		vec3 field = textureLod(star_field_texture, deep_space_uv, 0.0).rgb * star_field_color.rgb;
+		field = clamp_rgb_to_unit(mix(field, field * scint, star_scintillation));
+		deep_space = (background + field * 1.5) * moonMask * angle_mult.z;
+	}
 	col.rgb += sun_disk.rgb + deep_space.rgb * horizonBlend;
 	// The star field fades near the horizon; the moon keeps its full disc.
 	col.rgb += moon_output * smoothstep(0.02, 0.10, world_pos.y);
@@ -461,9 +523,10 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	col.rgb += shooting_stars(world_pos, meteor_time) * night_moon_visibility * horizonBlend;
 
 	// Clouds
-	if (cirrus_visible) {
+	float procedural_clouds = (1.0 - calm_night) * (1.0 - daylight_panorama_blend);
+	if (cirrus_visible && procedural_clouds > 0.001) {
 		vec4 cirrus_clouds = render_cirrus_clouds(clouds_pos);
-		cirrus_clouds.a = clamp_to_unit(cirrus_clouds.a) * night_cloud_visibility;
+		cirrus_clouds.a = clamp_to_unit(cirrus_clouds.a) * night_cloud_visibility * procedural_clouds;
 		vec3 cloud_tint = sun_light_color.rgb;
 		cloud_tint = mix(cloud_tint, clouds_night_color.rgb, angle_mult.w);
 		cirrus_clouds.rgb *= cloud_tint * cirrus_intensity;
@@ -471,9 +534,9 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 		col.rgb = mix(col.rgb, cirrus_clouds.rgb + mix(vec3(0.0), scatter, cirrus_sky_tint_fade), cirrus_clouds.a);
 	}
 
-	if (cumulus_visible) {
+	if (cumulus_visible && procedural_clouds > 0.001) {
 		vec4 cumulus_clouds = render_cumulus_clouds(vec3(0.0), clouds_pos, angle_mult.z, sun_pos, moon_pos);
-		cumulus_clouds.a = clamp_to_unit(cumulus_clouds.a) * night_cloud_visibility;
+		cumulus_clouds.a = clamp_to_unit(cumulus_clouds.a) * night_cloud_visibility * procedural_clouds;
 		vec3 cloud_tint = sun_light_color.rgb;
 		cloud_tint = mix(cloud_tint, clouds_night_color.rgb, angle_mult.w);
 		cumulus_clouds.rgb *= cloud_tint * cumulus_intensity;
@@ -481,7 +544,7 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 		// above erases almost all cloud volume in a normal gameplay view.
 		cumulus_clouds.a = mix(0.0, cumulus_clouds.a, horizonBlendCumulus);
 		col.rgb = mix(col.rgb, cumulus_clouds.rgb + mix(vec3(0.0), scatter, cumulus_sky_tint_fade), cumulus_clouds.a);
-	} else if (cirrus_visible && world_pos.y > 0.0) {
+	} else if (cirrus_visible && world_pos.y > 0.0 && procedural_clouds > 0.001) {
 		// Two filtered samples retain soft low clouds on phone profiles without
 		// the volumetric march. This is sky colour only, never screen fog.
 		vec2 uv = world_pos.xz / max(world_pos.y + 0.22,0.22);
@@ -491,7 +554,25 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 		float density = smoothstep(threshold,threshold+0.23,broad*0.76+detail*0.24);
 		vec3 tint = mix(vec3(0.62,0.66,0.69),vec3(0.018,0.028,0.05),angle_mult.w);
 		tint = mix(tint,scatter,0.35);
-		col.rgb = mix(col.rgb,tint,density*0.56*horizonBlendCumulus*night_cloud_visibility);
+		col.rgb = mix(col.rgb,tint,density*0.56*horizonBlendCumulus*night_cloud_visibility*procedural_clouds);
+	}
+	if (calm_night > 0.001 && world_pos.y > 0.0) {
+		// Soft moonlit clouds drift independently over the simple navy sky.
+		vec2 cloud_uv = vec2(fract(night_uv.x + panorama_cloud_position.x * 0.016), night_uv.y);
+		vec4 cloud_layer = texture(night_clouds, cloud_uv);
+		float edge = min(cloud_uv.x, 1.0 - cloud_uv.x);
+		if (edge < 0.018) {
+			cloud_layer = mix(cloud_layer, texture(night_clouds, vec2(1.0 - cloud_uv.x, cloud_uv.y)),
+				0.5 * (1.0 - smoothstep(0.0, 0.018, edge)));
+		}
+		vec3 cloud_light = cloud_layer.rgb * mix(0.28, 0.65, pow(max(dot(world_pos, moon_pos), 0.0), 4.0));
+		// Thin the photograph into a few feathered patches, keeping most sky
+		// clear. The coverage mask travels with the same cloud wind offset.
+		float cloud_noise = texture(cirrus_texture, fract(cloud_uv * vec2(4.0, 2.0))).r;
+		float cloud_threshold = mix(0.78, 0.28, night_cloud_coverage);
+		float sparse_clouds = smoothstep(cloud_threshold, cloud_threshold + 0.20, cloud_noise);
+		float opacity = cloud_layer.a * sparse_clouds * calm_night * horizonBlendCumulus * (1.0 - halo * 0.85);
+		col = mix(col, cloud_light, opacity * night_cloud_opacity);
 	}
 
 	col.rgb = mix(col.rgb, ground_color.rgb * scatter, clamp_to_unit((-world_pos.y - atm_level_params.z) * 100.0));
@@ -574,6 +655,25 @@ void sky() {
 
 	if (sky_visible) {
 		col = render_sky(world_pos, clouds_pos, sun_pos, moon_pos, current_time);
+		if (evening_blend > 0.001) {
+			vec2 evening_uv = vec2(0.5 + atan(world_pos.z, world_pos.x) * INV_TAU + evening_rotation,
+				acos(clamp(world_pos.y, -1.0, 1.0)) * INV_PI);
+			// SkyDome's unwrapped cloud offset avoids a visible jump when its
+			// wrapped cirrus UVs or shader TIME restart.
+			evening_uv.x += panorama_cloud_position.x * 0.018;
+			evening_uv.x = fract(evening_uv.x);
+			vec3 golden_sky = texture(evening_panorama, evening_uv).rgb;
+			float seam_distance = min(evening_uv.x, 1.0 - evening_uv.x);
+			if (seam_distance < 0.018) {
+				// Soften the generated panorama's edge into one continuous sky.
+				vec3 opposite_edge = texture(evening_panorama, vec2(1.0 - evening_uv.x, evening_uv.y)).rgb;
+				golden_sky = mix(golden_sky, opposite_edge, 0.5 * (1.0 - smoothstep(0.0, 0.018, seam_distance)));
+			}
+			// Fade around the lower hemisphere so terrain/ocean reflections keep
+			// the existing atmospheric ground rather than a hard orange seam.
+			float sky_mask = smoothstep(-0.10, 0.015, world_pos.y);
+			col = mix(col, golden_sky, evening_blend * sky_mask);
+		}
 	}
 
 	// Draw overlay grids

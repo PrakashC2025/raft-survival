@@ -1,4 +1,5 @@
 extends CharacterBody3D
+const TERRAIN := preload("res://scripts/underwater_terrain.gd")
 var species := "Fish"
 var creature_id := ""
 var health := 20.0
@@ -42,7 +43,7 @@ func _physics_process(delta: float) -> void:
 	_tick+=delta
 	if _tick<.1:return
 	var step:=minf(_tick,.2);_tick=0
-	var target:=home+Vector3(sin(_time*.18+home.x)*4.5,sin(_time*.37)*.9 if species!="Crab" else 0,cos(_time*.16+home.z)*4.5)
+	var target:=home+Vector3(sin(_time*.18+home.x)*4.5,sin(_time*.37)*.9 if species!="Crab" else 0.0,cos(_time*.16+home.z)*4.5)
 	if species=="Fish":
 		var phase:=float(get_parent().get("_swim_time"))*.12
 		target=school_centre+Vector3(sin(phase)*9,sin(phase*.7)*.6,cos(phase)*9)+Basis(Vector3.UP,phase-PI/2)*school_offset
@@ -50,6 +51,9 @@ func _physics_process(delta: float) -> void:
 	if species=="Crab":
 		var world:=get_parent()
 		target.y=float(world.call("surface_height",Vector2(target.x,target.z)))+.22
+	else:
+		# Hunting/fleeing must not pull diving fauna toward the air above waves.
+		target.y=minf(target.y,TERRAIN.MARINE_CEILING)
 	var direction:=global_position.direction_to(target)
 	var speed:=1.1 if species!="Crab" else .4
 	velocity=direction*speed
@@ -65,7 +69,7 @@ func take_damage(amount: float, actor: Node=null) -> void:
 		if not Inventory.try_exchange({},{item:1}):
 			if actor!=null:actor.call("_hud_toast","BAG FULL · CREATURE RETAINED")
 			return
-		Inventory.pickup_received.emit(item,1)
+		Inventory.notify_pickup(item,1)
 		if actor!=null:actor.call("play_action","grab",.6,global_position,item);actor.call("_queue_save")
 		visible=false;collision_layer=0;respawn=600.0;health=0
 		var progress:=get_tree().get_first_node_in_group("survival_progression")

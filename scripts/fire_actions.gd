@@ -14,7 +14,15 @@ func start(kind: String,target: Node3D=null) -> bool:
 	if kind in ["ignite_fire","snuff_fire"] and (target==null or not (target.is_in_group("campfire") or target.is_in_group("wall_torch"))):return false
 	if kind.begins_with("torch_") and (str(player.active_item) not in ["Torch","Burning Torch"] or not Inventory.has(str(player.active_item),1)):return false
 	if kind=="torch_off" and not player.get_node("SurvivalProgression").is_held_lit():return false
-	if kind=="torch_mount" and not player.call("_resolve_wall_torch").get("valid",false):return false
+	var mount: Dictionary={}
+	if kind=="torch_mount":
+		mount=player.call("_resolve_wall_torch")
+		if not mount.get("valid",false):
+			player.call("_hud_toast","AIM AT CLEAR SOLID TIMBER · TORCH KEPT IN HAND")
+			return false
+		# Lock to the wall, not the camera or the moving raft's world position.
+		mount.local_transform=mount.support.global_transform.affine_inverse()*mount.transform
+		target=mount.support
 	if kind=="ignite_fire":
 		if not Inventory.has("Stone",2):player.call("_hud_toast","LIGHT FIRE · NEED 2 STONES (REUSABLE)");return false
 		if target==null or not target.has_method("exposed_to_rain"):return false
@@ -24,6 +32,7 @@ func start(kind: String,target: Node3D=null) -> bool:
 	var seconds:=2.2 if kind=="ignite_fire" else (1.3 if kind in ["torch_light","torch_mount"] else 1.0)
 	pending={"kind":kind,"target":target,"item":str(player.active_item),"elapsed":0.0,"seconds":seconds,"committed":false,
 		"damage":Stats.damage_revision,"start":player.global_position,"raft":player.call("_get_raft_node")}
+	if not mount.is_empty(): pending.mount=mount
 	var raft:=pending.raft as Node3D
 	if raft!=null and player.global_position.distance_to(raft.global_position)>15:pending.raft=null;raft=null
 	if raft!=null:pending.start=raft.to_local(player.global_position)
@@ -85,5 +94,7 @@ func _commit() -> bool:
 			progress.extinguish_torch();player.get_node("SurvivalServices").equip_owned("Torch")
 			player.call("_hud_toast","TORCH PUT OUT")
 		"torch_mount":
-			if not player.call("mount_held_torch"):return false
+			if not player.call("mount_held_torch",pending.get("mount",{})):
+				player.call("_hud_toast","MOUNTING SPACE BLOCKED · TORCH KEPT IN HAND")
+				return false
 	return true

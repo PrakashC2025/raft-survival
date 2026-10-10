@@ -100,7 +100,20 @@ func _run() -> void:
 	touch(controls, 1, controls.size * Vector2(0.55, 0.45), true)
 	var old_yaw: float = player.rotation.y
 	drag(controls, 1, controls.size * Vector2(0.55, 0.45), Vector2(20, 10))
+	player.call("_advance_look",1.0/30.0)
 	check(not is_equal_approx(player.rotation.y, old_yaw), "Second finger can look while moving")
+	check(absf(player.rotation.y-old_yaw)<20*float(controls.get("look_sensitivity"))*.7,"Smooth look spreads touch motion instead of jumping instantly")
+	player.call("reset_look_input")
+	check((player.get("_look_remaining") as Vector2).is_zero_approx(),"Camera reset clears pending camera motion")
+	var smooth_yaw: float=player.rotation.y
+	player.call("add_look_input",Vector2(100,0),.004)
+	for unused in 6:player.call("_advance_look",1.0/30.0)
+	var at_30: float=player.rotation.y-smooth_yaw
+	player.call("reset_look_input");player.rotation.y=smooth_yaw
+	player.call("add_look_input",Vector2(100,0),.004)
+	for unused in 12:player.call("_advance_look",1.0/60.0)
+	check(absf((player.rotation.y-smooth_yaw)-at_30)<.0001,"Camera angular travel agrees at 30 and 60 FPS")
+	player.call("reset_look_input")
 	var jump: Button = controls.get("_btn_jump")
 	var rope: Button = controls.get("_btn_rope")
 	touch(controls, 2, jump.get_global_rect().get_center(), true)
@@ -254,4 +267,9 @@ func _run() -> void:
 			break
 		await physics_frame
 	await process_frame
+	# Release the live world while frames still run, so scene-owned deferred
+	# work and audio can finish teardown before the engine destroys SceneTree.
+	current_scene.queue_free()
+	for unused in 25:
+		await process_frame
 	quit(0 if failures == 0 else 1)

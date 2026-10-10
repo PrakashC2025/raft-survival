@@ -34,8 +34,7 @@ const RESOURCE_PILL_ITEMS := []
 const STATS := [["health", "HEALTH"], ["thirst", "WATER"], ["hunger", "HUNGER"]]
 const FOOD_RULES := preload("res://scripts/food_rules.gd")
 var _display_stats := [100.0,100.0,100.0]
-const CRAFT_PAGE_SIZE := 6
-const ITEM_LABELS := {"Torch":"Hand Fire Torch","Bonfire":"Bonfire","Diving Tank":"Handmade Air Tank","PlanterPot":"Plant Pot","PlanterBox":"Plant Bed","TreePot":"Tree Pot","RainCollector":"Rain Collector","SandFilter":"Sand Filter","HalfWall":"Half Wall","CargoCrate":"Cargo Crate","WallTorch":"Wall Torch","WaterPurifier":"Water Purifier","WindGenerator":"Wind Generator","ElectricLamp":"Electric Lamp","ElectricPurifier":"Electric Purifier","RescueRadio":"Rescue Radio"}
+const ITEM_LABELS := {"Torch":"Hand Fire Torch","Bonfire":"Bonfire","Diving Tank":"Handmade Air Tank","PlanterPot":"Plant Pot","PlanterBox":"Plant Bed","TreePot":"Tree Pot","RainCollector":"Rain Collector","SandFilter":"Sand Filter","HalfWall":"Half Wall","CargoCrate":"Cargo Crate","WallTorch":"Wall Torch","WaterPurifier":"Water Purifier","WindGenerator":"Wind Generator","ElectricLamp":"Salvaged LED","ElectricPurifier":"Electric Purifier","RescueRadio":"Rescue Radio"}
 const MAP_RANGE_METERS := 430.0
 var _map_range := MAP_RANGE_METERS
 
@@ -46,6 +45,7 @@ const BAG_ROWS := 5   # 24 bag slots + one row of six hotbar slots
 var _bag_open := false
 var _map_open := false
 var _craft_open := false
+var _craft_menu: Control
 var _selected_island: Node3D = null
 
 # --- map / crafting modal geometry ---
@@ -58,15 +58,7 @@ var _map_area_rect := Rect2()
 var _map_center := Vector2.ZERO
 var _map_plot_radius := 0.0
 var _map_markers: Array[Dictionary] = []
-var _craft_panel_rect := Rect2()
-var _craft_close_rect := Rect2()
-var _craft_card_rects: Array[Rect2] = []
-var _craft_page := 0
 var _craft_selected := "Torch"
-var _craft_detail_rect := Rect2()
-var _craft_confirm_rect := Rect2()
-var _craft_prev_rect := Rect2()
-var _craft_next_rect := Rect2()
 var _inspect_slot := -1
 var _bag_use_rect := Rect2()
 var _bag_equip_rect := Rect2()
@@ -92,6 +84,8 @@ var _chip_text := ""
 var _toast := ""
 var _toast_until := 0.0
 var _toast_rect := Rect2()
+var _toast_lines := PackedStringArray()
+var _toast_font_size := 15
 var _pickup_queue: Array[Dictionary] = []
 var _pickup_active: Dictionary = {}
 var _pickup_remaining := 0.0
@@ -169,18 +163,19 @@ func _on_bag_full(amount: int) -> void:
 	_show_toast("BAG FULL" if amount >= 1 else "")
 
 
-func _show_toast(text: String) -> void:
+func _show_toast(text: String, seconds: float=2.2) -> void:
 	_toast = text
-	_toast_until = Time.get_ticks_msec() / 1000.0 + 2.2
+	_toast_until = Time.get_ticks_msec() / 1000.0 + seconds
 	queue_redraw()
 
 
 ## Public toast (used by the player for quick-save feedback etc.).
-func show_toast(text: String) -> void:
-	_show_toast(text)
+func show_toast(text: String, seconds: float=2.2) -> void:
+	_show_toast(text,seconds)
 
 
 func show_death() -> void:
+	if is_instance_valid(_craft_menu):_close_crafting()
 	GameSettings.release_gameplay_input()
 	_death_open = true
 	_map_open = false
@@ -212,6 +207,7 @@ func _respawn_from_death() -> void:
 
 
 func toggle_map() -> void:
+	if is_instance_valid(_craft_menu):_close_crafting()
 	if _death_open:
 		return
 	if _map_open:
@@ -248,6 +244,17 @@ func toggle_crafting() -> void:
 	visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().paused = true
+	_craft_menu=preload("res://scripts/craft_menu.gd").new()
+	add_child(_craft_menu)
+	var products:=CRAFT_ORDER.duplicate()
+	products.append_array(["Barrel","FishingNet","SeedDryingTray"])
+	var labels:=ITEM_LABELS.duplicate();labels.FishingNet="Fishing Net";labels.ElectricLamp="Salvaged LED"
+	labels.SeedDryingTray="Seed Drying Tray"
+	_craft_menu.setup(products,labels)
+	_craft_menu.closed.connect(_close_crafting)
+	_craft_menu.build_requested.connect(func(item: String):
+		_craft_selected=item
+		_confirm_craft_selection())
 	_compute_layout()
 	queue_redraw()
 
@@ -264,6 +271,8 @@ func _close_map() -> void:
 
 func _close_crafting() -> void:
 	_craft_open = false
+	if is_instance_valid(_craft_menu):_craft_menu.hide();_craft_menu.queue_free()
+	_craft_menu=null
 	get_tree().paused = _paused
 	if not _paused and not _death_open:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -280,7 +289,11 @@ func _touch_ui_active() -> bool:
 
 
 func _should_show() -> bool:
-	return _touch_ui_active() or _map_open or _craft_open or _bag_open or _paused or _death_open
+	return _touch_ui_active() or _map_open or _craft_open or _bag_open or _paused or _death_open \
+		or (not _toast.is_empty() and Time.get_ticks_msec()/1000.0<_toast_until)
+
+func _feedback_only() -> bool:
+	return not _touch_ui_active() and not (_map_open or _craft_open or _bag_open or _paused or _death_open)
 
 
 func _on_size_changed() -> void:
@@ -368,7 +381,7 @@ func is_blocking() -> bool:
 ## start camera look from it)?
 func claims_touch(pos: Vector2) -> bool:
 	_compute_layout()
-	if not visible:
+	if not visible or _feedback_only():
 		return false
 	if _bag_open or _map_open or _craft_open or _paused or _death_open:
 		return true
@@ -557,37 +570,24 @@ func _compute_layout() -> void:
 		_map_center = Vector2.ZERO
 		_map_plot_radius = 0.0
 
-	_craft_card_rects.clear()
-	if _craft_open:
-		var craft_pad:float=clampf(_vp.y*0.03,14,24)
-		var craft_w:float=minf(_vp.x*0.94,1000)
-		var craft_h:float=minf(_vp.y*0.86,720)
-		_craft_panel_rect=Rect2((_vp.x-craft_w)*0.5,(_vp.y-craft_h)*0.5,craft_w,craft_h)
-		_craft_close_rect=Rect2(_craft_panel_rect.end.x-craft_pad-40,_craft_panel_rect.position.y+craft_pad,40,40)
-		var top:float=_craft_panel_rect.position.y+80
-		var list_w:float=(craft_w-craft_pad*3)*0.55
-		var craft_gap:float=12
-		var card_w:float=(list_w-craft_gap)*0.5
-		var card_h:float=(craft_h-155-craft_gap*2)*0.333333
-		var count:int=mini(CRAFT_PAGE_SIZE,CRAFT_ORDER.size()-_craft_page*CRAFT_PAGE_SIZE)
-		for idx in count:
-			_craft_card_rects.append(Rect2(_craft_panel_rect.position.x+craft_pad+(idx%2)*(card_w+craft_gap),top+floori(float(idx)/2)*(card_h+craft_gap),card_w,card_h))
-		var page_y:float=_craft_panel_rect.end.y-craft_pad-44
-		_craft_prev_rect=Rect2(_craft_panel_rect.position.x+craft_pad,page_y,80,44)
-		_craft_next_rect=Rect2(_craft_panel_rect.position.x+craft_pad+list_w-80,page_y,80,44)
-		_craft_detail_rect=Rect2(_craft_panel_rect.position.x+craft_pad*2+list_w,top,craft_w-list_w-craft_pad*3,craft_h-80-craft_pad)
-		_craft_confirm_rect=Rect2(_craft_detail_rect.position.x+12,_craft_detail_rect.end.y-62,_craft_detail_rect.size.x-24,50)
-	else:
-		_craft_panel_rect=Rect2();_craft_close_rect=Rect2()
-
 	# toast pill (above the bottom bar)
 	_toast_rect = Rect2()
 	var now := Time.get_ticks_msec() / 1000.0
 	if _toast != "" and now < _toast_until:
-		var tfs: int = int(clampf(_slot * 0.3, 15.0, 24.0))
-		var tw2: float = font.get_string_size(_toast, HORIZONTAL_ALIGNMENT_LEFT, -1, tfs).x
-		var tw_: float = tw2 + _slot * 0.7
-		var th: float = _slot * 0.5
+		_toast_font_size = int(clampf(_slot * 0.3, 15.0, 20.0))
+		var max_width := minf(_vp.x-48,680.0)
+		_toast_lines = PackedStringArray()
+		var line := ""
+		for word in _toast.split(" ",false):
+			var next := word if line.is_empty() else line+" "+word
+			if not line.is_empty() and font.get_string_size(next,HORIZONTAL_ALIGNMENT_LEFT,-1,_toast_font_size).x>max_width-32:
+				_toast_lines.append(line);line=word
+			else:line=next
+		_toast_lines.append(line)
+		var tw2 := 0.0
+		for text_line in _toast_lines:tw2=maxf(tw2,font.get_string_size(text_line,HORIZONTAL_ALIGNMENT_LEFT,-1,_toast_font_size).x)
+		var tw_: float = minf(max_width,tw2+32)
+		var th: float = _toast_lines.size()*(_toast_font_size+6)+20
 		_toast_rect = Rect2((_vp.x - tw_) * 0.5, y0 - th - m, tw_, th)
 	else:
 		_toast = ""
@@ -652,6 +652,7 @@ func _build_cache_key() -> String:
 	var p := _get_player()
 	var key := str(_vp)
 	key += "|bag" + str(_bag_open)
+	key += "|inspect" + str(_inspect_slot)
 	key += "|map" + str(_map_open) + "|craft" + str(_craft_open) + "|death" + str(_death_open)
 	key += "|map_selected" + (str(_selected_island.name) if _selected_island != null and is_instance_valid(_selected_island) else "")
 	if p == null:
@@ -665,7 +666,7 @@ func _build_cache_key() -> String:
 	key += "|act" + str(int(p.get("active_slot_index")))
 	key += "|av" + str(p.get("active_item"))
 	if _map_open:key+="|heading"+str(snappedf(p.global_rotation.y,.01))+"|position"+str(p.global_position.snapped(Vector3.ONE))
-	if progress!=null and (progress.oxygen<=25 or (progress.diving_tank and progress.air_tank_seconds<=30)):key+="|airblink"+str(int(Time.get_ticks_msec()/400))
+	if progress!=null and (progress.oxygen<=25 or (progress.diving_tank and progress.air_tank_seconds<=30)):key+="|airblink"+str(floori(float(Time.get_ticks_msec())/400.0))
 	key += "|valid" + str(p.get("build_valid") == true)
 	# inventory digest (totals are cheap; pickups/removals change them)
 	for item in Inventory.items:
@@ -756,6 +757,10 @@ func _input(event: InputEvent) -> void:
 	var controls := get_parent().get_node_or_null("MobileControls")
 	if controls != null and bool(controls.get("_help_open")):
 		return
+	# ScrollContainer owns the finger and its emulated mouse stream. The
+	# gameplay input stays released/paused until this menu is dismissed.
+	if _craft_open and is_instance_valid(_craft_menu) and not event is InputEventKey:
+		return
 	# Android replays a finger event as a mouse event. This custom HUD already
 	# handles the finger; processing both can immediately close the opened bag
 	# or confirm a recipe twice. Real desktop mouse events remain supported.
@@ -800,7 +805,7 @@ func _input(event: InputEvent) -> void:
 			toggle_crafting()
 			_consume_input()
 			return
-	if not visible:
+	if not visible or _feedback_only():
 		return
 	if _map_open or _craft_open:
 		_handle_modal_pointer(event)
@@ -913,20 +918,6 @@ func _handle_modal_pointer(event: InputEvent) -> void:
 					nearest=distance
 					_selected_island = marker.get("node") as Node3D
 					queue_redraw()
-	elif _craft_open:
-		if _craft_close_rect.has_point(pointer):
-			_close_crafting()
-		elif _craft_confirm_rect.has_point(pointer):
-			_confirm_craft_selection()
-		elif _craft_prev_rect.has_point(pointer):
-			_craft_page=posmod(_craft_page-1,int(ceil(float(CRAFT_ORDER.size())/CRAFT_PAGE_SIZE)));_compute_layout();queue_redraw()
-		elif _craft_next_rect.has_point(pointer):
-			_craft_page=posmod(_craft_page+1,int(ceil(float(CRAFT_ORDER.size())/CRAFT_PAGE_SIZE)));_compute_layout();queue_redraw()
-		else:
-			for i in range(_craft_card_rects.size()):
-				if _craft_card_rects[i].has_point(pointer):
-					_craft_selected=CRAFT_ORDER[_craft_page*CRAFT_PAGE_SIZE+i];queue_redraw()
-					break
 	_consume_input()
 
 
@@ -964,15 +955,19 @@ func _craft_item(item_name: String) -> void:
 		if actor!=null:actor.get_node("EquipmentRepairs").start("assemble_electronics",null,item_name)
 		queue_redraw();return
 	if Inventory.craft_item(item_name):
+		_close_crafting()
 		var player := _get_player()
 		if player!=null:player.call("play_action","craft",0.7)
-		_show_toast("CRAFTED " + item_name.to_upper())
+		_show_toast(str(ITEM_LABELS.get(item_name,item_name)).to_upper()+" BUILT · ADDED TO BAG",4.0)
 	else:
 		_show_toast("NEED MATERIALS FOR " + item_name.to_upper())
 	queue_redraw()
 
 func _confirm_craft_selection() -> void:
 	if Inventory.RECIPES.has(_craft_selected):
+		if not Inventory.can_afford(_craft_selected):
+			_show_toast("NEED MATERIALS OR MISSION UNLOCK")
+			return
 		_close_crafting()
 		var actor:=_get_player()
 		if actor!=null:actor.call("select_piece_for_build",actor.BUILD_RECIPE_NAMES.find(_craft_selected))
@@ -984,7 +979,7 @@ func _use_bag_selection(eat: bool) -> void:
 	var actor:=_get_player()
 	if actor==null:return
 	var item:=Inventory.slot_item(_inspect_slot)
-	if eat and not FOOD_RULES.edible(item) and item not in ["Medkit","Can","Tumbler","Bandage","Solar Torch","Binoculars","Walkie Talkie","WindGenerator","ElectricLamp"]:return
+	if eat and not FOOD_RULES.edible(item) and item not in ["Medkit","Can","Tumbler","Bandage","Solar Torch","Binoculars","Walkie Talkie","WindGenerator","ElectricLamp"] and preload("res://scripts/garden_items.gd").box_crop(item).is_empty() and preload("res://scripts/garden_items.gd").seed_crop(item,true).is_empty():return
 	var equip_slot:=_inspect_slot
 	if equip_slot>=HOTBAR_COUNT:
 		equip_slot=clampi(int(actor.active_slot_index),0,HOTBAR_COUNT-1)
@@ -1184,6 +1179,10 @@ func _get_raft() -> Node3D:
 func _draw() -> void:
 	if not visible or _vp.x <= 0.0:
 		return
+	if _craft_open and is_instance_valid(_craft_menu):return
+	if _feedback_only():
+		if not _toast.is_empty() and _toast_rect.has_area():_draw_toast()
+		return
 	_draw_status()
 	_draw_clock()
 	_draw_pause_btn()
@@ -1204,8 +1203,6 @@ func _draw() -> void:
 		_draw_drag_ghost()
 	if _paused:
 		_draw_pause_overlay()
-	if _craft_open:
-		_draw_crafting_overlay()
 	if _map_open:
 		_draw_map_overlay()
 	if _death_open:
@@ -1409,57 +1406,6 @@ func _draw_map_overlay() -> void:
 			Color(0.95, 0.99, 0.88, 0.98) if button_enabled else Color(0.74, 0.81, 0.79, 0.8))
 
 
-func _draw_crafting_overlay() -> void:
-	draw_rect(Rect2(Vector2.ZERO,_vp),Color(0.01,0.025,0.035,0.84))
-	var panel:=_craft_panel_rect
-	_draw_rounded(panel,20,Color(0.075,0.09,0.095,0.99))
-	_draw_text("CRAFT & BUILD",panel.position+Vector2(24,40),28,Color(0.98,0.9,0.7))
-	_draw_text("Select an item to review its materials.",panel.position+Vector2(24,63),15,Color(0.75,0.79,0.75))
-	Icons.cross(self,_craft_close_rect.get_center(),14,2.5,Color.WHITE)
-	for i in _craft_card_rects.size():
-		var item:String=CRAFT_ORDER[_craft_page*CRAFT_PAGE_SIZE+i]
-		var rect:=_craft_card_rects[i]
-		var selected:=item==_craft_selected
-		_draw_rounded(rect,12,Color(0.18,0.26,0.20) if selected else Color(0.11,0.14,0.15))
-		_draw_rounded(rect,12,UI_SURFACE.BRASS if selected else Color(1,1,1,0.15),false,1.5)
-		Icons.item_icon(self,item,rect.get_center()-Vector2(0,14),minf(rect.size.y*0.26,34))
-		var label:String=ITEM_LABELS.get(item,item)
-		var fs:int=mini(17,maxi(12,int(rect.size.x/maxf(float(label.length()),1)*1.6)))
-		draw_string(ThemeDB.fallback_font,rect.position+Vector2(6,rect.size.y-18),label,HORIZONTAL_ALIGNMENT_CENTER,rect.size.x-12,fs,Color(0.96,0.93,0.83))
-	_draw_pause_button(_craft_prev_rect,"BACK",false)
-	_draw_pause_button(_craft_next_rect,"NEXT",false)
-	var page_label:="%d / %d"%[_craft_page+1,ceili(float(CRAFT_ORDER.size())/CRAFT_PAGE_SIZE)]
-	_draw_text(page_label,Vector2((_craft_prev_rect.end.x+_craft_next_rect.position.x)*0.5-18,_craft_next_rect.position.y+28),16,Color.WHITE)
-	var detail:=_craft_detail_rect
-	_draw_rounded(detail,12,Color(0.045,0.065,0.065))
-	var name_text:String=ITEM_LABELS.get(_craft_selected,_craft_selected)
-	_draw_text(name_text.to_upper(),detail.position+Vector2(16,32),20,Color(0.98,0.9,0.7))
-	var structure:=Inventory.RECIPES.has(_craft_selected)
-	var recipe:Dictionary=Inventory.recipe_cost(_craft_selected) if structure else Inventory.ITEM_RECIPES.get(_craft_selected,{})
-	_draw_text("MATERIAL        HAVE / NEED",detail.position+Vector2(16,68),14,Color(0.75,0.79,0.75))
-	var y:float=detail.position.y+104
-	for material in recipe:
-		var owned:int=Inventory.total(material)
-		var needed:int=int(recipe[material])
-		var tint:=Color(0.6,0.92,0.66) if owned>=needed else Color(1,0.48,0.36)
-		Icons.item_icon(self,material,Vector2(detail.position.x+30,y-5),14)
-		_draw_text(str(material),Vector2(detail.position.x+54,y),16,Color(0.9,0.9,0.84))
-		_draw_text("%d / %d"%[owned,needed],Vector2(detail.end.x-106,y),16,tint)
-		y+=38
-	var ready:bool=Inventory.can_afford(_craft_selected) if structure else Inventory.can_craft_item(_craft_selected)
-	var hint:="Choose a spot, then press PLACE." if structure else "Confirm to craft one item."
-	if not Inventory.recipe_unlocked(_craft_selected):hint="Locked: complete the current mission."
-	elif not ready:hint="Gather missing materials." if structure or not Inventory.can_afford_item(_craft_selected) else "Make room in your bag."
-	if _craft_selected in ["PlanterPot","PlanterBox"]:hint="Root crops · foundation or roof top."
-	elif _craft_selected=="TreePot":hint="Trees · foundation or roof top."
-	var tool_hints:={"Axe":"Chop trees faster. Equip and aim.","Pickaxe":"Mine marked island deposits.","Shovel":"Dig 3 Soil/Sand; harvest faster.","Paddle":"Row from your raft; uses stamina.","Anchor":"Stop the raft. Raise to sail again."}
-	if ready and tool_hints.has(_craft_selected):hint=tool_hints[_craft_selected]
-	if ready and _craft_selected=="Torch":hint="Hold it near a lit bonfire to light it."
-	if ready and _craft_selected=="Diving Tank":hint="3 min air · equip; refill with empty hands on land."
-	_draw_text(hint,Vector2(detail.position.x+12,_craft_confirm_rect.position.y-18),13,Color(0.78,0.82,0.75))
-	_draw_pause_button(_craft_confirm_rect,"CHOOSE BUILD SPOT" if structure else "CONFIRM CRAFT",ready)
-
-
 func _draw_mission() -> void:
 	if gameplay_input_blocked() or _vp.x < 500:
 		return
@@ -1484,7 +1430,7 @@ func _draw_mission() -> void:
 	if show_air:
 		var air := " · AIR %d:%02d" % [floori(progress.air_tank_seconds/60.0),int(progress.air_tank_seconds)%60] if progress.diving_tank else ""
 		var warning:bool=progress.oxygen<=25 or (progress.diving_tank and progress.air_tank_seconds<=30)
-		var tint:=Color(1,.46,.27,.45 if int(Time.get_ticks_msec()/400)%2 else 1.0) if warning else Color(.78,.89,.92)
+		var tint:=Color(1,.46,.27,.45 if floori(float(Time.get_ticks_msec())/400.0)%2 else 1.0) if warning else Color(.78,.89,.92)
 		_draw_text("OXYGEN %d%% · STAMINA %d%%%s" % [int(progress.oxygen),int(progress.stamina),air],rect.position+Vector2(12,76),13,tint)
 
 func _draw_pause_overlay() -> void:
@@ -1552,13 +1498,10 @@ func _draw_pickup() -> void:
 	_draw_text("COLLECTED  +%d"%int(_pickup_active.amount),rect.position+Vector2(76,53)*scale_factor,int(15*scale_factor),Color(0.6,0.95,0.72,fade))
 
 func _draw_toast() -> void:
-	_draw_rounded(_toast_rect, _toast_rect.size.y * 0.5, Color(0.55, 0.12, 0.1, 0.88))
-	_draw_rounded(_toast_rect, _toast_rect.size.y * 0.5, Color(1, 1, 1, 0.35), false, 1.5)
-	var fs: int = int(clampf(_toast_rect.size.y * 0.55, 15.0, 24.0))
-	var font := ThemeDB.fallback_font
-	var tw: float = font.get_string_size(_toast, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-	_draw_text(_toast, Vector2(_toast_rect.position.x + (_toast_rect.size.x - tw) * 0.5,
-			_toast_rect.position.y + _toast_rect.size.y * 0.52 + fs * 0.34), fs, Color(1, 1, 1, 0.98))
+	_draw_rounded(_toast_rect,12,Color(.025,.11,.16,.96))
+	_draw_rounded(_toast_rect,12,Color(.38,.78,.78,.65),false,1.0)
+	for index in _toast_lines.size():
+		_draw_text(_toast_lines[index],_toast_rect.position+Vector2(16,10+_toast_font_size+index*(_toast_font_size+6)),_toast_font_size,Color(.94,.98,1))
 
 
 ## Bottom bar: NORMAL = inventory slots 0..5 + bag; BUILD = piece slots.
@@ -1802,7 +1745,7 @@ func _draw_bag_panel() -> void:
 	for idx in range(_bag_slot_rects.size()):
 		var b: Rect2 = _bag_slot_rects[idx]
 		var is_hotbar: bool = idx < HOTBAR_COUNT
-		var selected: bool = is_hotbar and idx == act_slot and not Inventory.slot_empty(idx) and not (p != null and p.get("rope_gun_selected"))
+		var selected: bool = not Inventory.slot_empty(idx) and (idx == _inspect_slot if _inspect_slot >= 0 else (is_hotbar and idx == act_slot and not (p != null and p.get("rope_gun_selected"))))
 		_draw_slot(b, _pressed_visual == idx, selected)
 		# hotbar row gets a subtle divider tint so it reads as the equip row
 		if is_hotbar:
@@ -1829,8 +1772,11 @@ func _draw_bag_panel() -> void:
 	if _inspect_slot>=0 and not Inventory.slot_empty(_inspect_slot):
 		var inspected:=Inventory.slot_item(_inspect_slot)
 		var edible:=FOOD_RULES.edible(inspected) or inspected in ["Medkit","Can","Tumbler","Bandage","Solar Torch","Binoculars","Walkie Talkie","WindGenerator","ElectricLamp"]
-		_draw_pause_button(_bag_use_rect,"PLACE" if inspected in ["WindGenerator","ElectricLamp"] else "USE" if inspected in ["Medkit","Can","Tumbler","Solar Torch","Binoculars","Walkie Talkie"] else ("USE / DRINK" if FOOD_RULES.is_drink(inspected) else "USE / EAT"),edible)
+		_draw_pause_button(_bag_use_rect,"PLACE" if inspected=="WindGenerator" else "USE" if inspected in ["Medkit","Can","Tumbler","Solar Torch","Binoculars","Walkie Talkie","ElectricLamp"] else ("USE / DRINK" if FOOD_RULES.is_drink(inspected) else "USE / EAT"),edible)
 		_draw_pause_button(_bag_equip_rect,"HOLD TO PLANT" if PlantDB.crop_for_item(inspected)!="" else "HOLD ITEM",true)
+		if not preload("res://scripts/garden_items.gd").box_crop(inspected).is_empty():_draw_pause_button(_bag_use_rect,"OPEN BOX",true)
+		elif not preload("res://scripts/garden_items.gd").seed_crop(inspected,true).is_empty():_draw_pause_button(_bag_use_rect,"DRY SEEDS",true)
+		elif inspected in preload("res://scripts/garden_items.gd").CROPS:_draw_pause_button(_bag_use_rect,"EAT / SAVE SEEDS",true)
 	else:
 		_draw_text("TAP AN ITEM FOR USE OPTIONS",Vector2(rect.position.x+24,rect.end.y-18),12,Color(0.8,0.84,0.75))
 

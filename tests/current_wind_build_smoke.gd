@@ -97,6 +97,7 @@ func run() -> void:
 	var speed:float=generator._rotor_speed;generator.interact_survival(player);generator._process(.2)
 	check(not generator.enabled and generator._rotor_speed<speed,"Brake switch reaches by hand and blades slow down")
 	var charge:float=generator.charge;consumer.advance(1.0)
+	consumer.wired_source=generator.machine_id;consumer.advance(1.0)
 	check(consumer.seconds>0 and generator.charge<charge,"Stored energy powers the purifier with the rotor braked")
 	check(not consumer.request_power(-1.0),"Invalid power requests cannot add energy")
 	var saved:Dictionary=generator.save_survival_state();generator.charge=0;generator.restore_survival_state(saved)

@@ -1,6 +1,7 @@
 extends RefCounted
 ## One editable configuration: effects are [hunger, thirst, health].
 const RAW := {
+	"Bell Pepper":[7,4,0],"Cucumber":[5,10,0],"Pumpkin":[6,1,0],"Strawberry":[6,4,0],"Corn":[9,1,0],"Papaya":[11,8,0],
 	"Potato":[5,-1,-3],"Tomato":[6,3,-2],"Banana":[8,1,-1],"Coconut":[7,12,-1],
 	"Carrot":[5,1,-2],"Onion":[4,-1,-2],"Fish":[7,-2,-8],"Raw Bird":[7,-2,-10],
 	"Raw Meat":[8,-2,-10],"Raw Crab":[6,-2,-7],"Water":[0,40,0],
@@ -10,6 +11,14 @@ const RAW := {
 }
 static func is_drink(item: String) -> bool:return item in ["Water","Dirty Water Can","Clean Water Can","Ocean Water Tumbler","Boiled Water Tumbler"]
 const RECIPES := {
+	"Roasted Pumpkin":{"ingredients":{"Sliced Pumpkin":1},"seconds":10,"effects":[25,5,6]},
+	"Roasted Corn":{"ingredients":{"Sliced Corn":1},"seconds":10,"effects":[26,4,6]},
+	"Garden Vegetable Stew":{"ingredients":{"Sliced Bell Pepper":1,"Sliced Tomato":1,"Clean Water Can":1},"seconds":18,"effects":[37,28,11]},
+	"Cucumber Tomato Soup":{"ingredients":{"Sliced Cucumber":1,"Sliced Tomato":1,"Clean Water Can":1},"seconds":16,"effects":[31,32,9]},
+	"Papaya Banana Mash":{"ingredients":{"Sliced Papaya":1,"Banana":1,"Clean Water Can":1},"seconds":12,"effects":[35,22,8]},
+	"Strawberry Compote":{"ingredients":{"Sliced Strawberry":1,"Clean Water Can":1},"seconds":9,"effects":[23,20,6]},
+	"Pepper Fish Skillet":{"ingredients":{"Sliced Bell Pepper":1,"Fish":1},"seconds":17,"effects":[39,9,12]},
+	"Pumpkin Corn Soup":{"ingredients":{"Sliced Pumpkin":1,"Sliced Corn":1,"Clean Water Can":1},"seconds":20,"effects":[43,28,12]},
 	"Cooked Potato":{"ingredients":{"Potato":1},"seconds":8,"effects":[20,3,5]},
 	"Cooked Tomato":{"ingredients":{"Tomato":1},"seconds":7,"effects":[18,8,5]},
 	"Cooked Fish":{"ingredients":{"Fish":1},"seconds":12,"effects":[28,4,8]},
@@ -30,7 +39,7 @@ const RECIPES := {
 	"Crab Tomato Broth":{"ingredients":{"Raw Crab":1,"Tomato":1,"Onion":1,"Clean Water Can":1},"seconds":20,"effects":[42,28,12]}
 }
 static func category(dish: String) -> String:
-	if dish in ["Banana Mash","Tropical Fruit Stew"]:return "FRUIT"
+	if dish in ["Banana Mash","Tropical Fruit Stew","Papaya Banana Mash","Strawberry Compote"]:return "FRUIT"
 	return "SOUPS & STEWS" if RECIPES[dish].ingredients.has("Clean Water Can") else "GRILL"
 static func method(dish: String) -> String:
 	if dish=="Grilled Fish and Onion":return "Grill fish over embers with sliced onion."
@@ -40,6 +49,7 @@ static func method(dish: String) -> String:
 	if category(dish)=="SOUPS & STEWS":return "Slice ingredients, add clean water and simmer."
 	return "Prepare and turn over the embers until cooked."
 static func effects(item: String) -> Array:
+	if not preload("res://scripts/garden_items.gd").sliced_crop(item).is_empty():item=preload("res://scripts/garden_items.gd").sliced_crop(item)
 	if item=="Baked Potato":item="Cooked Potato" # legacy meals remain usable
 	if RAW.has(item):return RAW[item]
 	return RECIPES[item].effects if RECIPES.has(item) else []

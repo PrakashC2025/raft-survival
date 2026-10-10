@@ -45,7 +45,7 @@ func _run() -> void:
 		hold(item);await frames()
 		check(player._hand_item.find_child("OldClothTape",true,false)!=null and player._hand_item.find_child("ChippedCasing",true,false)!=null,item+" has physical worn tape and chipped casing")
 	var pool: Array=load("res://scripts/debris_spawner.gd").SALVAGE_POOL
-	check(not pool.has("ElectricLamp") and pool.has("Solar Torch") and pool.has("Walkie Talkie"),"No new lamps wash up; weathered handheld electronics do")
+	check(pool.has("ElectricLamp") and pool.has("Solar Torch") and pool.has("Walkie Talkie"),"Damaged LEDs and weathered handheld electronics wash up")
 	check(not player.get_node("CanvasLayer/SurvivalHUD").CRAFT_ORDER.has("ElectricLamp") and not inventory.can_afford("ElectricLamp"),"New lamp crafting is removed")
 	var progress:=player.get_node("SurvivalProgression");progress.level=3;progress.events={}
 	progress.record("build:WindGenerator");progress.record("power")

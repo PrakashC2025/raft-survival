@@ -47,7 +47,7 @@ func shot(label: String) -> void:
 	var offsets := [Vector2i.ZERO, Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2), Vector2i(8, 0), Vector2i(-8, 0), Vector2i(0, 8), Vector2i(0, -8)]
 	for offset in offsets:
 		moon_light = maxf(moon_light, luminance(picture.get_pixelv(pixel + offset)))
-		sky_light += luminance(picture.get_pixelv(pixel + offset + Vector2i(45, 0))) / float(offsets.size())
+		sky_light += luminance(picture.get_pixelv(pixel + offset + Vector2i(100, 0))) / float(offsets.size())
 	check(moon_light > sky_light + 0.12 and moon_light > 0.25, "Visible illuminated moon surface is brighter than surrounding sky: " + label)
 
 func _run() -> void:

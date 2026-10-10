@@ -14,6 +14,7 @@ static func set_night_readability(value: float) -> void:
 	for skin: ShaderMaterial in _weather_materials.values():skin.set_shader_parameter("night_readability",fill)
 
 static func create(item: String) -> Node3D:
+	if not preload("res://scripts/garden_items.gd").box_crop(item).is_empty():return preload("res://scripts/garden_visual.gd").produce(item)
 	var root := Node3D.new()
 	root.name = "Salvage" + item
 	match item:
@@ -34,11 +35,11 @@ static func create(item: String) -> Node3D:
 			for offset in [-.17,0.0,.17]:
 				_part(root,_box("salvage_pallet",Vector3(.12,.08,.52)),timber,Vector3(offset,0,0))
 		"Wood", "Barrel":
-			var log := item=="Wood"
-			var key := "drift_log" if log else "stave_barrel"
-			if not _meshes.has(key):_meshes[key]=_timber_body(log)
+			var is_log := item=="Wood"
+			var key := "drift_log" if is_log else "stave_barrel"
+			if not _meshes.has(key):_meshes[key]=_timber_body(is_log)
 			_part(root,_meshes[key],MATERIALS.make(MATERIALS.Kind.WOOD,Color(0.44,0.30,0.17),0.85),Vector3.ZERO)
-			if not log:
+			if not is_log:
 				if not _meshes.has("barrel_hoop"):
 					_meshes["barrel_hoop"]=_barrel_hoop()
 				for y in [-0.16,0.16]:
@@ -99,7 +100,7 @@ static func create(item: String) -> Node3D:
 					MATERIALS.make(MATERIALS.Kind.CLOTH, Color(0.27, 0.35, 0.16), 0.9), Vector3(0, 0.01, -0.029))
 	return root
 
-static func _timber_body(log: bool) -> ArrayMesh:
+static func _timber_body(is_log: bool) -> ArrayMesh:
 	# Smooth shared salvage silhouettes, irregular end grain and a bulged barrel
 	# with recessed stave seams. No separate physics bodies for visual details.
 	var surface:=SurfaceTool.new();surface.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -108,19 +109,19 @@ static func _timber_body(log: bool) -> ArrayMesh:
 		var t:=float(ring)/rings
 		for side in range(sides+1):
 			var u:=float(side)/sides;var a:=u*TAU
-			var radius:float=0.12*(1.0+0.045*sin(a*3.0+t*2.0)+0.025*cos(a*7.0)) if log else 0.21*(0.84+0.16*sin(t*PI))*(1.0-0.025*pow(absf(cos(a*8.0)),24.0))
-			var along:float=(t-0.5)*(0.86 if log else 0.5)
-			if log:along+=cos(a*5.0)*0.009*pow(absf(t-0.5)*2.0,8.0)
+			var radius:float=0.12*(1.0+0.045*sin(a*3.0+t*2.0)+0.025*cos(a*7.0)) if is_log else 0.21*(0.84+0.16*sin(t*PI))*(1.0-0.025*pow(absf(cos(a*8.0)),24.0))
+			var along:float=(t-0.5)*(0.86 if is_log else 0.5)
+			if is_log:along+=cos(a*5.0)*0.009*pow(absf(t-0.5)*2.0,8.0)
 			surface.set_uv(Vector2(u,t))
-			surface.add_vertex(Vector3(cos(a)*radius,sin(a)*radius,along) if log else Vector3(cos(a)*radius,along,sin(a)*radius))
+			surface.add_vertex(Vector3(cos(a)*radius,sin(a)*radius,along) if is_log else Vector3(cos(a)*radius,along,sin(a)*radius))
 	for ring in rings:
 		for side in sides:
 			var a:=ring*(sides+1)+side;var b:=a+sides+1
-			for index in ([a,b,a+1,a+1,b,b+1] if log else [a,a+1,b,a+1,b+1,b]):surface.add_index(index)
+			for index in ([a,b,a+1,a+1,b,b+1] if is_log else [a,a+1,b,a+1,b+1,b]):surface.add_index(index)
 	for end in 2:
 		var start:=end*rings*(sides+1)
 		for side in range(1,sides-1):
-			var flip:bool=(end==1)==log
+			var flip:bool=(end==1)==is_log
 			for index in ([start,start+side+1,start+side] if flip else [start,start+side,start+side+1]):surface.add_index(index)
 	surface.generate_normals();return surface.commit()
 
@@ -180,6 +181,7 @@ static func _part(root: Node3D, mesh: Mesh, material: Material, position: Vector
 	return part
 
 static func weather(root: Node3D,item: String) -> void:
+	if not preload("res://scripts/garden_items.gd").box_crop(item).is_empty():return
 	if item in ["Solar Torch","Walkie Talkie","Binoculars"]:return # Preserved imported texture plus dedicated aged electronics skin.
 	if item=="Sponge":return # Its existing porous surface already supplies detail.
 	if item in ["Potato Seed","Tomato Seed","Banana Seed"]:return # Detailed produce skin.

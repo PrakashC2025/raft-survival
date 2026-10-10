@@ -10,6 +10,7 @@ uniform vec4 cover_boxes[64]; // centre XZ, half-size XZ
 uniform vec4 cover_levels[64]; // top, bottom, sin(yaw), cos(yaw)
 uniform sampler2D roof_heights : filter_nearest, repeat_disable;
 uniform vec2 roof_map_origin;
+uniform float roof_map_span = 32.0;
 uniform bool roof_map_enabled = false;
 varying vec3 rain_world;
 void vertex() {
@@ -20,7 +21,7 @@ void vertex() {
 }
 void fragment() {
 	vec3 p = (world_to_raft * vec4(rain_world,1.0)).xyz;
-	vec2 roof_uv = (p.xz - roof_map_origin) / 32.0;
+	vec2 roof_uv = (p.xz - roof_map_origin) / roof_map_span;
 	if (roof_map_enabled && all(greaterThanEqual(roof_uv,vec2(0.0))) && all(lessThan(roof_uv,vec2(1.0)))) {
 		if (p.y < texture(roof_heights,roof_uv).r) discard;
 	}

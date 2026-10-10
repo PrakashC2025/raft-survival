@@ -82,10 +82,25 @@ func _run() -> void:
 	check(roof_result.get("valid",false) and roof_result.has("roof_plan"),"One wall automatically supports a whole roof tile over the aimed deck")
 	if roof_result.get("valid",false):
 		check(raft.to_local(roof_result.transform.origin).distance_to(Vector3(4,2.725,4))<0.001,"Automatic roof is centred over its foundation")
-		player.call("_try_build"); await frames()
+		var previous_position:=player.global_position
+		player.global_position=raft.to_global(Vector3(4,1.1,4))
+		player.aim_point=raft.to_global(Vector3(400,90,400))
+		player.aim_valid=false;player.aim_collider=null
+		player.call("_begin_build_action")
+		check(not player._pending_build.is_empty(),"Green fitted ceiling starts assembly even with a sky ray")
+		player.call("_tick_build_action",.8);await frames()
+		player.global_position=previous_position
 	var roof:=built.find_child("Roof_*",false,false) as Node3D
 	check(roof!=null,"Automatic roof confirmation places the ceiling")
 	if roof!=null:
+		check(not roof.get_node("MeshInstance3D").visible and roof.get_node("TimberDetails").visible,"Roof renders only its finished timbers, keeping the hidden solver box invisible")
+		var stable:=roof.transform
+		for turn in 20:
+			raft.rotation=Vector3(sin(turn)*.02,turn*.04,cos(turn)*.02)
+			roof.call("refresh",true)
+			check(roof.transform.is_equal_approx(stable) and not roof.get_node("MeshInstance3D").visible,"Roof stays fixed to its grid during raft motion")
+		raft.rotation=Vector3.ZERO
+		check(not aim("Roof",Vector3(4,2.725,4),roof).get("valid",false),"An occupied ceiling rejects a second overlapping roof")
 		wall.get_node("CollisionShape3D").disabled=true
 		await frames()
 		check(aim("Stairs",Vector3(4,0.15,4),deck).get("valid",false),"Stairs can cut their walking corridor into an existing ceiling")
@@ -130,6 +145,7 @@ func _run() -> void:
 		low=minf(low,height); high=maxf(high,height)
 	check(high-low>0.30 and high-low<1.5 and ocean.wave_height<0.75,"Calm sea retains low visible swells without the former tall waves")
 	var before: float=ocean.call("get_height",Vector3(11,0,9))
+	check(ocean.cast_shadow==GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,"Ocean waves cannot cast moving shadows onto the foundation")
 	ocean._time+=3
 	check(absf(float(ocean.call("get_height",Vector3(11,0,9)))-before)>0.04,"Wave geometry and buoyancy move over time")
 	check(preload("res://scripts/construction_audio.gd").build_sound("Wall")==preload("res://audio/chop.ogg"),"Construction uses the included CC0 timber impact")

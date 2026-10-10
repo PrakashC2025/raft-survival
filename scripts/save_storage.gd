@@ -49,6 +49,9 @@ static func _valid_save(data: Dictionary) -> bool:
 		if not creature is Dictionary:return false
 		if not _number(creature.get("health",0)) or not _number(creature.get("respawn",0)):return false
 		if float(creature.get("health",0))<0 or float(creature.get("health",0))>30 or float(creature.get("respawn",0))<0 or float(creature.get("respawn",0))>600:return false
+	if not data.get("underwater_resources",{}) is Dictionary:return false
+	for taken in data.get("underwater_resources",{}).values():
+		if not taken is bool:return false
 	if data.has("raft_anchored") and not data.raft_anchored is bool:return false
 	if data.has("winter_exposure") and not _number(data.winter_exposure):return false
 	if not data.get("biome_resources",{}) is Dictionary:return false
@@ -83,8 +86,8 @@ static func _authentication_key(key: PackedByteArray) -> PackedByteArray:
 
 static func _key(create: bool) -> PackedByteArray:
 	if FileAccess.file_exists(KEY_PATH):
-		var bytes := FileAccess.get_file_as_bytes(KEY_PATH)
-		return bytes if bytes.size() == 32 else PackedByteArray()
+		var stored_key := FileAccess.get_file_as_bytes(KEY_PATH)
+		return stored_key if stored_key.size() == 32 else PackedByteArray()
 	if not create:
 		return PackedByteArray()
 	var bytes := Crypto.new().generate_random_bytes(32)

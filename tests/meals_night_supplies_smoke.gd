@@ -29,12 +29,13 @@ func save_shot(label: String) -> Image:
 func food_gallery() -> void:
 	var layer:=CanvasLayer.new();layer.layer=120;root.add_child(layer)
 	var background:=ColorRect.new();background.color=Color("0d1922");background.size=Vector2(root.size);layer.add_child(background)
-	var heading:=Label.new();heading.text="CAMP KITCHEN  /  18 DISTINCT RECIPES";heading.position=Vector2(26,10);heading.add_theme_font_size_override("font_size",22);layer.add_child(heading)
+	var heading:=Label.new();heading.text="CAMP KITCHEN  /  %d DISTINCT RECIPES"%RULES.RECIPES.size();heading.position=Vector2(26,10);heading.add_theme_font_size_override("font_size",22);layer.add_child(heading)
+	var row_height: float=(root.size.y-46.)/ceilf(RULES.RECIPES.size()/6.0)
 	var index:=0
 	for dish in RULES.RECIPES:
-		var at:=Vector2(12+(index%6)*210,46+floorf(index/6.0)*222)
-		var picture:=TextureRect.new();picture.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;picture.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED;picture.texture=ART.food_texture(dish);picture.position=at;picture.size=Vector2(196,175);layer.add_child(picture)
-		var name:=Label.new();name.text=dish;name.position=at+Vector2(0,175);name.size=Vector2(196,40);name.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;name.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;name.add_theme_font_size_override("font_size",15);layer.add_child(name)
+		var at:=Vector2(12+(index%6)*210,46+floorf(index/6.0)*row_height)
+		var picture:=TextureRect.new();picture.expand_mode=TextureRect.EXPAND_IGNORE_SIZE;picture.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED;picture.texture=ART.food_texture(dish);picture.position=at;picture.size=Vector2(196,row_height-36);layer.add_child(picture)
+		var name:=Label.new();name.text=dish;name.position=at+Vector2(0,row_height-36);name.size=Vector2(196,36);name.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;name.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;name.add_theme_font_size_override("font_size",15);layer.add_child(name)
 		index+=1
 	await save_shot("recipe-food-gallery");layer.queue_free();await frames()
 func _run() -> void:
@@ -42,7 +43,7 @@ func _run() -> void:
 	preview="--preview" in OS.get_cmdline_user_args();root.size=Vector2i(1280,720)
 	var hashes: Array=[]
 	var shared: Texture2D
-	for dish in RULES.RECIPES:
+	for dish in ART.MEAL_REGIONS:
 		var texture:=ART.food_texture(dish) as AtlasTexture
 		check(texture!=null,"Recipe consumes its photographic picture: "+dish)
 		if texture==null:continue
@@ -50,6 +51,14 @@ func _run() -> void:
 		check(texture.atlas==shared and abs(texture.get_width()-texture.get_height())<=1,"Shared atlas, undistorted square cutout: "+dish)
 		var hashing:=HashingContext.new();hashing.start(HashingContext.HASH_SHA256);hashing.update(texture.get_image().get_data());hashes.append(hashing.finish().hex_encode())
 	check(hashes.size()==18 and hashes.all(func(h):return hashes.count(h)==1),"All eighteen food regions have different pixels")
+	var garden_hashes: Array=[]
+	for dish in RULES.RECIPES:
+		if ART.MEAL_REGIONS.has(dish):continue
+		var texture: Texture2D=ART.food_texture(dish)
+		check(texture!=null and texture.get_image().detect_alpha()!=Image.ALPHA_NONE,"New garden meal has an imported transparent actual-model picture: "+dish)
+		if texture==null:continue
+		var hashing:=HashingContext.new();hashing.start(HashingContext.HASH_SHA256);hashing.update(texture.get_image().get_data());garden_hashes.append(hashing.finish().hex_encode())
+	check(garden_hashes.size()==8 and garden_hashes.all(func(h):return garden_hashes.count(h)==1),"All eight new garden dishes have distinct rendered pictures")
 	check(shared!=null and shared.get_image().detect_alpha()!=Image.ALPHA_NONE,"Food artwork has actual transparent cutouts")
 	check(ART.food_texture("Baked Potato")==ART.food_texture("Cooked Potato"),"Legacy potato uses the correct food picture")
 	check(ART.food_texture("Tumbler")!=null and ART.food_texture("Diving Tank")!=null,"Water and diving icons remain available")
@@ -67,8 +76,9 @@ func _run() -> void:
 	for unused in 48:
 		spawner.call("_spawn_upstream");var d: Node3D=spawner._active[-1];supplied[d.item_name]=true
 	var essentials:=true
-	for kind in ["Wood","Rope","Plastic","Metal","Stone","Soil","Barrel"]:essentials=essentials and supplied.has(kind)
+	for kind in ["Wood","Rope","Plastic","Metal","Stone","Soil"]:essentials=essentials and supplied.has(kind)
 	check(essentials,"Real stream guarantees every essential building/soil material")
+	check(not supplied.has("Barrel") and not supplied.has("WindGenerator"),"Completed barrels and turbines remain craft-only")
 	check(spawner._near_count()==0,"Runtime arrivals enter beyond casting range instead of appearing nearby")
 	check(spawner._active.size()==spawner.max_debris,"Repeated spawn attempts respect the physical body cap")
 	var anchor: Node3D=spawner._active[0];anchor.is_hooked=true;anchor.freeze=true;anchor.global_position=raft.global_position+Vector3(200,0,0)

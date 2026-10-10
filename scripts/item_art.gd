@@ -5,6 +5,17 @@ const ATLAS := preload("res://textures/ui/survival_items.png")
 const ROPE_LAUNCHER := preload("res://textures/ui/rope_launcher.png")
 const ADVANCED_IMAGES := {"Raw Meat":"raw_meat", "Cooked Meat":"cooked_meat", "Raw Crab":"raw_crab", "Cooked Crab":"cooked_crab", "Diving Tank":"diving_tank", "Bandage":"bandage", "Torch":"torch", "Onion":"onion", "Potato":"potato", "Tomato":"tomato", "Banana":"banana"}
 static var _pictures: Dictionary = {}
+static func garden_texture(item: String) -> Texture2D:
+	if item=="Tomato":return null
+	var cell:=preload("res://scripts/garden_items.gd").icon_cell(item)
+	if cell.y<0:return null
+	if not _pictures.has("garden_atlas"):
+		if not ResourceLoader.exists("res://textures/ui/garden/garden_atlas.png"):return null
+		_pictures["garden_atlas"]=load("res://textures/ui/garden/garden_atlas.png")
+	var key:="garden:"+item
+	if not _pictures.has(key):
+		var atlas:=AtlasTexture.new();atlas.atlas=_pictures.garden_atlas;atlas.region=Rect2(cell*160,Vector2(160,160));atlas.filter_clip=true;_pictures[key]=atlas
+	return _pictures[key]
 # Bounds follow the original photographic cutouts, including the fish tails.
 # All recipes share one cached GPU texture; each gets its own square thumbnail.
 const MEAL_REGIONS := {
@@ -18,7 +29,7 @@ const MEAL_REGIONS := {
 	"Cooked Crab":Rect2(.337,.666,.170,.294), "Grilled Fish and Onion":Rect2(.510,.650,.165,.309),
 	"Coconut Fish Stew":Rect2(.668,.665,.170,.295), "Crab Tomato Broth":Rect2(.842,.675,.158,.280)
 }
-const STATION_IMAGES := {"Bonfire":"bonfire","RainCollector":"rain_collector","SandFilter":"sand_filter","CookingSetup":"cooking_setup","WindGenerator":"wind_generator"}
+const STATION_IMAGES := {"Bonfire":"bonfire","RainCollector":"rain_collector","SandFilter":"sand_filter","CookingSetup":"cooking_setup","WindGenerator":"wind_generator","FishingNet":"fishing_net","ElectricLamp":"salvaged_led","Torch":"hand_torch","SeedDryingTray":"seed_drying_tray"}
 static func station_texture(item: String) -> Texture2D:
 	if not STATION_IMAGES.has(item):return null
 	var key:="station:"+item
@@ -91,6 +102,8 @@ static func food_texture(item: String) -> Texture2D:
 	return texture
 
 static func draw(canvas: CanvasItem, item: String, center: Vector2, radius: float) -> bool:
+	var garden:=garden_texture(item)
+	if garden!=null:canvas.draw_texture_rect(garden,Rect2(center-Vector2.ONE*radius,Vector2.ONE*radius*2),false);return true
 	if item in ["Solar Torch","Walkie Talkie","Binoculars","Repair Kit"]:
 		var key:="electronics:"+item
 		if not _pictures.has(key):

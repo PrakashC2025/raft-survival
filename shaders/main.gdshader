@@ -18,12 +18,12 @@ render_mode unshaded, cull_disabled;
 // ============================================================
 
 // --- time-of-day state (ocean.gd) ---
-uniform vec3 water_day_color = vec3(0.024, 0.20, 0.42);
-uniform vec3 water_twilight_color = vec3(0.02, 0.15, 0.34);
-uniform vec3 water_night_color = vec3(0.024, 0.072, 0.12);
-uniform vec3 water_deep_color = vec3(0.012, 0.09, 0.20);
-uniform vec3 water_horizon_color = vec3(0.05, 0.44, 0.66);
-uniform vec3 water_crest_color = vec3(0.21, 0.52, 0.65);
+uniform vec3 water_day_color = vec3(0.035, 0.28, 0.58);
+uniform vec3 water_twilight_color = vec3(0.035, 0.16, 0.33);
+uniform vec3 water_night_color = vec3(0.022, 0.078, 0.17);
+uniform vec3 water_deep_color = vec3(0.012, 0.10, 0.22);
+uniform vec3 water_horizon_color = vec3(0.04, 0.45, 0.72);
+uniform vec3 water_crest_color = vec3(0.10, 0.38, 0.54);
 uniform vec3 water_foam_color = vec3(1.0, 1.12, 1.32);
 uniform vec3 water_haze_color = vec3(0.5, 0.66, 0.82);
 uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
@@ -196,22 +196,33 @@ void fragment() {
 	// With cull_disabled the plane renders from both sides. From below, shade
 	// the surface as a dim water ceiling that glows toward the sun/moon, so
 	// the player never sees through the ocean into the sky while swimming.
-	if (!FRONT_FACING) {
+	// Camera height is consistent across drivers; face winding can differ for
+	// the two-sided displaced ocean on the Compatibility path.
+	if (CAMERA_POSITION_WORLD.y < world_pos.y - 0.04) {
+		float under_time = wave_time * wave_speed;
+		vec2 ripple_u = texture(wave_normals,world_pos.xz*.042+vec2(under_time*.003,-under_time*.002)).xy*2.0-1.0;
+		vec2 ripple_v = texture(wave_normals,world_pos.zx*.081-vec2(under_time*.005,under_time*.003)).xy*2.0-1.0;
 		vec3 under_base = mix(water_deep_color, water_day_color, 0.35);
 		under_base = mix(under_base, water_night_color, night_factor);
 		under_base = mix(under_base, water_twilight_color, twilight_factor * 0.5);
 		// Sun/moon light filtering down through the surface: a soft bright patch
 		// in the direction of the light, dimmed at night.
 		vec3 to_cam_u = normalize(CAMERA_POSITION_WORLD - world_pos);
-		float sun_through = pow(max(dot(-to_cam_u, normalize(sun_dir)), 0.0), 6.0);
+		vec3 ripple_view = normalize(-to_cam_u+vec3(ripple_u.x+ripple_v.x,0.0,ripple_u.y+ripple_v.y)*.12);
+		float sun_through = pow(max(dot(ripple_view, normalize(sun_dir)), 0.0), 6.0);
 		float moon_through = pow(max(dot(-to_cam_u, normalize(moon_dir)), 0.0), 8.0);
 		under_base += sun_through * sun_glint_color * 0.22 * (1.0 - night_factor);
+		under_base += vec3(.045,.14,.15)*(1.0-night_factor)*(1.0+dot(ripple_u,ripple_v)*.35);
 		under_base += moon_through * moon_glint_color * 0.12 * moon_factor;
 		// Grazing angles (looking sideways along the surface) darken with depth
 		// fog so the underside never reads as a thin bright film.
 		float grazu = 1.0 - clamp(-to_cam_u.y, 0.0, 1.0);
 		under_base *= 1.0 - grazu * 0.45;
 		ALBEDO = clamp(under_base, vec3(0.012, 0.03, 0.09), vec3(1.0));
+		EMISSION = under_base*(1.4-.9*night_factor)+sun_through*vec3(.40,.50,.46)*(1.0-night_factor);
+		// This unshaded palette is linear. Compatibility writes display-space
+		// colour directly, while Mobile performs the linear output conversion.
+		if (OUTPUT_IS_SRGB) { ALBEDO = pow(ALBEDO,vec3(1.0/2.2)); }
 	} else {
 	// Everything below is computed in WORLD space (wave normal passed from the
 	// vertex stage; the view vector is built from world positions) so fresnel,
@@ -422,5 +433,9 @@ void fragment() {
 	float plankton = exp(-dot(plankton_local,plankton_local)*150.0)*step(0.92,plankton_seed)*smoothstep(0.25,0.8,crest);
 	col += vec3(0.004,0.07,0.055)*plankton*night_factor*(1.0-smoothstep(12.0,40.0,dist))*surface_detail;
 	ALBEDO = col;
+	// Compatibility outputs unshaded ALBEDO directly in display space. The
+	// shared linear palette needs the same conversion already used below water.
+	// Without it, the surface becomes almost black on the fallback renderer.
+	if (OUTPUT_IS_SRGB) { ALBEDO = pow(max(ALBEDO, vec3(0.0)), vec3(1.0 / 2.2)); }
 	}
 }

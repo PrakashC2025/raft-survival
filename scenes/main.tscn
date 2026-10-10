@@ -46,12 +46,12 @@
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_0gc0m"]
 render_priority = 0
 shader = ExtResource("1_ig7tw")
-shader_parameter/water_day_color = Vector3(0.016, 0.13, 0.24)
-shader_parameter/water_twilight_color = Vector3(0.05, 0.15, 0.33)
-shader_parameter/water_night_color = Vector3(0.018, 0.07, 0.17)
-shader_parameter/water_deep_color = Vector3(0.006, 0.05, 0.11)
-shader_parameter/water_horizon_color = Vector3(0.02, 0.22, 0.34)
-shader_parameter/water_crest_color = Vector3(0.1, 0.34, 0.46)
+shader_parameter/water_day_color = Vector3(0.035, 0.28, 0.58)
+shader_parameter/water_twilight_color = Vector3(0.035, 0.16, 0.33)
+shader_parameter/water_night_color = Vector3(0.022, 0.078, 0.17)
+shader_parameter/water_deep_color = Vector3(0.012, 0.1, 0.22)
+shader_parameter/water_horizon_color = Vector3(0.04, 0.45, 0.72)
+shader_parameter/water_crest_color = Vector3(0.1, 0.38, 0.54)
 shader_parameter/water_foam_color = Vector3(1.15, 1.25, 1.42)
 shader_parameter/water_haze_color = Vector3(0.5, 0.66, 0.82)
 shader_parameter/night_factor = 0.0
@@ -515,6 +515,10 @@ script = ExtResource("27_performance")
 
 [node name="CoastalFish" type="Node3D" parent="Island"]
 script = ExtResource("40_fish")
+
+[node name="RaftFish" type="Node3D" parent="."]
+script = ExtResource("40_fish")
+follow_raft = true
 
 [node name="OceanAmbience" type="AudioStreamPlayer" parent="."]
 script = ExtResource("30_ocean_audio")

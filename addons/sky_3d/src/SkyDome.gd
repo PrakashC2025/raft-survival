@@ -111,9 +111,16 @@ func _process(delta: float) -> void:
 ## If [method process_method] is set to manual, this function can be called with the number of 
 ## seconds passed to update the position of the clouds.
 func process_tick(delta: float) -> void:
-	if not (cirrus_visible or cumulus_visible):
+	if not (cirrus_visible or cumulus_visible or panorama_clouds_enabled):
 		return
 	var position_delta: Vector2 = _cloud_velocity * delta
+	# Detailed project panoramas move on phone profiles even when the costly
+	# volumetric cumulus is disabled. This offset never wraps or restarts TIME.
+	# Panorama drift uses wind speed, so north/south winds cannot freeze the
+	# photograph by having a zero X component. Keep a stable flow direction.
+	var flow := _cloud_direction.x if absf(_cloud_direction.x) >= absf(_cloud_direction.y) else _cloud_direction.y
+	_panorama_cloud_position += Vector2(_cloud_speed * signf(flow) * delta, position_delta.y)
+	sky_material.set_shader_parameter("panorama_cloud_position", _panorama_cloud_position)
 	if cumulus_visible:
 		_cumulus_position += position_delta
 		sky_material.set_shader_parameter("cumulus_position", _cumulus_position)
@@ -828,6 +835,14 @@ var _cloud_velocity := Vector2.ZERO
 var _cirrus_position1 := Vector2.ZERO
 var _cirrus_position2 := Vector2.ZERO
 var _cumulus_position := Vector2.ZERO
+var _panorama_cloud_position := Vector2.ZERO
+
+## Keep project photo clouds moving when a phone profile disables both
+## procedural cloud layers. Other Sky3D users retain the original default.
+@export var panorama_clouds_enabled: bool = false :
+	set(value):
+		panorama_clouds_enabled = value
+		_check_cloud_processing()
 
 @export_subgroup("Wind")
 
@@ -889,7 +904,7 @@ enum { PHYSICS_PROCESS, PROCESS, MANUAL }
 
 
 func _check_cloud_processing() -> void:
-	var enable: bool = (cirrus_visible or cumulus_visible) and wind_speed != 0.0
+	var enable: bool = (cirrus_visible or cumulus_visible or panorama_clouds_enabled) and wind_speed != 0.0
 	_cloud_velocity = _cloud_direction * _cloud_speed
 	match process_method:
 		PHYSICS_PROCESS:

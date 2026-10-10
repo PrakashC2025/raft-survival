@@ -79,7 +79,9 @@ func refresh(force_scan: bool = true) -> void:
 			child.disabled=true;remove_child(child);child.queue_free()
 		elif child is CollisionShape3D:child.set_deferred("disabled",cut)
 		elif child is GeometryInstance3D or child.name=="TimberDetails":
-			child.visible=not cut
+			# Solver boxes and seams are hidden by ConstructionVisual. Restoring
+			# them here rendered a second roof through the rounded timbers.
+			child.visible=not cut and not child.has_meta("structural_proxy")
 			child.set_meta("stair_hidden",cut)
 	if cut:
 		_cut_root=Node3D.new();_cut_root.name="StairwellPanels";add_child(_cut_root)

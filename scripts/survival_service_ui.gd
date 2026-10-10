@@ -25,6 +25,11 @@ var _fire_status: Label
 var _fire_button: Button
 var _cook_category := "ALL"
 var _cook_refresh := 0.0
+var _recipe_scroll: ScrollContainer
+var _recipe_touch := -1
+var _recipe_touch_start := Vector2.ZERO
+var _recipe_dragging := false
+var _recipe_suppress_until := 0
 func _ready() -> void:
 	layer=12
 	slot_style=StyleBoxFlat.new();slot_style.bg_color=Color(.035,.065,.072,.97);slot_style.border_color=Color(.34,.47,.39);slot_style.set_border_width_all(1);slot_style.set_corner_radius_all(5)
@@ -67,6 +72,7 @@ func _inventory_changed() -> void:
 		elif _mode=="storage":refresh_storage()
 		elif _mode=="filter" and is_instance_valid(_filter_button):_filter_button.disabled=not Inventory.has("Dirty Water Can",1)
 func _begin(title: String,mode: String) -> void:
+	_recipe_scroll=null;_recipe_touch=-1;_recipe_dragging=false
 	for popup in _popups:popup.hide()
 	for child in _body.get_children():_body.remove_child(child);child.queue_free()
 	_rows.clear();_slots.clear();drag_source=null;_mode=mode;_boil_button=null;_boil_hint=null
@@ -78,7 +84,7 @@ func _begin(title: String,mode: String) -> void:
 	_title=Label.new();_title.text=title;_title.add_theme_font_size_override("font_size",22);_title.size_flags_horizontal=Control.SIZE_EXPAND_FILL;header.add_child(_title)
 	var close_button:=Button.new();close_button.text="CLOSE";close_button.custom_minimum_size=Vector2(85,38);close_button.pressed.connect(service.close_menu);header.add_child(close_button)
 	_overlay.show()
-func close() -> void:_overlay.hide();drag_source=null;_mode=""
+func close() -> void:_overlay.hide();drag_source=null;_mode="";_recipe_touch=-1;_recipe_dragging=false
 func _card_style(surface: Color,edge: Color,radius: int=10) -> StyleBoxFlat:
 	var result:=StyleBoxFlat.new();result.bg_color=surface;result.border_color=edge;result.set_border_width_all(1);result.set_corner_radius_all(radius)
 	result.content_margin_left=12;result.content_margin_right=12;result.content_margin_top=10;result.content_margin_bottom=10
@@ -113,7 +119,8 @@ func show_cooking() -> void:
 		categories.add_theme_stylebox_override("tab_selected" if selected else "tab_unselected",tab)
 	for category in ["ALL","GRILL","SOUPS & STEWS","FRUIT"]:categories.add_tab(category)
 	categories.tab_changed.connect(func(index: int):_filter_recipes(categories.get_tab_title(index)));_body.add_child(categories)
-	var scroll:=ScrollContainer.new();scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL;_body.add_child(scroll)
+	var scroll:=ScrollContainer.new();scroll.name="RecipeScroll";scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL;scroll.scroll_deadzone=10;_body.add_child(scroll)
+	_recipe_scroll=scroll
 	scroll.horizontal_scroll_mode=ScrollContainer.SCROLL_MODE_DISABLED
 	var list:=GridContainer.new();list.name="RecipeCards";list.columns=2 if get_viewport().get_visible_rect().size.x>=850 else 1;list.size_flags_horizontal=Control.SIZE_EXPAND_FILL;list.add_theme_constant_override("h_separation",12);list.add_theme_constant_override("v_separation",12);scroll.add_child(list)
 	var water_card:=PanelContainer.new();water_card.size_flags_horizontal=Control.SIZE_EXPAND_FILL;water_card.add_theme_stylebox_override("panel",_card_style(Color(.045,.12,.14),Color(.19,.35,.38)));list.add_child(water_card)
@@ -124,7 +131,7 @@ func show_cooking() -> void:
 	water_details.add_child(_note("Boil drinking water",18,Color(.91,.95,.90)));water_details.add_child(_note("8 SECONDS  •  WATER +65"))
 	_boil_hint=_note("");water_details.add_child(_boil_hint)
 	water_body.add_child(_note("Heat the filled metal tumbler; keep the cup after drinking."))
-	_boil_button=Button.new();_boil_button.text="BOIL WATER";_boil_button.custom_minimum_size.y=48;_boil_button.pressed.connect(service.start_boiling);water_body.add_child(_boil_button)
+	_boil_button=Button.new();_boil_button.text="BOIL WATER";_boil_button.custom_minimum_size.y=48;_boil_button.pressed.connect(_boil_recipe);water_body.add_child(_boil_button)
 	for dish in RULES.RECIPES:
 		var recipe: Dictionary=RULES.RECIPES[dish]
 		var card:=PanelContainer.new();card.name="RecipeCard";card.size_flags_horizontal=Control.SIZE_EXPAND_FILL;card.add_theme_stylebox_override("panel",_card_style(Color(.047,.084,.083),Color(.19,.27,.23)));list.add_child(card)
@@ -135,9 +142,42 @@ func show_cooking() -> void:
 		details.add_child(_note("Food +%d   Water +%d   Health +%d"%[recipe.effects[0],recipe.effects[1],recipe.effects[2]],13,Color(.60,.82,.65)))
 		content.add_child(_note(RULES.method(dish)))
 		var ingredients:=RichTextLabel.new();ingredients.bbcode_enabled=true;ingredients.fit_content=true;ingredients.scroll_active=false;ingredients.add_theme_font_size_override("normal_font_size",14);ingredients.custom_minimum_size.y=24;content.add_child(ingredients)
-		var button:=Button.new();button.name="CookRecipe";button.text="COOK · %ds"%int(recipe.seconds);button.custom_minimum_size.y=48;button.pressed.connect(func():service.start_cooking(dish));content.add_child(button)
+		var button:=Button.new();button.name="CookRecipe";button.text="COOK · %ds"%int(recipe.seconds);button.custom_minimum_size.y=48;button.pressed.connect(_cook_recipe.bind(dish));content.add_child(button)
 		_rows.append({"dish":dish,"ingredients":ingredients,"button":button,"card":card})
+	_forward_recipe_swipes(list)
 	_refresh_cooking()
+func _forward_recipe_swipes(control: Control) -> void:
+	# Decorative cards/text must not swallow the ScrollContainer's drag events.
+	control.mouse_filter=Control.MOUSE_FILTER_PASS
+	for child in control.get_children():
+		if child is Control:
+			_forward_recipe_swipes(child)
+			if child is Label or child is RichTextLabel or child is TextureRect:
+				child.mouse_filter=Control.MOUSE_FILTER_IGNORE
+func _input(event: InputEvent) -> void:
+	if _mode!="cook" or not _overlay.visible or not is_instance_valid(_recipe_scroll):return
+	if event is InputEventScreenTouch:
+		if event.pressed and _recipe_touch==-1 and _recipe_scroll.get_global_rect().has_point(event.position):
+			_recipe_touch=event.index;_recipe_touch_start=event.position;_recipe_dragging=false
+		elif not event.pressed and event.index==_recipe_touch:
+			_recipe_touch=-1
+			if _recipe_dragging:
+				_recipe_suppress_until=Time.get_ticks_msec()+150
+				call_deferred("_finish_recipe_swipe")
+	elif event is InputEventScreenDrag and event.index==_recipe_touch:
+		if not _recipe_dragging and event.position.distance_to(_recipe_touch_start)>10.0:_recipe_dragging=true
+		if _recipe_dragging:
+			_recipe_scroll.scroll_vertical-=roundi(event.relative.y)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and event.device==InputEvent.DEVICE_ID_EMULATION and _recipe_dragging:
+		# A phone drag also emits mouse motion; scroll that physical gesture once.
+		get_viewport().set_input_as_handled()
+func _finish_recipe_swipe() -> void:
+	if _recipe_touch==-1:_recipe_dragging=false
+func _cook_recipe(dish: String) -> void:
+	if not _recipe_dragging and Time.get_ticks_msec()>=_recipe_suppress_until:service.start_cooking(dish)
+func _boil_recipe() -> void:
+	if not _recipe_dragging and Time.get_ticks_msec()>=_recipe_suppress_until:service.start_boiling()
 func _refresh_cooking() -> void:
 	if is_instance_valid(_fire_status) and is_instance_valid(service.station):
 		var seconds:=int(service.station.fuel)
@@ -150,7 +190,7 @@ func _refresh_cooking() -> void:
 		for item in RULES.RECIPES[row.dish].ingredients:
 			var need:=int(RULES.RECIPES[row.dish].ingredients[item]);var have:=Inventory.total(item)
 			text_value+="[color="+("#8dd49c" if have>=need else "#f28b7f")+"]"+item+"  %d / %d"%[have,need]+"[/color]   "
-		row.ingredients.text=text_value
+		if row.ingredients.text!=text_value:row.ingredients.text=text_value
 		row.button.disabled=not service.can_cook(row.dish)
 func show_filter() -> void:
 	_begin("FILTER WATER CAN","filter")

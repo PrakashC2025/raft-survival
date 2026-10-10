@@ -265,7 +265,7 @@ func set_anchored(enabled: bool,animate: bool=true) -> void:
 		_anchor_rig=Node3D.new();_anchor_rig.name="AnchorRig";_anchor_rig.position=Vector3(.85,0,.7);add_child(_anchor_rig)
 		var anchor:=preload("res://scripts/survival_tool_visual.gd").create("Anchor");anchor.name="IronAnchor";_anchor_rig.add_child(anchor)
 		var rope_mat:=OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.CLOTH,Color(.35,.25,.13),.98)
-		var rope:=preload("res://scripts/machine_visual.gd").cylinder(_anchor_rig,Vector3(0,-2,0),.012,4,rope_mat);rope.name="AnchorRope"
+		var new_rope:=preload("res://scripts/machine_visual.gd").cylinder(_anchor_rig,Vector3(0,-2,0),.012,4,rope_mat);new_rope.name="AnchorRope"
 	if _anchor_rig==null:return
 	if _anchor_tween!=null and _anchor_tween.is_valid():_anchor_tween.kill()
 	var iron:=_anchor_rig.get_node("IronAnchor") as Node3D
@@ -279,7 +279,7 @@ func set_anchored(enabled: bool,animate: bool=true) -> void:
 		_anchor_tween.tween_property(rope,"position:y",-2.0 if enabled else .0,.8)
 		if not enabled:_anchor_tween.chain().tween_callback(_anchor_rig.hide)
 	else:
-		iron.position.y=-4 if enabled else .02;rope.visible=enabled;_anchor_rig.visible=enabled
+		iron.position.y=-4.0 if enabled else .02;rope.visible=enabled;_anchor_rig.visible=enabled
 
 
 func _carry_passenger(raft_before_move: Vector3, movement: Vector3) -> void:

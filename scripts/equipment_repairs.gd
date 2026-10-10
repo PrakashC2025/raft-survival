@@ -77,8 +77,8 @@ func _refresh() -> void:
 	_title.text=_item.to_upper()+" · REPAIR"
 	_details.text=("Loose contact" if fault=="contact" else "Seized motor" if fault=="motor" else "Damaged wiring")+"\n\nREUSABLE TOOL\nRepair Kit: HAVE %d / NEED 1\n\nPARTS USED AT FINISH"%Inventory.total("Repair Kit")
 	for ingredient in parts:_details.text+="\n%s: HAVE %d / NEED %d"%[ingredient,Inventory.total(ingredient),parts[ingredient]]
-	var ready:=Inventory.has("Repair Kit",1) and Inventory.has_cost(parts)
-	_repair.disabled=not ready;_repair.text="REPAIR · 6 SECONDS" if ready else "NEED TOOL / PARTS · CRAFT IN BAG"
+	var can_repair:=Inventory.has("Repair Kit",1) and Inventory.has_cost(parts)
+	_repair.disabled=not can_repair;_repair.text="REPAIR · 6 SECONDS" if can_repair else "NEED TOOL / PARTS · CRAFT IN BAG"
 	_shake.visible=fault=="contact"
 
 func start(kind: String, target: Node, item: String) -> bool:

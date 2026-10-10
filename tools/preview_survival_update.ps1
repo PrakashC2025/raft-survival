@@ -1,8 +1,10 @@
 param(
     [string]$GodotPath = 'C:\Program Files\Godot\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64_console.exe',
-    [ValidateSet('equipment_repair_smoke.gd','portable_electronics_smoke.gd','current_wind_build_smoke.gd','meals_night_supplies_smoke.gd','camp_fire_smoke.gd','survival_services_smoke.gd','loading_performance_smoke.gd','edit_tree_smoke.gd','stairs_sky_smoke.gd','food_action_smoke.gd','cinematic_native_preview.gd','realism_polish_smoke.gd','tumbler_smoke.gd','survival_tools_biomes_smoke.gd','night_sky_smoke.gd','underwater_expansion_smoke.gd','mobile_bag_rain_smoke.gd')][string]$TestScript = 'survival_services_smoke.gd',
+    [ValidateSet('ocean_surface_preview.gd','underwater_reference_smoke.gd','garden_cycle_smoke.gd','salvage_power_net_smoke.gd','ocean_menu_preview.gd','equipment_repair_smoke.gd','portable_electronics_smoke.gd','current_wind_build_smoke.gd','meals_night_supplies_smoke.gd','camp_fire_smoke.gd','survival_services_smoke.gd','loading_performance_smoke.gd','edit_tree_smoke.gd','stairs_sky_smoke.gd','food_action_smoke.gd','cinematic_native_preview.gd','realism_polish_smoke.gd','tumbler_smoke.gd','survival_tools_biomes_smoke.gd','night_sky_smoke.gd','underwater_expansion_smoke.gd','mobile_bag_rain_smoke.gd')][string]$TestScript = 'survival_services_smoke.gd',
     [ValidateRange(60,300)][int]$TimeoutSeconds = 120,
-    [switch]$SilentAudio
+    [switch]$SilentAudio,
+    [switch]$SurfaceClearance,
+    [ValidateSet('mobile','gl_compatibility')][string]$Renderer = 'mobile'
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -10,12 +12,16 @@ $projectRoot = Split-Path $PSScriptRoot -Parent
 $setupOutput = & (Join-Path $PSScriptRoot 'verify_source.ps1') -GodotPath $GodotPath -Tests @()
 $stage = [regex]::Match(($setupOutput -join "`n"), 'Test project: (.+)').Groups[1].Value.Trim()
 if (-not $stage) { throw 'Preview isolation setup did not return a project.' }
-$logPrefix = if ($TestScript -eq 'current_wind_build_smoke.gd') { 'current-wind-build' } elseif ($TestScript -eq 'meals_night_supplies_smoke.gd') { 'meals-night-supplies' } elseif ($TestScript -eq 'camp_fire_smoke.gd') { 'camp-fire' } elseif ($TestScript -eq 'mobile_bag_rain_smoke.gd') { 'mobile-bag-rain' } elseif ($TestScript -eq 'underwater_expansion_smoke.gd') { 'underwater' } elseif ($TestScript -eq 'night_sky_smoke.gd') { 'night-sky' } elseif ($TestScript -eq 'survival_tools_biomes_smoke.gd') { 'tools-biomes' } elseif ($TestScript -eq 'tumbler_smoke.gd') { 'tumbler' } elseif ($TestScript -eq 'realism_polish_smoke.gd') { 'realism' } elseif ($TestScript -eq 'food_action_smoke.gd') { 'food-action' } elseif ($TestScript -eq 'cinematic_native_preview.gd') { 'cinematic' } elseif ($TestScript -eq 'loading_performance_smoke.gd') { 'loading' } elseif ($TestScript -eq 'edit_tree_smoke.gd') { 'edit-tree' } elseif ($TestScript -eq 'stairs_sky_smoke.gd') { 'stairs-sky' } else { 'services' }
+$logPrefix = if ($TestScript -eq 'ocean_surface_preview.gd') { 'ocean-blue-' + $Renderer } elseif ($TestScript -eq 'underwater_reference_smoke.gd') { 'reef-reference-' + $Renderer } elseif ($TestScript -eq 'garden_cycle_smoke.gd') { 'garden-cycle' } elseif ($TestScript -eq 'salvage_power_net_smoke.gd') { 'salvage-power-net' } elseif ($TestScript -eq 'ocean_menu_preview.gd') { 'ocean-menu' } elseif ($TestScript -eq 'current_wind_build_smoke.gd') { 'current-wind-build' } elseif ($TestScript -eq 'meals_night_supplies_smoke.gd') { 'meals-night-supplies' } elseif ($TestScript -eq 'camp_fire_smoke.gd') { 'camp-fire' } elseif ($TestScript -eq 'mobile_bag_rain_smoke.gd') { 'mobile-bag-rain' } elseif ($TestScript -eq 'underwater_expansion_smoke.gd') { 'underwater' } elseif ($TestScript -eq 'night_sky_smoke.gd') { 'night-sky' } elseif ($TestScript -eq 'survival_tools_biomes_smoke.gd') { 'tools-biomes' } elseif ($TestScript -eq 'tumbler_smoke.gd') { 'tumbler' } elseif ($TestScript -eq 'realism_polish_smoke.gd') { 'realism' } elseif ($TestScript -eq 'food_action_smoke.gd') { 'food-action' } elseif ($TestScript -eq 'cinematic_native_preview.gd') { 'cinematic' } elseif ($TestScript -eq 'loading_performance_smoke.gd') { 'loading' } elseif ($TestScript -eq 'edit_tree_smoke.gd') { 'edit-tree' } elseif ($TestScript -eq 'stairs_sky_smoke.gd') { 'stairs-sky' } else { 'services' }
 $outputLog = Join-Path $projectRoot "build/$logPrefix-native-final-console.log"
 $errorLog = Join-Path $projectRoot "build/$logPrefix-native-final-errors.log"
-$arguments = @('--path', ('"' + $stage + '"'), '--script', ('"' + (Join-Path $projectRoot ('tests/' + $TestScript)) + '"'), '--rendering-method', 'mobile', '--rendering-driver', 'd3d12')
+$arguments = @('--path', ('"' + $stage + '"'), '--script', ('"' + (Join-Path $projectRoot ('tests/' + $TestScript)) + '"'), '--rendering-method', $Renderer, '--rendering-driver', $(if ($Renderer -eq 'gl_compatibility') { 'opengl3' } else { 'd3d12' }))
 if ($SilentAudio) { $arguments += @('--audio-driver','Dummy') }
 $arguments += @('--', '--preview', '--mobile-effects', '--profile-loading')
+if ($SurfaceClearance) {
+    if ($TestScript -ne 'underwater_reference_smoke.gd') { throw 'SurfaceClearance requires the underwater reference fixture.' }
+    $arguments += '--clearance-preview'
+}
 $previewProcess = Start-Process -FilePath $GodotPath -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput $outputLog -RedirectStandardError $errorLog -PassThru
 # Retain the process handle so Windows PowerShell can read ExitCode after
 # asynchronous polling even when the child exits between checks.

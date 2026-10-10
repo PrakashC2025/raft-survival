@@ -23,7 +23,7 @@ class_name RainSystem
 
 # --- Falling rain visuals ---
 @export var particle_amount: int = 700
-@export var rain_area_size: Vector3 = Vector3(24.0, 16.0, 24.0)
+@export var rain_area_size: Vector3 = Vector3(48.0, 16.0, 48.0)
 @export var fall_speed: float = 14.0
 @export var fade_time: float = 4.0
 ## Horizontal drift while falling (x = east/west, y = north/south). Small
@@ -96,10 +96,11 @@ var _splash_mat: ShaderMaterial = null
 var _mask_boxes := PackedVector4Array()
 var _mask_levels := PackedVector4Array()
 var _mask_raft: Node3D
-const ROOF_MAP_SIZE := 128
+const ROOF_MAP_SIZE := 256
 const ROOF_CELL := 0.25
 var _roof_image: Image
 var _roof_texture: ImageTexture
+var _shelter_signature := -1
 var _rain_process_mat: ParticleProcessMaterial = null
 var _audio: AudioStreamPlayer = null
 var _thunder_audio: AudioStreamPlayer = null
@@ -720,16 +721,30 @@ func _unhandled_input(event: InputEvent) -> void:
 			start_rain(120.0)
 
 func _refresh_shelter_masks() -> void:
-	_mask_boxes.clear()
-	_mask_levels.clear()
-	_set_shelter_parameter("cover_count", 0)
-	_set_shelter_parameter("roof_map_enabled", false)
 	_mask_raft = get_tree().get_first_node_in_group("raft") as Node3D
-	if _mask_raft == null or _rain_mat == null: return
+	if _mask_raft == null or _rain_mat == null:
+		_mask_boxes.clear(); _mask_levels.clear(); _shelter_signature = -1
+		_set_shelter_parameter("cover_count", 0)
+		_set_shelter_parameter("roof_map_enabled", false)
+		return
 	var pieces := _mask_raft.get_node_or_null("BuiltPieces")
 	if pieces == null: return
 	var camera_local := _mask_raft.to_local(_camera.global_position) if is_instance_valid(_camera) else Vector3.ZERO
-	var map_origin := Vector2(floorf(camera_local.x/ROOF_CELL),floorf(camera_local.z/ROOF_CELL))*ROOF_CELL-Vector2.ONE*16.0
+	# Rotation/raft bobbing do not change local roof geometry. Reuse the mask;
+	# its 64m window only shifts after two metres of camera travel.
+	var map_origin := Vector2(floorf(camera_local.x/2.0),floorf(camera_local.z/2.0))*2.0-Vector2.ONE*32.0
+	var signature := hash([pieces.get_instance_id(), map_origin])
+	for piece in pieces.get_children():
+		if piece is Node3D and not piece.is_queued_for_deletion():
+			signature = hash([signature, piece.get_instance_id(), piece.transform, piece.get_meta("geometry_revision", 0)])
+	if signature == _shelter_signature:
+		_set_shelter_parameter("cover_count", _mask_boxes.size())
+		_set_shelter_parameter("roof_map_enabled", true)
+		return
+	_shelter_signature = signature
+	_mask_boxes.clear(); _mask_levels.clear()
+	_set_shelter_parameter("cover_count", 0)
+	_set_shelter_parameter("roof_map_enabled", false)
 	if _roof_image == null:_roof_image=Image.create(ROOF_MAP_SIZE,ROOF_MAP_SIZE,false,Image.FORMAT_RF)
 	_roof_image.fill(Color(-1000.0,0,0))
 	var candidates: Array[Dictionary] = []
@@ -751,7 +766,7 @@ func _refresh_shelter_masks() -> void:
 			var xf: Transform3D = _mask_raft.global_transform.affine_inverse()*col.global_transform
 			var half: Vector3 = col.shape.size*xf.basis.get_scale()*0.5
 			var distance := Vector2(xf.origin.x-camera_local.x,xf.origin.z-camera_local.z).length_squared()
-			if distance > 26.0*26.0: continue
+			if distance > 42.0*42.0: continue
 			var yaw := xf.basis.get_euler().y
 			var bottom := xf.origin.y-half.y-0.08 if wall else -30.0
 			if not wall:_raster_roof(xf.origin,half,yaw,map_origin)
@@ -773,6 +788,7 @@ func _refresh_shelter_masks() -> void:
 	else:_roof_texture.update(_roof_image)
 	_set_shelter_parameter("roof_heights",_roof_texture)
 	_set_shelter_parameter("roof_map_origin",map_origin)
+	_set_shelter_parameter("roof_map_span",ROOF_MAP_SIZE*ROOF_CELL)
 	_set_shelter_parameter("roof_map_enabled",true)
 
 func _raster_roof(at: Vector3, half: Vector3, yaw: float, map_origin: Vector2) -> void:

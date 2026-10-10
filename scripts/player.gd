@@ -20,7 +20,7 @@ const SWIM_SPRINT_SPEED := 3.5
 const JUMP_VELOCITY := 4.5 # about 0.56 m, rather than a five-metre leap
 const WATER_JUMP_VELOCITY := 2.8
 const GRAVITY := 18.0
-const MOUSE_SENSITIVITY := 0.003
+const MOUSE_SENSITIVITY := 0.00225
 # Max riser height the player can auto-step onto while walking (stairs/curbs).
 # Must stay below wall height (2.5) so full walls still block.
 const MAX_STEP_HEIGHT := 0.30
@@ -35,7 +35,7 @@ const FLOAT_FORCE := 8.0
 const FLOAT_DAMPING := 0.95
 const WATER_ENTER_OFFSET := 0.3
 const WATER_EXIT_OFFSET := 1.5
-const MAX_SWIM_DEPTH := 70.0
+const MAX_SWIM_DEPTH := 90.0
 
 # Aim
 const AIM_DISTANCE := 60.0
@@ -49,7 +49,7 @@ const CLIMB_OUT_RANGE := 2.2
 const CLIMB_LAND_INSET := 0.45
 
 # Build
-const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "HalfWall", "CargoCrate", "WallTorch", "SandFilter","StorageBox","CookingSetup"]
+const BUILD_RECIPE_NAMES := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window", "PlanterPot", "PlanterBox", "TreePot", "Bonfire", "RainCollector", "WaterPurifier", "WindGenerator", "ElectricLamp", "ElectricPurifier", "RescueRadio", "HalfWall", "CargoCrate", "WallTorch", "SandFilter","StorageBox","CookingSetup","FishingNet","SeedDryingTray"]
 const BUILD_SCENES := [
 	"res://scenes/foundation.tscn",
 	"res://scenes/wall.tscn",
@@ -73,6 +73,8 @@ const BUILD_SCENES := [
 	"res://scenes/sand_filter.tscn",
 	"res://scenes/storage_box.tscn",
 	"res://scenes/cooking_setup.tscn",
+	"res://scenes/fishing_net.tscn",
+	"res://scenes/seed_drying_tray.tscn",
 ]
 const RESOURCE_VISUAL := preload("res://scripts/resource_visual.gd")
 const HUMAN_HAND: PackedScene = preload("res://models/human_hand.glb")
@@ -648,7 +650,9 @@ func _stamp_sand_footprint() -> void:
 # ============================================================
 func _handle_camera_and_hotbar_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
-		add_look_input(event.relative)
+		var relative := (event as InputEventMouseMotion).screen_relative
+		if GameSettings.invert_look:relative.y=-relative.y
+		add_look_input(relative,MOUSE_SENSITIVITY*GameSettings.look_speed)
 	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed \
 			and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -663,14 +667,29 @@ func _handle_camera_and_hotbar_input(event: InputEvent) -> void:
 # ============================================================
 # LOOK INPUT — shared by the mouse and the mobile touch controls.
 # ============================================================
+var _look_remaining := Vector2.ZERO
+
 func add_look_input(rel: Vector2, sens: float = MOUSE_SENSITIVITY) -> void:
 	if cam_pivot == null:
 		return
 	if _equipment != null and _equipment.get("aiming"):
 		sens *= 0.55
-	rotate_y(-rel.x * sens)
-	cam_pivot.rotate_x(-rel.y * sens)
-	cam_pivot.rotation.x = clamp(cam_pivot.rotation.x, -_look_pitch_limit(), 1.4)
+	_look_remaining += -rel * sens
+	if not GameSettings.smooth_look:_advance_look(0.0)
+
+func reset_look_input() -> void:
+	_look_remaining=Vector2.ZERO
+
+func _advance_look(delta: float) -> void:
+	if cam_pivot==null or _look_remaining.is_zero_approx():return
+	# Drain event batches once per rendered frame. Exponential response has the
+	# same angular travel at 30/60 FPS and never builds a backlog after a hitch.
+	var step := _look_remaining*(1.0-exp(-60.0*delta)) if GameSettings.smooth_look else _look_remaining
+	_look_remaining-=step
+	if _look_remaining.length_squared()<0.00000001:step+=_look_remaining;_look_remaining=Vector2.ZERO
+	rotate_y(step.x)
+	cam_pivot.rotation.x=clampf(cam_pivot.rotation.x+step.y,-_look_pitch_limit(),1.4)
+	if cam_pivot.rotation.x<=-_look_pitch_limit() or cam_pivot.rotation.x>=1.4:_look_remaining.y=0
 
 # ============================================================
 # CAMERA MODES — first person (hands + no body) / third person (follow)
@@ -888,7 +907,7 @@ func _handle_pickup() -> void:
 		get_node("SurvivalTools").call("use")
 		return
 	# SHOOT is dedicated to the selected bow; CLIMB has its own touch button.
-	if active_item in ["Bow", "Bandage", "Diving Tank", "Torch","Burning Torch","Medkit","Can","Tumbler","Solar Torch","Binoculars","Walkie Talkie","WindGenerator","ElectricLamp"]:
+	if active_item in ["Bow", "Bandage", "Diving Tank", "Torch","Burning Torch","Medkit","Can","Tumbler","Solar Torch","Binoculars","Walkie Talkie","WindGenerator","ElectricLamp","Wire"] and (active_item!="ElectricLamp" or _held_led_target()==null):
 		_handle_selected_item_use()
 		return
 	# Boarding the raft from the water takes priority over pickups: when the
@@ -896,6 +915,9 @@ func _handle_pickup() -> void:
 	# (the mobile CLIMB button calls climb_out() directly — same result).
 	if is_swimming and can_climb_out():
 		climb_out()
+		return
+	if not preload("res://scripts/garden_items.gd").box_crop(active_item).is_empty():
+		_handle_selected_item_use()
 		return
 	# --- Planting: use a seed item on an aimed, empty planter ---
 	if aim_valid and aim_collider != null:
@@ -959,7 +981,7 @@ func _handle_pickup() -> void:
 		var overflow := Inventory.add(gathered, 1)
 		if overflow == 0:
 			_sand_gather_cooldown = 0.65
-			Inventory.pickup_received.emit(gathered,1)
+			Inventory.notify_pickup(gathered,1)
 			play_world_sfx(PICKUP_SOUND, -10.0)
 			play_action("scoop",0.65,aim_point)
 			_hud_toast(gathered.to_upper()+"  +1")
@@ -980,19 +1002,21 @@ func _handle_pickup() -> void:
 
 
 func _handle_selected_item_use() -> void:
+	if preload("res://scripts/garden_items.gd").CROPS.has(active_item) or not preload("res://scripts/garden_items.gd").box_crop(active_item).is_empty() or not preload("res://scripts/garden_items.gd").seed_crop(active_item,true).is_empty():_garden_prep().use(active_item);return
+	if active_item=="Wire":_power_wiring().use();return
 	if active_item.is_empty() and get_node("SurvivalProgression").call("can_refill_air"):
 		get_node("SurvivalProgression").call("refill_air");return
 	if active_item in preload("res://scripts/survival_tool_visual.gd").ITEMS:
 		get_node("SurvivalTools").call("use")
 		return
-	if active_item in ["WindGenerator","ElectricLamp"] and Inventory.has(active_item,1):
+	if active_item == "WindGenerator" and Inventory.has(active_item,1):
 		select_piece_for_build(BUILD_RECIPE_NAMES.find(active_item))
 		return
 	if active_item in ["Medkit","Can","Tumbler"] or FOOD_RULES.edible(active_item):
 		get_node("SurvivalServices").call("use_item",active_item)
 		return
 	match active_item:
-		"Solar Torch","Binoculars","Walkie Talkie":
+		"Solar Torch","Binoculars","Walkie Talkie","ElectricLamp":
 			get_node("PortableElectronics").call("use")
 			return
 		"Torch","Burning Torch":
@@ -1324,7 +1348,7 @@ func _collect_debris(debris: Node3D) -> void:
 	if "amount" in debris:
 		pickup_amount = maxi(1, int(debris.get("amount")))
 	var overflow := Inventory.add(item_name, pickup_amount)
-	if pickup_amount>overflow:Inventory.pickup_received.emit(Inventory.canonical_item(item_name),pickup_amount-overflow)
+	if pickup_amount>overflow:Inventory.notify_pickup(Inventory.canonical_item(item_name),pickup_amount-overflow)
 	if overflow > 0:
 		if overflow < pickup_amount and debris.has_method("set_pickup_amount"):
 			debris.call("set_pickup_amount", overflow)
@@ -1340,6 +1364,7 @@ func _collect_debris(debris: Node3D) -> void:
 # BUILD SYSTEM — PROCESS & INPUT
 # ============================================================
 func _process(delta: float) -> void:
+	_advance_look(delta)
 	_tick_save(delta)
 	_tick_fishing(delta)
 	_tick_build_action(delta)
@@ -1581,6 +1606,7 @@ func select_hotbar_slot(index: int) -> void:
 	active_item = Inventory.slot_item(active_slot_index)
 	rope_gun_selected = active_item == "Rope"
 	_update_hand_item()
+	show_equipment_hint()
 	_queue_save()
 
 
@@ -1595,8 +1621,16 @@ func equip_rope_gun() -> bool:
 		_equipment.call("cancel_draw")
 		_equipment.call("set_aiming", false)
 	_update_hand_item()
+	show_equipment_hint()
 	_queue_save()
 	return true
+
+
+func show_equipment_hint() -> void:
+	if build_mode or _editing != null:return
+	var tip := preload("res://scripts/equipment_hints.gd").for_item(active_item)
+	var hud := get_node_or_null("CanvasLayer/SurvivalHUD")
+	if hud != null and not tip.is_empty():hud.call("show_toast",tip,4.0)
 
 
 func _refresh_active_item() -> void:
@@ -1638,9 +1672,13 @@ func _write_save(slot: String) -> bool:
 		if wild.prepared: meta["wild_plants"][str(wild.island_node().name)] = wild.save_state()
 	meta["progression"] = get_node("SurvivalProgression").call("save_state")
 	var undersea:=get_tree().get_first_node_in_group("underwater_world")
-	if undersea!=null:meta["underwater_creatures"]=undersea.call("save_state")
+	if undersea!=null:
+		meta["underwater_creatures"]=undersea.call("save_state")
+		meta["underwater_resources"]=undersea.call("save_resources")
 	meta["electronics"] = get_node("PortableElectronics").call("save_state")
 	meta["survival_services"] = get_node("SurvivalServices").call("save_state")
+	var supply:=get_tree().current_scene.get_node_or_null("DebrisSpawner")
+	if supply!=null:meta["garden_supply"]=supply.call("save_garden_supply")
 	meta["wildlife"] = get_node("IslandWildlife").call("save_state")
 	var stat_state: Dictionary = Stats.save_state()
 	# Quitting from the death screen must not write a zero-health Continue save.
@@ -1946,6 +1984,9 @@ func _update_hand_item() -> void:
 	# Each item is composed from primitives placed in a NATURAL HAND POSE around
 	# the fist (offsets below are fist-local: +X right, +Y up, -Z forward).
 	var along_forward := Basis(Vector3.RIGHT, PI / 2.0)
+	if preload("res://scripts/garden_items.gd").icon_cell(active_item).y>=0 and active_item!="Tomato" or not preload("res://scripts/garden_items.gd").box_crop(active_item).is_empty():
+		var garden_item:=preload("res://scripts/garden_visual.gd").produce(active_item)
+		garden_item.position=Vector3(0,-.035,-.20);_hand_item.add_child(garden_item);return
 	if active_item in preload("res://scripts/survival_tool_visual.gd").ITEMS:
 		var tool:=preload("res://scripts/survival_tool_visual.gd").create(active_item)
 		tool.position=Vector3(0,-.04,-.13);tool.rotation.x=-.18
@@ -2256,23 +2297,26 @@ func _update_hand_sway(_delta: float) -> void:
 ##     case — in real life you only take debris that is within your pickable
 ##     range, and the E key collects those even without precise aiming).
 func interaction_caption() -> String:
+	if not preload("res://scripts/garden_items.gd").box_crop(active_item).is_empty():return "OPEN BOX"
+	if active_item=="Wire":return _power_wiring().caption()
+	if active_item=="ElectricLamp":
+		var target:=_held_led_target()
+		if target!=null:return "COLLECT" if target.is_in_group("debris") else str(target.call("interaction_caption")) if target.has_method("interaction_caption") else "USE"
 	if active_item.is_empty() and get_node("SurvivalProgression").call("can_refill_air"):return "REFILL AIR"
 	if active_item=="Shovel" and aim_collider is PlantInstance:return "HARVEST"
 	if active_item in ["Pickaxe","Shovel","Paddle","Anchor"] or (active_item=="Axe" and get_node("SurvivalTools").call("target")!=null):
 		return get_node("SurvivalTools").call("caption")
-	if active_item in ["WindGenerator","ElectricLamp"]:return "PLACE"
+	if active_item=="WindGenerator":return "PLACE"
 	if active_item=="Medkit":return "USE MEDKIT"
 	if active_item in ["Can","Tumbler"]:return "COLLECT WATER"
 	if active_item.ends_with("Water Can") and aim_valid and is_instance_valid(aim_collider) and get_node("SurvivalServices").is_filter(aim_collider):return "FILTER WATER"
 	if not is_instance_valid(aim_collider):aim_collider=null;aim_valid=false
 	if active_item=="Binoculars":return "LOWER" if get_node("PortableElectronics").zoomed else "LOOK"
-	if active_item in ["Solar Torch","Walkie Talkie"] and not get_node("PortableElectronics").fault_for(active_item).is_empty():return "SHAKE" if get_node("PortableElectronics").fault_for(active_item)=="contact" else "REPAIR"
-	if active_item=="Solar Torch":return "LIGHT OFF" if get_node("PortableElectronics").enabled[active_item] else "LIGHT ON"
+	if active_item in ["Solar Torch","Walkie Talkie","ElectricLamp"] and not get_node("PortableElectronics").fault_for(active_item).is_empty():return "SHAKE" if get_node("PortableElectronics").fault_for(active_item)=="contact" else "REPAIR"
+	if active_item in ["Solar Torch","ElectricLamp"]:return "LIGHT OFF" if get_node("PortableElectronics").enabled[active_item] else "LIGHT ON"
 	if active_item=="Walkie Talkie":return "SEND SIGNAL" if get_node("PortableElectronics").enabled[active_item] else "POWER ON"
 	if active_item in ["Torch","Burning Torch"]:
-		if aim_valid and aim_collider != null and _find_piece_name(aim_collider) == "WallTorch": return "TAKE TORCH"
-		if bool(_resolve_wall_torch().get("valid",false)): return "PLACE TORCH"
-		return "PUT OUT" if get_node("SurvivalProgression").is_held_lit() else "LIGHT TORCH"
+		return get_node("SurvivalProgression").held_torch_caption()
 	if active_item in ["Diving Tank", "Bandage"]:
 		return "EQUIP" if active_item == "Diving Tank" else "HEAL"
 	if active_item == "Bow":
@@ -2313,6 +2357,8 @@ func interaction_caption() -> String:
 
 
 func can_interact_now() -> bool:
+	if not preload("res://scripts/garden_items.gd").box_crop(active_item).is_empty():return Inventory.has(active_item,1)
+	if active_item=="Wire":return Inventory.has("Wire",1) and _power_wiring().target()!=null
 	if active_item.is_empty() and get_node("SurvivalProgression").call("can_refill_air"): return true
 	if active_item=="Shovel" and aim_collider is PlantInstance:return aim_distance<=PICKUP_RANGE and aim_collider._stage>=3
 	if active_item in ["Pickaxe","Shovel","Paddle","Anchor"] or (active_item=="Axe" and get_node("SurvivalTools").call("target")!=null):
@@ -2323,7 +2369,7 @@ func can_interact_now() -> bool:
 	if FOOD_RULES.edible(active_item) and Inventory.has(active_item,1):return true
 	if not is_instance_valid(aim_collider):aim_collider=null;aim_valid=false
 	if active_item in ["Solar Torch","Binoculars","Walkie Talkie"]:return Inventory.has(active_item,1)
-	if active_item in ["Torch","Burning Torch"] and Inventory.has(active_item,1): return true
+	if active_item in ["Torch","Burning Torch"]:return not get_node("SurvivalProgression").held_torch_caption().is_empty()
 	if active_item in ["Cooked Meat", "Cooked Crab"] and Inventory.has(active_item,1):
 		return true
 	if active_item == "Bandage" and Stats.health < 100 and Inventory.has("Bandage", 1):
@@ -3755,7 +3801,7 @@ func _resolve_roof_plane_tile(aim_pos: Vector3, _gh: Node3D) -> Dictionary:
 	return {"valid": true, "socket": side_socket, "transform": solved_r, "support": anchor}
 
 
-func _resolve_wall_torch() -> Dictionary:
+func _resolve_wall_torch(mount_kind: String="WallTorch") -> Dictionary:
 	var invalid := {"valid":false, "socket":null}
 	if not aim_valid or aim_collider == null or not is_instance_valid(aim_collider): return invalid
 	if global_position.distance_to(aim_point) > 3.2: return invalid
@@ -3779,7 +3825,7 @@ func _resolve_wall_torch() -> Dictionary:
 	if container != null:
 		var count := 0
 		for mounted in _placement_children(container):
-			if _find_piece_name(mounted as Node3D) != "WallTorch": continue
+			if _find_piece_name(mounted as Node3D) not in ["WallTorch","ElectricLamp"]: continue
 			count += 1
 			if (mounted as Node3D).global_position.distance_to(pos) < 0.65: return invalid
 		if count >= 16: return invalid
@@ -3791,15 +3837,31 @@ func _resolve_wall_torch() -> Dictionary:
 	query.collision_mask = 1
 	query.exclude = [get_rid()]
 	if not get_world_3d().direct_space_state.intersect_shape(query,1).is_empty(): return invalid
+	if mount_kind=="ElectricLamp":orientation=orientation.rotated(up,PI)
 	return {"valid":true,"socket":null,"transform":Transform3D(orientation,pos),"support":wall}
 
-func mount_held_torch() -> bool:
+func mount_held_torch(locked: Dictionary={}) -> bool:
 	var selected:=active_item
 	var progress := get_node("SurvivalProgression")
 	if selected not in ["Torch","Burning Torch"] or not Inventory.has(selected,1):return false
-	var placement := _resolve_wall_torch()
-	if not bool(placement.get("valid",false)): return false
 	var raft := _get_raft_node()
+	if not is_instance_valid(raft):return false
+	var placement: Dictionary = _resolve_wall_torch() if locked.is_empty() else locked.duplicate()
+	if not bool(placement.get("valid",false)): return false
+	if not locked.is_empty():
+		var wall:=locked.get("support") as Node3D
+		if not is_instance_valid(wall) or not wall.is_inside_tree() or wall.is_queued_for_deletion(): return false
+		placement.transform=wall.global_transform*(locked.local_transform as Transform3D)
+		var spot: Vector3=placement.transform.origin
+		if global_position.distance_to(spot)>3.2: return false
+		var sphere:=SphereShape3D.new();sphere.radius=.075
+		var query:=PhysicsShapeQueryParameters3D.new();query.shape=sphere;query.collision_mask=1;query.exclude=[get_rid()]
+		query.transform.origin=spot+wall.global_basis.y.normalized()*.46
+		if not get_world_3d().direct_space_state.intersect_shape(query,1).is_empty(): return false
+		var existing:=raft.get_node_or_null("BuiltPieces")
+		if existing!=null:
+			for mounted in _placement_children(existing):
+				if _find_piece_name(mounted as Node3D) in ["WallTorch","ElectricLamp"] and mounted.global_position.distance_to(spot)<.65: return false
 	var container := raft.get_node_or_null("BuiltPieces")
 	if container == null:
 		container = Node3D.new()
@@ -3811,7 +3873,9 @@ func mount_held_torch() -> bool:
 	torch.set("fuel",float(progress.get("torch_fuel")))
 	torch.set("end_time",float(progress.get("torch_end_time")))
 	torch.set("burning",float(progress.get("torch_fuel")) > 0.0)
-	Inventory.remove(selected,1)
+	if not Inventory.try_exchange({selected:1},{}):
+		torch.free()
+		return false
 	progress.set("torch_fuel",0.0)
 	progress.set("torch_end_time",0.0)
 	progress.set("legacy_torch",false)
@@ -3829,6 +3893,9 @@ func _placement_ray_direction() -> Vector3:
 	return _placement_ray_override.get("direction",-camera.global_basis.z)
 
 func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
+	if piece_name=="FishingNet":return _resolve_fishing_net()
+	if piece_name=="ElectricLamp" and aim_valid and is_instance_valid(aim_collider) and _find_piece_name(aim_collider) in ["Wall","Window"]:
+		return _resolve_wall_torch("ElectricLamp")
 	if piece_name == "WallTorch":
 		return _resolve_wall_torch()
 	if piece_name in ["PlanterPot","PlanterBox","TreePot"]:
@@ -5003,7 +5070,7 @@ func _resolve_placement(piece_name: String, _hit_point: Vector3) -> Dictionary:
 	# ============================================================
 	if piece_name == "Stairs":
 		return _resolve_stairs(support, effective_aim_point)
-	if piece_name in ["PlanterPot","PlanterBox","TreePot","Bonfire","RainCollector","SandFilter","WaterPurifier","WindGenerator","ElectricLamp","ElectricPurifier","RescueRadio","CargoCrate","StorageBox","CookingSetup"]:
+	if piece_name in ["PlanterPot","PlanterBox","TreePot","Bonfire","RainCollector","SandFilter","WaterPurifier","WindGenerator","ElectricLamp","ElectricPurifier","RescueRadio","CargoCrate","StorageBox","CookingSetup","SeedDryingTray"]:
 		return _resolve_deck_prop(piece_name,support,effective_aim_point)
 
 	# OTHER NON-FOUNDATION: Socket-based placement
@@ -5589,12 +5656,15 @@ func _tick_build_action(delta: float) -> void:
 	if float(_pending_build.time)<float(_pending_build.get("seconds",.75)):return
 	var saved := _pending_build.duplicate();_pending_build.clear()
 	var placement: Vector3=raft.to_global(saved.point)
-	if global_position.distance_to(placement)>PICKUP_RANGE+4.0:
+	# A sky ray can end hundreds of metres away while its fitted ceiling is
+	# directly overhead. Reach belongs to the locked, visible building piece.
+	var fitted: Vector3=raft.to_global((saved.local_transform as Transform3D).origin)
+	if not fitted.is_finite() or global_position.distance_to(fitted)>PICKUP_RANGE+4.0:
 		_hud_toast("BUILD CANCELLED · OUT OF REACH");return
 	var old_aim := [aim_point,aim_normal,aim_collider,aim_distance,aim_valid]
 	var old_rotation:=Vector2(build_rotation,build_rotation_x)
 	build_rotation=float(saved.rotation);build_rotation_x=float(saved.pitch)
-	aim_point=placement
+	aim_point=fitted if BUILD_RECIPE_NAMES[selected_piece_index]=="Roof" else placement
 	aim_normal=saved.normal
 	aim_collider=saved.collider
 	aim_distance=float(saved.distance)
@@ -5654,6 +5724,11 @@ func _try_build() -> void:
 	if piece == null:
 		return
 	var spent_cost := Inventory.recipe_cost(piece_name)
+	if piece_name=="ElectricLamp" and spent_cost.has("ElectricLamp"):
+		var electronics:=get_node("PortableElectronics")
+		piece.set("led_battery",float(electronics.charge.ElectricLamp));piece.set("led_cell",bool(electronics.installed.ElectricLamp))
+		piece.set("enabled",bool(electronics.enabled.ElectricLamp));piece.set("automatic_night",false)
+		piece.set("fault",str(electronics.faults.ElectricLamp));piece.set("fault_after",float(electronics.fault_after.ElectricLamp))
 	if not Inventory.craft(piece_name):
 		piece.free()
 		return
@@ -5701,6 +5776,7 @@ func _try_build() -> void:
 		# Wall/other: use the ghost's preview transform, converted to raft-local
 		piece.transform = raft.global_transform.affine_inverse() * _ghost_transform
 	container.add_child(piece)
+	if piece_name=="ElectricLamp":piece.call("advance",0.0)
 	# Re-enable collision after physics frame settles (prevents pushing player)
 	for _pc in piece_cols:
 		(_pc as CollisionShape3D).set_deferred("disabled", false)
@@ -5744,7 +5820,7 @@ func _try_build() -> void:
 			else:
 				pname = "NULL"
 			print("  %s -> %s" % [str(key), pname])
-	_hud_toast(piece_name.to_upper() + " PLACED")
+	_hud_toast(("FISHING NET" if piece_name=="FishingNet" else "SALVAGED LED" if piece_name=="ElectricLamp" else piece_name.to_upper()) + " BUILT · PLACED")
 	if not _timed_build_commit:play_world_sfx(CONTACT_AUDIO.pick("hammer"))
 	_update_build_preview()
 
@@ -5765,6 +5841,7 @@ func _link_reciprocal_socket(new_piece: Node3D, parent_socket: BuildSocket) -> v
 # BUILD SYSTEM — EDIT SYSTEM
 # ============================================================
 const RECIPE_REFUND := {
+	"SeedDryingTray":{"Wood":3,"Rope":1},
 	"StorageBox": {"Wood":6,"Rope":2,"Metal":1},
 	"CookingSetup": {"Wood":8,"Stone":4,"Metal":2},
 	"WallTorch": {"Wood":2,"Rope":1},
@@ -5940,7 +6017,8 @@ func _remove_editing() -> void:
 		_editing = null
 		return
 	if _editing.has_method("empty") and not _editing.empty():
-		_hud_toast("EMPTY THE STORAGE BOX BEFORE REMOVING IT");return
+		var contents_hint:="COLLECT THE FISH BEFORE REMOVING THE NET" if _piece_name_from_node(_editing)=="FishingNet" else "COLLECT THE DRY SEEDS BEFORE REMOVING THE TRAY" if _piece_name_from_node(_editing)=="SeedDryingTray" else "EMPTY THE STORAGE BOX BEFORE REMOVING IT"
+		_hud_toast(contents_hint);return
 	var running_job := _editing.get_node_or_null("StationJob")
 	if running_job!=null and not running_job.job.is_empty():
 		_hud_toast("LET THE STATION FINISH BEFORE REMOVING IT");return
@@ -5971,6 +6049,8 @@ func _remove_editing() -> void:
 					if s.is_occupied and s.occupying_piece == _editing:
 						s.free_socket()
 	# Refund the exact recipe cost after confirming the inventory can hold it.
+	if _piece_name_from_node(_editing)=="ElectricLamp" and refund.has("ElectricLamp"):
+		get_node("PortableElectronics").store_led(_editing)
 	for item in refund:
 		Inventory.add(str(item), int(refund[item]))
 	_editing.queue_free()
@@ -6247,8 +6327,8 @@ static func _valid_saved_transform(values: Variant) -> bool:
 	for value in values:
 		if not (value is float or value is int) or not is_finite(float(value)) or absf(float(value)) > 100000.0:
 			return false
-	var basis := Basis(Vector3(values[0],values[1],values[2]), Vector3(values[3],values[4],values[5]), Vector3(values[6],values[7],values[8]))
-	return absf(basis.determinant()) > 0.01 and absf(basis.determinant()) < 100.0
+	var placement_basis := Basis(Vector3(values[0],values[1],values[2]), Vector3(values[3],values[4],values[5]), Vector3(values[6],values[7],values[8]))
+	return absf(placement_basis.determinant()) > 0.01 and absf(placement_basis.determinant()) < 100.0
 
 func _resolve_smart_roof(world_aim: Vector3) -> Dictionary:
 	var plan := SMART_ROOF.plan(_get_raft_node(), world_aim, _editing, _editing != null)
@@ -6353,7 +6433,7 @@ func _update_head_bob(delta: float) -> void:
 	var speed := _gait_speed
 	var weight := clampf(speed / WALK_SPEED,0,1) if is_on_floor() and not is_swimming and cam_mode == CAM_FPS and GameSettings.head_bob else 0.0
 	_head_bob_phase = _gait_phase*TAU
-	var target := Vector3(sin(_head_bob_phase)*0.018,-cos(_head_bob_phase*2)*0.035,0)*weight
+	var target := Vector3(sin(_head_bob_phase)*0.007,-cos(_head_bob_phase*2)*0.012,0)*weight
 	_head_bob_offset = _head_bob_offset.lerp(target,1.0-exp(-delta*12.0))
 	camera.position = _head_bob_offset
 
@@ -6463,20 +6543,61 @@ func _resolve_deck_prop(kind: String, support: Node3D, point: Vector3) -> Dictio
 	_diag["final"]="VALID"
 	return {"valid":true,"transform":solved,"support":support,"socket":null}
 
+func _resolve_fishing_net() -> Dictionary:
+	var support:=_find_support_piece(aim_collider) if aim_valid and is_instance_valid(aim_collider) else null
+	if support==null or _find_piece_name(support) not in ["Raft","Foundation"] or not _is_structurally_supported(support):
+		_diag["invalid_reason"]="AIM AT A FOUNDATION EDGE OVER THE SEA"
+		return {"valid":false}
+	var flat:=_get_flat_support_transform(support)
+	var local:=flat.affine_inverse()*aim_point
+	var direction:=Vector3(signf(local.x),0,0) if absf(local.x)>absf(local.z) else Vector3(0,0,signf(local.z))
+	if direction.length_squared()<.5:direction=Vector3.FORWARD
+	var yaw:=atan2(direction.x,direction.z)
+	var solved:=Transform3D(flat.basis*Basis(Vector3.UP,yaw),flat*(direction*1.53+Vector3.UP*.20))
+	var body:=BoxShape3D.new();body.size=Vector3(1.08,1.05,.98)
+	var probe:=solved;probe.origin=solved*Vector3(0,-.42,0)
+	if not _check_overlap(body,probe,support).is_empty():
+		_diag["invalid_reason"]="NET NEEDS A FREE OUTER EDGE · CLEAR THE WATER BELOW"
+		return {"valid":false,"transform":solved}
+	var net_ocean:=get_tree().get_first_node_in_group("ocean")
+	if net_ocean==null or absf(solved.origin.y-float(net_ocean.call("get_height",solved.origin)))>.85:
+		_diag["invalid_reason"]="HANG THE NET AT SEA LEVEL"
+		return {"valid":false,"transform":solved}
+	return {"valid":true,"transform":solved,"support":support,"socket":null}
+
+func _power_wiring() -> Node:
+	var wiring:=get_node_or_null("PowerWiring")
+	if wiring==null:
+		wiring=preload("res://scripts/power_wiring.gd").new();wiring.name="PowerWiring";add_child(wiring)
+	return wiring
+
+func _held_led_target() -> Node:
+	if not aim_valid or not is_instance_valid(aim_collider) or aim_distance>PICKUP_RANGE:return null
+	var target: Node=aim_collider
+	while target!=null:
+		if target.is_in_group("debris") or target.has_method("interact_survival"):return target
+		target=target.get_parent()
+	return null
+
+func _garden_prep() -> Node:
+	var prep:=get_node_or_null("GardenPrep")
+	if prep==null:prep=preload("res://scripts/garden_prep.gd").new();prep.name="GardenPrep";add_child(prep)
+	return prep
+
 func _resolve_stairs(support: Node3D, _world_aim: Vector3) -> Dictionary:
 	var kind := _find_piece_name(support)
 	if kind not in ["Raft","Foundation","Roof","Stairs"]:
 		_diag["invalid_reason"] = "AIM AT A DECK OR STAIR LANDING"
 		return {"valid": false}
 	var flat := _get_flat_support_transform(support)
-	var basis := flat.basis.rotated(Vector3.UP, snappedf(build_rotation, PI/2.0))
+	var placement_basis := flat.basis.rotated(Vector3.UP, snappedf(build_rotation, PI/2.0))
 	var base := flat.origin
 	if kind == "Stairs":
 		base = flat * support.get_node("BuildSockets/Socket_Top").position
 	else:
-		base += basis * Vector3(0,0,-1.0)
+		base += placement_basis * Vector3(0,0,-1.0)
 		base.y += 0.075 if kind == "Roof" else 0.15
-	var solved := Transform3D(basis,base+Vector3.UP*0.1)
+	var solved := Transform3D(placement_basis,base+Vector3.UP*0.1)
 	var scene: PackedScene = build_pieces[BUILD_RECIPE_NAMES.find("Stairs")]
 	var template := _editing if _editing!=null and _find_piece_name(_editing)=="Stairs" else _solver_template(scene)
 	var stair_run: float = template.run

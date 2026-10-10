@@ -6,6 +6,12 @@ var fuel := 0.0
 var water := 0
 var seconds := 0.0
 var charge := 0.0
+var led_battery:=100.0
+var led_cell:=true
+var machine_id:=""
+var wired_source:=""
+var _cable: MeshInstance3D
+var _cable_end:=Vector3.INF
 var enabled := true
 var automatic_night := true
 var transmissions := 0
@@ -18,7 +24,7 @@ var _brake: Node3D
 var _charge_bars: Array[Node3D] = []
 var _rotor_speed := 0.0
 var _wind_time := 0.0
-var _wind_exposed := true
+var _wind_exposed := false
 var _label: Label3D
 var _power_reported := false
 var _drip: Node3D
@@ -30,6 +36,7 @@ var _flicker := 0.0
 const ELECTRICAL := ["WindGenerator","ElectricPurifier","RescueRadio","ElectricLamp"]
 
 func _ready() -> void:
+	if machine_id.is_empty():machine_id=machine_type+"_"+str(get_instance_id())
 	_preview = get_parent() != null and get_parent().name == "BuildPreviewRoot"
 	add_to_group("build_surface")
 	if not _preview and machine_type == "WindGenerator":
@@ -63,10 +70,11 @@ func _ready() -> void:
 		_bulb_material=visual.get_node("LEDLens").material_override
 		if not _preview:add_to_group("electric_lamp")
 		_light = OmniLight3D.new()
-		_light.position.y = 0.45
+		_light.position=Vector3(0,.04,-.20)
 		_light.light_color = Color(1, 0.83, 0.56)
-		_light.omni_range = 7
-		_light.light_energy = 1.6
+		_light.omni_range = 6
+		_light.omni_attenuation=2.0
+		_light.light_energy = 1.4
 		_light.shadow_enabled = false
 		_light.visible = false
 		add_child(_light)
@@ -95,10 +103,17 @@ func _process(delta: float) -> void:
 		return
 	var step := minf(_sample, 2.0)
 	_sample = 0.0
+	_refresh_cable()
 	advance(step)
 	_refresh_label()
 
 func advance(step: float) -> void:
+	# Sample even while braked/being repaired, so a moved turbine never uses
+	# an old outdoor exposure result when it starts again.
+	if machine_type == "WindGenerator": _wind_exposed = exposed()
+	if machine_type=="ElectricLamp":
+		_advance_led(step)
+		return
 	if not enabled or _preview or not fault.is_empty() or _repairs_busy():
 		return
 	match machine_type:
@@ -110,7 +125,6 @@ func advance(step: float) -> void:
 					seconds-=20.0
 					water+=1
 		"WindGenerator":
-			_wind_exposed=exposed()
 			if _wind_exposed:
 				var rate := minf(2.2,0.75*pow(wind_strength()/0.6,3.0))
 				charge = minf(120, charge + step * rate)
@@ -131,24 +145,53 @@ func advance(step: float) -> void:
 				while seconds >= 10 and water < 5:
 					seconds -= 10
 					water += 1
-		"ElectricLamp":
-			if _light != null:
-				var scene:=get_tree().current_scene
-				var atmosphere := scene.get_node_or_null("Sky3D/TimeOfDay") if scene!=null else null
-				var hour: float = atmosphere.get("current_time") if atmosphere != null else 0.0
-				_light.visible = get_meta("light_allowed",true) and (not automatic_night or hour < 6.0 or hour >= 18.0) and request_power(step * 0.08)
-				_bulb_material.emission_energy_multiplier=2.0 if _light.visible else 0.0
+
+func _advance_led(step: float) -> void:
+	if _preview or _light==null or _repairs_busy():return
+	if led_cell and led_battery<100 and fault!="wiring" and request_power(step*.15):led_battery=minf(100,led_battery+step*.8)
+	var scene:=get_tree().current_scene
+	var sky:=scene.get_node_or_null("Sky3D") if scene!=null else null
+	var hour: float=float(sky.get("current_time")) if sky!=null else 0.0
+	var on: bool=enabled and led_cell and led_battery>0 and fault.is_empty() and (not automatic_night or hour<6 or hour>=18)
+	if on:led_battery=maxf(0,led_battery-step*100.0/1800.0)
+	_light.visible=on and led_battery>0 and bool(get_meta("light_allowed",true))
+	_bulb_material.emission_energy_multiplier=1.5 if _light.visible else 0.0
 
 func request_power(amount: float) -> bool:
 	if amount<=0.0 or not is_finite(amount): return false
-	for source in get_tree().get_nodes_in_group("power_source"):
-		# Braking the rotor stops charging; it does not disconnect its battery.
-		if source == self or source.is_queued_for_deletion() or source.global_position.distance_squared_to(global_position) > 144:
-			continue
-		if str(source.get("fault")).is_empty() and source.charge >= amount:
-			source.charge -= amount
-			return true
+	var source:=_wired_generator()
+	# Braking stops generation; the connected storage battery still supplies power.
+	if source!=null and str(source.fault).is_empty() and source.charge>=amount:
+		source.charge-=amount
+		return true
 	return false
+
+func _wired_generator() -> Node3D:
+	if wired_source.is_empty():return null
+	for source: Node3D in get_tree().get_nodes_in_group("power_source"):
+		if source!=self and not source.is_queued_for_deletion() and source.machine_id==wired_source and source.global_position.distance_squared_to(global_position)<=144:return source
+	return null
+
+func _refresh_cable() -> void:
+	if _preview:return
+	var source:=_wired_generator()
+	if source==null:
+		if _cable!=null:_cable.hide()
+		return
+	if _cable==null:
+		_cable=MeshInstance3D.new();_cable.name="InsulatedPowerCable";_cable.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_cable.material_override=preload("res://scripts/object_materials.gd").worn(4,Color(.07,.08,.06),.95);add_child(_cable)
+	var a:=Vector3(0,0,.12);var b:=to_local(source.to_global(Vector3(.16,.08,.1)))
+	_cable.show()
+	if _cable.mesh!=null and _cable_end.distance_squared_to(b)<.00001:return
+	_cable_end=b
+	var mesh:=ImmediateMesh.new();mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	var previous:=a
+	for index in range(1,13):
+		var t:=index/12.0
+		var point:=a.lerp(b,t)-Vector3.UP*sin(t*PI)*minf(.3,a.distance_to(b)*.05)
+		preload("res://scripts/fishing_net_visual.gd").strand(mesh,previous,point);previous=point
+	mesh.surface_end();_cable.mesh=mesh;_cable.show()
 
 func wind_strength() -> float:
 	var rain := get_tree().get_first_node_in_group("rain_system")
@@ -172,6 +215,24 @@ func clear_fault(_item: String="") -> void:
 	fault="";fault_after=randf_range(540.0,900.0);_flicker=0;_refresh_label()
 
 func exposed() -> bool:
+	if machine_type == "WindGenerator":
+		var space := get_world_3d().direct_space_state
+		var hub := to_global(Vector3(0,1.7,0))
+		# Start below the rotor: a ceiling intersecting its blades must count.
+		var roof := PhysicsRayQueryParameters3D.create(to_global(Vector3(0,.35,0)),hub+Vector3.UP*8,1,[get_rid()])
+		if not space.intersect_ray(roof).is_empty(): return false
+		var rain := get_tree().get_first_node_in_group("rain_system")
+		var wind: Vector2 = rain.wind_direction if rain!=null else Vector2(.4,.15)
+		var direction := Vector3(wind.x,0,wind.y).normalized()
+		if direction.length_squared()<.01: direction=Vector3.FORWARD
+		var side := direction.cross(Vector3.UP).normalized()
+		# Both sides and the blade tips need a clear, short wind corridor.
+		# Walls built after the machine was placed stop generation too.
+		for offset in [Vector3.ZERO,side*.64,-side*.64,Vector3.UP*.64,-Vector3.UP*.64]:
+			var ray_start: Vector3=hub+offset
+			var corridor:=PhysicsRayQueryParameters3D.create(ray_start-direction*4,ray_start+direction*4,1,[get_rid()])
+			if not space.intersect_ray(corridor).is_empty(): return false
+		return true
 	var from := global_position + Vector3.UP * (0.77 if machine_type=="SandFilter" else 2.1)
 	var query := PhysicsRayQueryParameters3D.create(from, from + Vector3.UP * 8, 1, [get_rid()])
 	return get_world_3d().direct_space_state.intersect_ray(query).is_empty()
@@ -181,6 +242,12 @@ func interact_survival(player: Node) -> void:
 		return
 	if not fault.is_empty():
 		player.get_node("EquipmentRepairs").open(self,machine_type);return
+	if machine_type=="ElectricLamp" and (not led_cell or led_battery<=0):
+		if not Inventory.has("Battery",1):player.call("_hud_toast","LED BATTERY EMPTY · REPLACE THE CELL OR WIRE IT TO A GENERATOR");return
+		if not Inventory.try_exchange({"Battery":1},{"Used Battery":1} if led_cell else {}):player.call("_hud_toast","BAG FULL · LEAVE ROOM FOR THE OLD BATTERY");return
+		led_cell=true;led_battery=100;enabled=true;automatic_night=false
+		player.call("play_action","battery",1.8,global_position);player.call("_hud_toast","LED BATTERY REPLACED · 30 MINUTES OF LIGHT")
+		player.call("_queue_save");_advance_led(0);_refresh_label();return
 	if machine_type in ["SandFilter","WaterPurifier","ElectricPurifier"] and str(player.get("active_item"))=="Dirty Water Can":
 		player.get_node("SurvivalServices").call("open_filter",self)
 		return
@@ -211,24 +278,26 @@ func interact_survival(player: Node) -> void:
 				else:
 					player.call("_hud_toast", "DISTILLING · NEED WOOD TO HEAT SEAWATER")
 			else:
-				player.call("_hud_toast", "PUMP NEEDS A CHARGED WIND GENERATOR WITHIN 12 METRES")
+				player.call("_hud_toast", "CONNECT THE PUMP TO A CHARGED GENERATOR USING WIRE")
 		"WindGenerator":
 			enabled=not enabled
 			player.call("play_action","brake",0.7,global_position+Vector3(0,0.2,-0.3))
-			player.call("_hud_toast", "TURBINE %s · BATTERY %d%% · MACHINES WITHIN 12m" % ["RELEASED" if enabled else "BRAKED",roundi(charge/120.0*100.0)])
+			player.call("_hud_toast", "TURBINE %s · BATTERY %d%% · EQUIP WIRE TO CONNECT MACHINES" % ["RELEASED" if enabled else "BRAKED",roundi(charge/120.0*100.0)])
 		"ElectricLamp":
+			automatic_night=false
 			enabled = not enabled
 			if not enabled and _light != null:
 				_light.visible = false
 				_bulb_material.emission_energy_multiplier=0.0
-			player.call("_hud_toast", "LAMP AUTO · ON AT NIGHT" if enabled and automatic_night else ("LAMP ON" if enabled else "LAMP OFF"))
+			player.call("_hud_toast", "SALVAGED LED ON · %d%% BATTERY"%roundi(led_battery) if enabled else "SALVAGED LED OFF · BATTERY SAVED")
+			_advance_led(0.0)
 		"RescueRadio":
 			if request_power(20):
 				transmissions += 1
 				_record("signal")
 				player.call("_hud_toast", "SOS TRANSMITTED · RESCUE BEACON ACTIVE")
 			else:
-				player.call("_hud_toast", "SOS NEEDS 20 BATTERY CHARGE WITHIN 12 METRES")
+				player.call("_hud_toast", "WIRE THE RADIO TO A GENERATOR WITH 20 BATTERY CHARGE")
 	_refresh_label()
 	player.call("_queue_save")
 
@@ -251,22 +320,27 @@ func _refresh_label() -> void:
 		"WaterPurifier": _label.text = "STILL · %d/5 WATER · %ds FUEL" % [water, int(fuel)]
 		"ElectricPurifier": _label.text = "POWERED WATER · %d/5" % water
 		"WindGenerator":
-			_label.text = "BATTERY %d%% · %s" % [roundi(charge/120.0*100.0),"CHARGING" if enabled and _wind_exposed and charge<120.0 else ("FULL" if charge>=120.0 else "BRAKED" if not enabled else "SHELTERED")]
+			_label.text = "BATTERY %d%% · %s" % [roundi(charge/120.0*100.0),"NO AIRFLOW · MOVE OUTSIDE" if not _wind_exposed else "BRAKED" if not enabled else "FULL" if charge>=120.0 else "CHARGING"]
 			_brake.rotation.x=0.45 if enabled else -0.45
 			for index in _charge_bars.size(): _charge_bars[index].visible=charge>float(index)*30.0 and (fault.is_empty() or (_flicker>0 and sin(_flicker*55)>0.25))
-		"ElectricLamp": _label.text = "LAMP · " + (("AUTO NIGHT" if automatic_night else "ON") if enabled else "OFF")
+		"ElectricLamp": _label.text = "LED · %d%% · "%roundi(led_battery) + ("NO BATTERY" if not led_cell else "EMPTY · REPLACE / CHARGE" if led_battery<=0 else "ON" if enabled else "OFF")
 		"RescueRadio": _label.text = "SOS SENT" if transmissions > 0 else "RADIO · NEEDS 20 CHARGE"
 	if not fault.is_empty():_label.text=("LOOSE CONTACT" if fault=="contact" else "SEIZED MOTOR" if fault=="motor" else "DAMAGED WIRING")+" · USE TO REPAIR"
 
 func save_survival_state() -> Dictionary:
 	return {"fuel": fuel, "water": water, "seconds": seconds, "charge": charge,
-		"enabled": enabled, "automatic_night": automatic_night, "transmissions": transmissions, "power_reported": _power_reported,"fault":fault,"fault_after":fault_after}
+		"enabled": enabled, "automatic_night": automatic_night, "transmissions": transmissions, "power_reported": _power_reported,"fault":fault,"fault_after":fault_after,"led_battery":led_battery,"led_cell":led_cell,"machine_id":machine_id,"wired_source":wired_source}
 
 func restore_survival_state(data: Dictionary) -> void:
+	machine_id=str(data.get("machine_id",machine_id)).left(96)
+	wired_source=str(data.get("wired_source","")).left(96)
 	fuel = clampf(float(data.get("fuel", 0)), 0, 200)
 	water = clampi(int(data.get("water", 0)), 0, 5)
 	seconds = clampf(float(data.get("seconds", 0)), 0, 20)
 	charge = clampf(float(data.get("charge", 0)), 0, 120)
+	var cell: Variant=data.get("led_battery",100.0)
+	led_battery=clampf(float(cell),0,100) if (cell is int or cell is float) and is_finite(float(cell)) else 0.0
+	led_cell=bool(data.get("led_cell",true))
 	enabled = bool(data.get("enabled", true))
 	automatic_night = bool(data.get("automatic_night", true))
 	transmissions = clampi(int(data.get("transmissions", 0)), 0, 10000)

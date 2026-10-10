@@ -48,7 +48,8 @@ func _ready() -> void:
 	_torch_light.name = "TorchLight"
 	_torch_light.light_color = Color(1,0.51,0.19)
 	_torch_light.light_energy = 1.2
-	_torch_light.omni_range = 5
+	_torch_light.omni_range = 4.5
+	_torch_light.omni_attenuation = 2.0
 	_torch_light.shadow_enabled = false
 	_torch_light.position = Vector3(0,1.2,0)
 	add_child(_torch_light)
@@ -219,6 +220,19 @@ func restore_state(data: Dictionary) -> void:
 
 func is_held_lit() -> bool:
 	return torch_fuel>0 and (str(player.active_item)=="Burning Torch" or (legacy_torch and str(player.active_item)=="Torch"))
+
+func held_torch_caption() -> String:
+	var selected:=str(player.active_item)
+	if selected not in ["Torch","Burning Torch"] or not Inventory.has(selected,1):return ""
+	var target := player.get("aim_collider") as Node3D
+	if bool(player.aim_valid) and is_instance_valid(target):
+		if str(player.call("_find_piece_name",target))=="WallTorch" and player.global_position.distance_to(target.global_position)<=3.2:return "TAKE TORCH"
+	if bool(player.call("_resolve_wall_torch").get("valid",false)):return "PLACE TORCH"
+	if is_held_lit():return "PUT OUT"
+	if bool(player.aim_valid) and is_instance_valid(target) and target.is_in_group("campfire") \
+		and player.global_position.distance_to(target.global_position)<=3.5 \
+		and player.get_node("SurvivalServices")._station_ready(target):return "LIGHT TORCH"
+	return ""
 
 func use_torch() -> void:
 	var selected:=str(player.get("active_item"))

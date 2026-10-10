@@ -74,7 +74,7 @@ func refresh() -> void:
 		else: instance = _draws[key]
 		instance.multimesh.instance_count = group.transforms.size()
 		for index in group.transforms.size():
-			var transform: Transform3D = group.transforms[index]
-			instance.multimesh.set_instance_transform(index,transform)
-			var seed_value := fposmod(sin(transform.origin.x*17.31+transform.origin.z*9.17)*43758.5,1.0)
+			var instance_transform: Transform3D = group.transforms[index]
+			instance.multimesh.set_instance_transform(index,instance_transform)
+			var seed_value := fposmod(sin(instance_transform.origin.x*17.31+instance_transform.origin.z*9.17)*43758.5,1.0)
 			instance.multimesh.set_instance_custom_data(index,Color(seed_value,0,0,1))

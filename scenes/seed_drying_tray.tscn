@@ -1,0 +1,9 @@
+[gd_scene format=3]
+[ext_resource type="Script" path="res://scripts/seed_drying_tray.gd" id="1"]
+[sub_resource type="BoxShape3D" id="tray"]
+size = Vector3(0.6, 0.1, 0.45)
+[node name="SeedDryingTray" type="StaticBody3D"]
+script = ExtResource("1")
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("tray")
+[node name="BuildSockets" type="Node3D" parent="."]

@@ -1,16 +1,16 @@
 extends Node
 ## Portable solar tools. Battery state is stored separately from stackable spare cells.
-const TOOLS := ["Solar Torch","Binoculars","Walkie Talkie"]
-const POWERED := ["Solar Torch","Walkie Talkie"]
+const TOOLS := ["Solar Torch","Binoculars","Walkie Talkie","ElectricLamp"]
+const POWERED := ["Solar Torch","Walkie Talkie","ElectricLamp"]
 const AUDIO := preload("res://scripts/survival_audio.gd")
-var charge := {"Solar Torch":100.0,"Walkie Talkie":100.0}
-var installed := {"Solar Torch":true,"Walkie Talkie":true}
-var enabled := {"Solar Torch":false,"Walkie Talkie":false}
+var charge := {"Solar Torch":100.0,"Walkie Talkie":100.0,"ElectricLamp":100.0}
+var installed := {"Solar Torch":true,"Walkie Talkie":true,"ElectricLamp":true}
+var enabled := {"Solar Torch":false,"Walkie Talkie":false,"ElectricLamp":false}
 var solar := false
 var zoomed := false
 var cover_open := false
-var faults: Dictionary={"Solar Torch":"","Walkie Talkie":""}
-var fault_after: Dictionary={"Solar Torch":300.0,"Walkie Talkie":420.0}
+var faults: Dictionary={"Solar Torch":"","Walkie Talkie":"","ElectricLamp":""}
+var fault_after: Dictionary={"Solar Torch":300.0,"Walkie Talkie":420.0,"ElectricLamp":540.0}
 var _flicker:=0.0
 var _repair_button: Button
 var _shake_button: Button
@@ -23,6 +23,8 @@ var _solar_tick := 1.0
 var _normal_fov := 75.0
 var player: CharacterBody3D
 var beam: SpotLight3D
+var led: OmniLight3D
+var _mount: Button
 var _audio: AudioStreamPlayer
 var _ui: CanvasLayer
 var _panel: VBoxContainer
@@ -52,21 +54,27 @@ func _ready() -> void:
 	player.get_node("CamPivot/SpringArm3D/Camera3D").add_child(beam)
 	beam.position=Vector3(0.16,-0.12,-0.25)
 	beam.hide()
+	led=OmniLight3D.new();led.name="HeldSalvagedLED";led.light_color=Color(1,.87,.65);led.light_energy=1.4;led.omni_range=6;led.omni_attenuation=2
+	led.shadow_enabled=false;led.position=Vector3(.16,-.10,-.30);player.get_node("CamPivot/SpringArm3D/Camera3D").add_child(led);led.hide()
 	_audio=AudioStreamPlayer.new();_audio.volume_db=-12;add_child(_audio)
 	_build_ui()
 
 func _build_ui() -> void:
 	_ui=CanvasLayer.new();_ui.layer=8;add_child(_ui)
 	_panel=VBoxContainer.new();_panel.name="PortableToolControls";_panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	_panel.theme=preload("res://scripts/ocean_ui.gd").theme()
 	_panel.offset_left=-242;_panel.offset_right=-20;_panel.offset_top=-376;_panel.offset_bottom=-110
 	_panel.add_theme_constant_override("separation",5);_ui.add_child(_panel)
 	_status=Label.new();_status.add_theme_font_size_override("font_size",16);_panel.add_child(_status)
+	_status.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
 	_power=_button("POWER ON / OFF",toggle_power)
+	_mount=_button("MOUNT / PLACE LED",func():
+		if str(player.active_item)=="ElectricLamp" and not _blocked():player.select_piece_for_build(player.BUILD_RECIPE_NAMES.find("ElectricLamp")))
 	_solar_button=_button("RAISE PANEL TO SUN",raise_solar)
 	_cover=_button("OPEN BATTERY COVER",toggle_cover)
 	_remove=_button("REMOVE BATTERY",func():battery_action("remove"))
 	_replace=_button("INSERT / REPLACE BATTERY",func():battery_action("replace"))
-	_repair_button=_button("REPAIR · VIEW REQUIRED PARTS",func():player.get_node("EquipmentRepairs").open(self,str(player.active_item)))
+	_repair_button=_button("REPAIR · VIEW PARTS",func():player.get_node("EquipmentRepairs").open(self,str(player.active_item)))
 	_shake_button=_button("SHAKE LOOSE CONTACT",func():player.get_node("EquipmentRepairs").start("shake",self,str(player.active_item)))
 	_panel.hide()
 
@@ -90,7 +98,7 @@ func use() -> void:
 		else:player.get_node("EquipmentRepairs").open(self,item)
 		return
 	if item=="Binoculars":set_zoom(not zoomed)
-	elif item=="Solar Torch":toggle_power()
+	elif item in ["Solar Torch","ElectricLamp"]:toggle_power()
 	elif item=="Walkie Talkie":
 		if not enabled[item]:toggle_power();return
 		if not installed[item] or float(charge[item])<=0.0:player.call("_hud_toast","BATTERY EMPTY · CHARGE IN SUNLIGHT OR REPLACE");return
@@ -106,7 +114,7 @@ func toggle_power() -> void:
 	var item:=str(player.get("active_item"))
 	if item not in POWERED or _blocked() or battery_animation>0.0 or not Inventory.has(item,1):return
 	if not installed[item] or float(charge[item])<=0.0:
-		player.call("_hud_toast","INSERT A CHARGED BATTERY OR RAISE THE PANEL TO SUNLIGHT");return
+		player.call("_hud_toast","INSERT A CHARGED BATTERY" if item=="ElectricLamp" else "INSERT A CHARGED BATTERY OR RAISE THE PANEL TO SUNLIGHT");return
 	enabled[item]=not enabled[item]
 	_sound("switch")
 	player.call("play_action","switch",0.35)
@@ -192,6 +200,7 @@ func _process(delta: float) -> void:
 	if day_seconds<1:day_seconds=1440.0
 	advance_power(delta,day_seconds,solar)
 	beam.visible=item=="Solar Torch" and working(item) and not blocked
+	led.visible=item=="ElectricLamp" and working(item) and not blocked
 	if battery_animation>0.0:
 		battery_animation=maxf(0,battery_animation-delta)
 		if battery_animation==0.0:cover_open=false;battery_operation=""
@@ -213,12 +222,18 @@ func _process(delta: float) -> void:
 	_update_visuals(item,update_text)
 	_panel.visible=item in POWERED and Inventory.has(item,1) and not blocked
 	if _panel.visible and update_text:
-		var status_text:=("RADIO CH 16" if item=="Walkie Talkie" else "SOLAR FLASHLIGHT")+" · "+("ON" if enabled[item] else "OFF")+"\n"+("BATTERY %d%%"%roundi(float(charge[item])) if installed[item] else "NO BATTERY")+(" · SOLAR ☀" if solar else "")
+		var ui_scale:=preload("res://scripts/ocean_ui.gd").scale_for(get_viewport())
+		_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		_panel.scale=Vector2.ONE*ui_scale
+		_panel.size=Vector2(222,0)
+		_panel.position=Vector2(get_viewport().get_visible_rect().size.x-(_panel.size.x+20)*ui_scale,maxf(12*ui_scale,get_viewport().get_visible_rect().size.y-(maxf(_panel.get_combined_minimum_size().y,160)+112)*ui_scale))
+		var status_text:=("RADIO CH 16" if item=="Walkie Talkie" else "SALVAGED LED" if item=="ElectricLamp" else "SOLAR FLASHLIGHT")+" · "+("ON" if enabled[item] else "OFF")+"\n"+("BATTERY %d%%"%roundi(float(charge[item])) if installed[item] else "NO BATTERY")+(" · SOLAR ☀" if solar and item!="ElectricLamp" else "")
 		if _status.text!=status_text:_status.text=status_text
 		var fault:=fault_for(item)
 		if not fault.is_empty():_status.text+="\n"+("LOOSE CONTACT · SHAKE / REPAIR" if fault=="contact" else "WIRING DAMAGED · REPAIR")
 		_repair_button.visible=not fault.is_empty();_shake_button.visible=fault=="contact"
-		_solar_button.visible=fault.is_empty();_cover.visible=fault.is_empty()
+		_mount.visible=item=="ElectricLamp" and fault.is_empty()
+		_solar_button.visible=fault.is_empty() and item!="ElectricLamp";_cover.visible=fault.is_empty()
 		_cover.text="CLOSE BATTERY COVER" if cover_open else "OPEN BATTERY COVER"
 		_remove.visible=cover_open and fault.is_empty();_replace.visible=cover_open and fault.is_empty()
 		_remove.disabled=battery_animation>0 or not installed[item]
@@ -228,7 +243,7 @@ func advance_power(seconds: float,day_seconds: float,in_sun: bool) -> void:
 	for item in POWERED:
 		if not Inventory.has(item,1) or not installed[item]:continue
 		# Only the exposed held panel charges; an enclosed backpack cannot collect sunlight.
-		if in_sun and str(player.get("active_item"))==item and fault_for(item)!="wiring":
+		if item!="ElectricLamp" and in_sun and str(player.get("active_item"))==item and fault_for(item)!="wiring":
 			charge[item]=minf(100,float(charge[item])+seconds*100.0/240.0)
 		elif enabled[item]:
 			var lifetime:=day_seconds*30.0 if item=="Walkie Talkie" else 1800.0
@@ -260,6 +275,9 @@ func _update_visuals(item: String,update_text: bool=true) -> void:
 		_hand_generation=generation
 		_cache_visual(hand);_cache_visual(third)
 	for parts in _visuals:
+		var lens:=parts.get("lens") as MeshInstance3D
+		if is_instance_valid(lens) and lens.material_override is StandardMaterial3D:
+			(lens.material_override as StandardMaterial3D).emission_energy_multiplier=1.5 if item=="ElectricLamp" and working(item) else 0.0
 		var screen: Label3D=parts.screen if is_instance_valid(parts.screen) else null
 		if is_instance_valid(screen) and update_text:
 			var screen_text:=("FAULT" if not fault_for("Walkie Talkie").is_empty() else "CH16" if enabled["Walkie Talkie"] else "OFF")+"\n"+("%d%%"%roundi(float(charge["Walkie Talkie"])) if installed["Walkie Talkie"] else "NO CELL")+(" SUN" if solar and item=="Walkie Talkie" else "")
@@ -279,7 +297,11 @@ func _update_visuals(item: String,update_text: bool=true) -> void:
 
 func _cache_visual(held: Node3D) -> void:
 	if not is_instance_valid(held):return
-	_visuals.append({"screen":held.find_child("RadioScreen",true,false),"cover":held.find_child("BatteryCover",true,false),"cell":held.find_child("AnimatedBattery",true,false)})
+	_visuals.append({"screen":held.find_child("RadioScreen",true,false),"cover":held.find_child("BatteryCover",true,false),"cell":held.find_child("AnimatedBattery",true,false),"lens":held.find_child("LEDLens",true,false)})
+
+func store_led(machine: Node) -> void:
+	charge.ElectricLamp=machine.led_battery;installed.ElectricLamp=machine.led_cell;enabled.ElectricLamp=machine.enabled
+	faults.ElectricLamp=machine.fault;fault_after.ElectricLamp=machine.fault_after
 
 func _sound(kind: String) -> void:
 	_audio.stream=AUDIO.electronic_stream(kind);_audio.play()

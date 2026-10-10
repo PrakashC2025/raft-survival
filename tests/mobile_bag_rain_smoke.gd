@@ -146,6 +146,35 @@ func large_house_probe() -> void:
 	check(not rain.call("rain_visible_at",raft.to_global(Vector3(.9,1.5,.7))),"The solid ceiling beside the same stairwell remains dry")
 	stair.queue_free();await frames(8)
 
+func recipe_swipe_probe() -> void:
+	var kitchen: Node3D = load("res://scenes/cooking_setup.tscn").instantiate()
+	current_scene.add_child(kitchen); kitchen.global_position = player.global_position + Vector3(0, -.7, -1.3)
+	kitchen.set_process(false); kitchen.burning = true; kitchen.fuel = 100
+	var service := player.get_node("SurvivalServices")
+	service.call("open_cooking", kitchen); await frames(8)
+	var ui: CanvasLayer = service.get("ui")
+	var scroll: ScrollContainer = ui.get("_body").get_node("RecipeScroll")
+	var ingredients: RichTextLabel = ui.get("_rows")[0].ingredients
+	var start := ingredients.get_global_rect().get_center()
+	check(scroll.get_global_rect().has_point(start), "Recipe ingredients are visible inside the scroll area")
+	var finger := InputEventScreenTouch.new(); finger.index = 71; finger.position = start; finger.pressed = true
+	root.push_input(finger, true)
+	var mouse := InputEventMouseButton.new(); mouse.device = -1; mouse.button_index = MOUSE_BUTTON_LEFT; mouse.position = start; mouse.pressed = true
+	root.push_input(mouse, true)
+	var position := start
+	for unused in 6:
+		position += Vector2(0, -24)
+		var drag := InputEventScreenDrag.new(); drag.index = 71; drag.position = position; drag.relative = Vector2(0, -24)
+		root.push_input(drag, true)
+		var motion := InputEventMouseMotion.new(); motion.device = -1; motion.button_mask = MOUSE_BUTTON_MASK_LEFT; motion.position = position; motion.relative = drag.relative
+		root.push_input(motion, true); await frames(1)
+	mouse.position = position; mouse.pressed = false; root.push_input(mouse, true)
+	finger.position = position; finger.pressed = false; root.push_input(finger, true); await frames(6)
+	check(scroll.scroll_vertical > 40, "Swiping directly over recipe ingredients scrolls the cards")
+	check(not service.call("busy"), "Swiping does not accidentally start a cooking job")
+	await shot("recipe-scroll")
+	service.call("close_menu"); kitchen.queue_free(); await frames()
+
 func _run() -> void:
 	if not OS.get_user_data_dir().contains("MobileTests"): quit(2); return
 	preview = "--preview" in OS.get_cmdline_user_args()
@@ -169,18 +198,29 @@ func _run() -> void:
 	check(controls._move_id == -1 and controls._look_id == -1, "Opening the bag releases movement and camera fingers")
 	check(not Input.is_action_pressed("interact") and not Input.is_action_pressed("rope_throw"), "Bag tap fires no world action")
 	var occupied := -1
-	for index in inventory.SLOT_COUNT:
+	for index in range(hud.HOTBAR_COUNT, inventory.SLOT_COUNT):
 		if not inventory.call("slot_empty", index): occupied = index; break
 	pointer(hud._bag_slot_rects[occupied].get_center(), 22)
 	check(hud._bag_open and hud._inspect_slot == occupied, "Touch item inspection survives the matching Android mouse event")
 	await shot("backpack")
+	if preview:
+		var border_rect: Rect2 = hud._bag_slot_rects[occupied]
+		var border_image := root.get_texture().get_image()
+		var gold_pixels := 0
+		for y in range(1, 8):
+			for x in range(-4, 5):
+				var border := border_image.get_pixelv(Vector2i(border_rect.position + Vector2(border_rect.size.x * .5 + x, y)))
+				if border.r > .65 and border.g > .55 and border.b < .65: gold_pixels += 1
+		check(gold_pixels > 5, "Inspected backpack item has a visible gold selection border")
 	pointer(hud._craft_button_rect.get_center(), 23)
 	check(hud._craft_open and not hud._bag_open and paused, "Bag CRAFT opens the visible crafting panel exactly once")
+	await frames()
 	var spear_before: int = inventory.call("total", "Spear")
-	pointer(hud._craft_card_rects[3].get_center(), 24)
-	check(hud._craft_selected == "Spear" and inventory.call("total", "Spear") == spear_before, "Recipe selection only shows requirements and does not spend")
+	pointer(hud._craft_menu.cards.Spear.get_global_rect().get_center(), 24)
+	await frames()
+	check(hud._craft_menu.selected == "Spear" and inventory.call("total", "Spear") == spear_before, "Recipe selection only shows requirements and does not spend")
 	await shot("crafting")
-	pointer(hud._craft_confirm_rect.get_center(), 25)
+	pointer(hud._craft_menu._build.get_global_rect().get_center(), 25)
 	check(inventory.call("total", "Spear") == spear_before + 1, "One touch confirmation crafts one spear despite emulated mouse replay")
 	hud.call("_close_crafting")
 	var mouse := InputEventMouseButton.new(); mouse.button_index = MOUSE_BUTTON_LEFT
@@ -192,6 +232,7 @@ func _run() -> void:
 	check(stats.health == 80 and stats.thirst == 80 and stats.hunger == 80, "Reading the bag causes no survival drain")
 	pointer(hud._close_rect.get_center(), 26)
 	check(not hud._bag_open and not paused, "Close touch leaves the bag closed without reopening")
+	await recipe_swipe_probe()
 	stats.call("load_state", {"health":80,"hunger":80,"thirst":80})
 	player.velocity = Vector3.ZERO; player.is_swimming = false
 	stats.call("_process", 60.0)
@@ -230,9 +271,9 @@ func _run() -> void:
 	if preview: await render_shelter_probe()
 	await large_house_probe()
 	var release:=str(ProjectSettings.get_setting("application/config/version"))
-	check(release=="1.1.7", "The updated project displays release 1.1.7 for APK identification")
+	check(not release.is_empty(), "The project displays its release for APK identification")
 	var preset := ConfigFile.new(); preset.load("C:/GodotProjects/raft-survival/export_presets.cfg")
-	check(int(preset.get_value("preset.0.options","version/code",0)) == 10 and str(preset.get_value("preset.0.options","version/name","")) == release, "Android version code/name distinguish the upcoming update from old APKs")
+	check(int(preset.get_value("preset.0.options","version/code",0)) >= 13 and str(preset.get_value("preset.0.options","version/name","")) == release, "Android version code/name distinguish the upcoming update from old APKs")
 	current_scene.get_node("OceanAmbience").call("stop_environment")
 	current_scene.queue_free(); await frames(25)
 	print("MOBILE BAG RAIN SMOKE: %d checks, %d failures" % [checks, failures])

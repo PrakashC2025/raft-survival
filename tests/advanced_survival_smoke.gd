@@ -66,6 +66,7 @@ func _run() -> void:
 	generator.call("advance",10.0)
 	check(generator.charge > 5 and progress.level == 4,"Exposed turbine generates charge and completes electricity mission")
 	var pump: Node = machines.ElectricPurifier
+	pump.wired_source=generator.machine_id
 	progress.call("record","build:ElectricPurifier")
 	generator.charge = 100
 	pump.call("advance",20.0)
@@ -83,6 +84,7 @@ func _run() -> void:
 	player.call("_handle_selected_item_use")
 	check(root.get_node("Stats").hunger == 59 and not inv.call("has","Cooked Meat",1),"Eating the final equipped meat portion refreshes safely and restores configured hunger")
 	var radio: Node = machines.RescueRadio
+	radio.wired_source=generator.machine_id
 	progress.call("record","build:RescueRadio")
 	generator.charge = 19
 	radio.call("interact_survival",player)

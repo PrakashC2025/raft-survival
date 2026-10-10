@@ -3,10 +3,20 @@ extends Node3D
 ## clock. Low-frequency palette updates and bounded GPU effects respect profiles.
 var _sky: WorldEnvironment
 var _clock: Node
-var _mist: GPUParticles3D
 var _fireflies: Array[GPUParticles3D] = []
 var _sample := 0.0
 static var _occluders: Dictionary = {}
+const EVENING_PANORAMA: Texture2D = preload("res://textures/sky/golden_evening_v1.png")
+const NIGHT_CLOUDS: Texture2D = preload("res://textures/sky/moonlit_clouds_v1.png")
+const MORNING_PANORAMA: Texture2D = preload("res://textures/sky/peach_morning_v1.png")
+const AFTERNOON_PANORAMA: Texture2D = preload("res://textures/sky/blue_afternoon_v1.png")
+
+static func evening_strength(hour: float, sun_height: float) -> float:
+	# Warm clouds approach sunset and disappear into the existing moonlit sky.
+	# The astronomical sun controls the fade; dawn retains its current look.
+	if hour < 12.0: return 0.0
+	return (1.0 - smoothstep(0.06, 0.36, sun_height)) * smoothstep(-0.40, -0.16, sun_height)
+
 const SKY_DAYS := [
 	{"day":Color(.79,.91,1),"horizon":Color(1,.66,.44),"cirrus":.22,"cloud":.32,"size":.8},
 	{"day":Color(.85,.94,1),"horizon":Color(1,.72,.53),"cirrus":.52,"cloud":.44,"size":1.35},
@@ -40,19 +50,23 @@ func _ready() -> void:
 	_clock.set("compute_moon_coords", false)
 	_clock.get_node("Timer").timeout.connect(_update_night_moon)
 	var dome := _sky.get_node("SkyDome")
-	dome.set("moon_size", 0.03)
+	dome.set("moon_size", 0.045)
+	dome.set("panorama_clouds_enabled", true)
 	dome.set("star_field_color", Color(1.12, 1.20, 1.35))
 	dome.set("starmap_color", Color(0.74, 0.80, 0.95, 0.92))
 	dome.set("star_scintillation", 0.28)
 	dome.set("star_scintillation_speed", 0.006)
 	var material: ShaderMaterial = dome.get("sky_material")
-	material.set_shader_parameter("moon_intensity", 1.6)
-	material.set_shader_parameter("moon_glow_intensity", 0.65)
+	material.set_shader_parameter("evening_panorama", EVENING_PANORAMA)
+	material.set_shader_parameter("night_clouds", NIGHT_CLOUDS)
+	material.set_shader_parameter("night_cloud_opacity", 0.35)
+	material.set_shader_parameter("night_cloud_coverage", 0.35)
+	material.set_shader_parameter("morning_panorama", MORNING_PANORAMA)
+	material.set_shader_parameter("afternoon_panorama", AFTERNOON_PANORAMA)
+	material.set_shader_parameter("calm_night_enabled", true)
+	material.set_shader_parameter("moon_intensity", 0.85)
+	material.set_shader_parameter("moon_glow_intensity", 0.40)
 	_update_night_moon()
-	if not GameSettings.mobile_effects_profile():
-		_mist = particles(12, Vector3(14,0.1,14), Color(0.72,0.81,0.84,0.035), Vector2(8,1.2), false)
-		_mist.name = "MorningSeaMist"
-		add_child(_mist)
 	GameSettings.changed.connect(_quality_changed)
 	_quality_changed()
 	call_deferred("_setup_island_effects")
@@ -117,10 +131,10 @@ func _quality_changed() -> void:
 	# A bounded environment map keeps this fill affordable on Mobile.
 	var mobile_effects := GameSettings.mobile_effects_profile()
 	env.sky.radiance_size = Sky.RADIANCE_SIZE_64 if mobile_effects else Sky.RADIANCE_SIZE_128
-	var high_desktop := GameSettings.quality == 3 and not mobile_effects
+	var high_desktop := GameSettings.quality >= 3 and not mobile_effects
 	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 	# These effects require Forward+. Mobile keeps shader AO/analytic reflections
-	# without fog or the rectangular sea-mist particles on phones.
+	# without fog on phones. Sea-mist particles are removed on every platform.
 	env.ssao_enabled = high_desktop and forward_plus
 	env.ssr_enabled = high_desktop and forward_plus
 	env.volumetric_fog_enabled = high_desktop and forward_plus
@@ -139,8 +153,8 @@ func _quality_changed() -> void:
 	_sample = 1.0
 
 func _setup_island_effects() -> void:
-	for name in ["Island","ReefIsle","DriftwoodCay","FarCove"]:
-		var island := get_parent().get_node_or_null(name) as Node3D
+	for island_name in ["Island","ReefIsle","DriftwoodCay","FarCove"]:
+		var island := get_parent().get_node_or_null(island_name) as Node3D
 		if island == null: continue
 		var flies := particles(32,Vector3(8,1.5,8),Color(0.55,0.8,0.18,0.7),Vector2(0.035,0.035),true)
 		flies.name = "NightFireflies"
@@ -165,6 +179,13 @@ func _setup_island_effects() -> void:
 
 func _process(delta: float) -> void:
 	_update_night_moon()
+	var dome := _sky.get_node("SkyDome")
+	var sun: Vector3 = (dome.get("_sun_transform") as Transform3D).origin
+	var material: ShaderMaterial = dome.get("sky_material")
+	material.set_shader_parameter("evening_blend", evening_strength(_clock.call("get_render_time"), sun.y))
+	material.set_shader_parameter("evening_rotation", -atan2(sun.z, sun.x) / TAU)
+	material.set_shader_parameter("daylight_panorama_blend", smoothstep(-0.22, 0.02, sun.y))
+	material.set_shader_parameter("morning_panorama_blend", 1.0 - smoothstep(0.18, 0.65, sun.y) if _clock.call("get_render_time") < 12.0 else 0.0)
 	_sample += delta
 	if _sample < 0.5: return
 	_sample = 0.0
@@ -194,10 +215,6 @@ func _process(delta: float) -> void:
 		# Shadowless moon/sky bounce keeps salvage readable from every direction.
 		fill.light_energy = lerpf(0.35,0.32,daylight)
 	var camera := get_viewport().get_camera_3d()
-	if _mist != null:
-		if camera != null: _mist.global_position = Vector3(camera.global_position.x,0.9,camera.global_position.z)
-		_mist.emitting = dawn and GameSettings.quality != 1 and not mobile_effects
-		_mist.visible = _mist.emitting
 	for flies in _fireflies:
 		var nearby := camera != null and flies.global_position.distance_squared_to(camera.global_position) < 55*55
 		flies.emitting = night and nearby and GameSettings.quality != 1

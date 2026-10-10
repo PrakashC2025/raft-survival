@@ -1,15 +1,16 @@
 extends RefCounted
 static func create(item: String) -> Node3D:
+	if preload("res://scripts/garden_items.gd").icon_cell(item).y>=0 and item!="Tomato" or not preload("res://scripts/garden_items.gd").box_crop(item).is_empty():return preload("res://scripts/garden_visual.gd").produce(item)
 	if item=="Repair Kit":return preload("res://scripts/electronics_visual.gd").repair_kit()
 	if item.ends_with("Tumbler"):return _tumbler(item)
 	if item in ["Banana","Tomato","Potato","Baked Potato"]:
 		return preload("res://scripts/produce_visual.gd").create(item)
 	if item=="Carrot":
-		var root:=Node3D.new();root.name="CarrotFood"
+		var carrot_root:=Node3D.new();carrot_root.name="CarrotFood"
 		var carrot:=CylinderMesh.new();carrot.top_radius=.034;carrot.bottom_radius=.004;carrot.height=.22;carrot.radial_segments=16
-		var visual:=MeshInstance3D.new();visual.mesh=carrot
-		var orange:=StandardMaterial3D.new();orange.albedo_color=Color(.82,.31,.05);orange.roughness=.8;visual.material_override=orange;root.add_child(visual)
-		return root
+		var carrot_visual:=MeshInstance3D.new();carrot_visual.mesh=carrot
+		var orange:=StandardMaterial3D.new();orange.albedo_color=Color(.82,.31,.05);orange.roughness=.8;carrot_visual.material_override=orange;carrot_root.add_child(carrot_visual)
+		return carrot_root
 	var models: Dictionary={"Coconut":"res://models/kenney_coconut.glb","Onion":"res://models/onion_bulb.glb","Fish":"res://models/coastal_fish.glb","Raw Meat":"res://models/raw_meat.glb","Raw Bird":"res://models/raw_meat.glb","Raw Crab":"res://models/shore_crab.glb"}
 	if models.has(item) and ResourceLoader.exists(models[item]):
 		var produce: Node3D=load(models[item]).instantiate()

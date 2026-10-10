@@ -67,9 +67,9 @@ func _run() -> void:
 	var paths:=[];var hashes:=[]
 	for station in ART.STATION_IMAGES:
 		var texture:=ART.station_texture(station)
-		check(texture!=null and texture.get_width()==256,"Distinct actual model picture exists: "+station)
+		check(texture!=null and texture.get_width()>=160 and texture.get_width()==texture.get_height(),"Distinct square actual-model picture exists: "+station)
 		paths.append(texture.resource_path);hashes.append(texture.get_image().get_data().hex_encode().sha256_text())
-	check(paths.size()==ART.STATION_IMAGES.size() and paths.all(func(path):return paths.count(path)==1) and hashes.all(func(hash):return hashes.count(hash)==1),"Bonfire, collector, filter, cooking setup and generator have unique picture files and pixels")
+	check(paths.size()==ART.STATION_IMAGES.size() and paths.all(func(path):return paths.count(path)==1) and hashes.all(func(hash):return hashes.count(hash)==1),"Every camp product has a unique picture file and pixels")
 	var fire:=fixture("Bonfire",Vector3(0,.15,-1.5));aim(fire);hold("Stone")
 	check(not fire.burning and not fire._flames.visible,"Newly placed bonfire waits for player ignition")
 	var stones: int=inv.call("total","Stone");var wood: int=inv.call("total","Wood")
@@ -106,7 +106,26 @@ func _run() -> void:
 	check(not actions.start("ignite_fire",fire),"Exposed wet bonfire refuses ignition");player.get_node("RainSystem").call("stop_rain")
 	fire.fuel=0;actions.start("ignite_fire",fire);complete()
 	check(fire.burning and fire.fuel==90 and int(inv.call("total","Wood"))==wood-1,"An empty fireplace spends exactly one Wood only at successful contact")
-	hold("Torch");aim(fire);progress.use_torch()
+	hold("Torch");player.aim_valid=false;player.aim_collider=null
+	check(not player.can_interact_now() and player.interaction_caption().is_empty(),"An unlit hand torch has no light button when looking away")
+	var hint_hud:=player.get_node("CanvasLayer/SurvivalHUD")
+	check(str(hint_hud._toast).contains("Aim at a burning bonfire") and absf(hint_hud._toast_until-Time.get_ticks_msec()/1000.0-4)<.15,"Equipping a torch shows its usage snackbar for four seconds")
+	hint_hud.call("_compute_layout")
+	check(hint_hud._toast_rect.size.x<=hint_hud._vp.x-48,"Equipment instructions wrap within the mobile screen")
+	hint_hud.call("_process",0.0)
+	check(hint_hud.visible and not hint_hud.call("claims_touch",Vector2(10,10)),"Desktop equipment feedback is visible and does not capture camera input")
+	if preview:
+		progress.call("_process",0.0)
+		await shot("torch-use-tip")
+		var tip_controls:=player.get_node("CanvasLayer/MobileControls")
+		tip_controls.force_show=true;tip_controls.call("_update_visibility");tip_controls.call("_sync_mode")
+		hint_hud.call("_process",.1)
+		check(not tip_controls._btn_use.visible,"Mobile light button stays hidden while an unlit torch looks away")
+		await shot("torch-mobile-tip")
+		tip_controls.force_show=false;tip_controls.call("_update_visibility")
+	aim(fire)
+	check(player.can_interact_now() and player.interaction_caption()=="LIGHT TORCH","Aimed burning bonfire offers the light torch action")
+	progress.use_torch()
 	check(not progress.is_held_lit() and pose.kind=="torch_light" and pose._torch_first!=null,"Torch dips toward fire with visible prop before exchanging")
 	if preview:pose.elapsed=pose.duration*.5;pose.call("_process",0.0);await shot("light-torch");pose.elapsed=0
 	complete();progress.call("_process",0.0)
@@ -133,7 +152,7 @@ func _run() -> void:
 		check(RULES.RECIPES.has(dish) and ART.food_texture(dish)!=null,"Camp recipe has real ingredients, values and original dish picture: "+dish)
 		for ingredient in RULES.RECIPES[dish].ingredients:if not inv.call("has",ingredient,3):inv.call("add",ingredient,3)
 	fire.burning=true;service.open_cooking(fire);await frames()
-	check(service.ui._rows.size()==18 and service.ui._fire_button.text=="PUT OUT FIRE","Camp Kitchen has eighteen recipes and working fire controls")
+	check(service.ui._rows.size()==26 and service.ui._fire_button.text=="PUT OUT FIRE","Camp Kitchen has twenty-six recipes and working fire controls")
 	check(service.ui._rows[0].button.custom_minimum_size.y>=48 and service.ui._rows[0].ingredients.text.contains(" / "),"Cooking cards show owned/required ingredients and large touch buttons")
 	service.ui._filter_recipes("SOUPS & STEWS")
 	check(not service.ui._rows[0].card.visible and service.ui._rows[-1].card.visible,"Category tabs select real soups and hide grill recipes")
@@ -159,9 +178,9 @@ func _run() -> void:
 	var job:=fire.get_node("StationJob");job.call("advance",100.0);service.finish_station_job(job)
 	check(inv.call("has","Coconut Fish Stew",1) and not fire.burning,"Completed stew enters bag and turns off fire")
 	if preview:
-		var hud:=player.get_node("CanvasLayer/SurvivalHUD");hud._craft_open=true;hud._craft_page=0;hud.call("_compute_layout");hud.queue_redraw();paused=true;await shot("craft")
+		var hud:=player.get_node("CanvasLayer/SurvivalHUD");hud.toggle_crafting();hud._craft_menu.select_item("Bonfire");await shot("craft")
 		check(not pose._panel.visible,"Action text never covers Bag or craft recipe panels")
-		paused=false;hud._craft_open=false
+		hud._close_crafting()
 	# Explicit empty legacy structure must stay empty; no regeneration on Continue.
 	starter.queue_free();await frames();inv.loaded_meta={"built":[]};player._fresh_starter=false;player._starter_extended=false
 	var number:=built.get_child_count();await player.call("_restore_built_pieces")

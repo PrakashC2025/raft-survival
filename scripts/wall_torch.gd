@@ -23,8 +23,9 @@ func _ready() -> void:
 	_light = OmniLight3D.new()
 	_light.position.y = 0.46
 	_light.light_color = Color(1.0,0.56,0.23)
-	_light.light_energy = 1.8
-	_light.omni_range = 5.5
+	_light.light_energy = 1.45
+	_light.omni_range = 4.5
+	_light.omni_attenuation = 2.0
 	# Mobile: avoid a cubemap shadow pass for every additional torch.
 	_light.shadow_enabled = false
 	add_child(_light)

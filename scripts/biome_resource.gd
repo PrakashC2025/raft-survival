@@ -44,7 +44,7 @@ func tool_hit(actor: Node3D,item: String) -> bool:
 	actor.call("play_world_sfx",preload("res://audio/chop.ogg") if item=="Axe" else preload("res://audio/footstep_gravel.ogg"),-9.0)
 	if health==0:
 		if item=="Axe":regrow_wait=360;growth=0
-		for reward in rewards:Inventory.pickup_received.emit(reward,int(rewards[reward]))
+		for reward in rewards:Inventory.notify_pickup(reward,int(rewards[reward]))
 		collision_layer=0
 		if item=="Axe" and is_instance_valid(visual):
 			_fall_tween = create_tween();_fall_tween.tween_property(visual,"rotation:z",1.4,.75).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)

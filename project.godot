@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="RaftSurvival"
-config/version="1.1.7"
+config/version="1.1.16"
 run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://textures/icon.svg"
@@ -37,6 +37,10 @@ project/assembly_name="RaftSurvival"
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/sky_3d/plugin.cfg")
+
+[gui]
+
+theme/default_font_multichannel_signed_distance_field=true
 
 [input]
 

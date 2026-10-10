@@ -28,8 +28,8 @@ const UI_SURFACE := preload("res://scripts/ui_surface.gd")
 ## Grab zone around the joystick dock, as a multiple of the stick radius.
 ## Touches inside it start movement; touches outside it start camera look.
 @export var dock_zone_scale: float = 1.6
-## Look sensitivity per touch-pixel (mouse is 0.003; fingers are coarser).
-@export var look_sensitivity: float = 0.007
+## Look sensitivity per normalized touch-pixel (mouse is 0.00225).
+@export var look_sensitivity: float = 0.003
 ## Movement dead zone (0..1 of joystick travel).
 @export var joystick_deadzone: float = 0.18
 
@@ -304,6 +304,7 @@ func reset_input() -> void:
 	_release_all_actions()
 	var p := _get_player()
 	if p != null:
+		p.call("reset_look_input")
 		var equipment := p.get_node_or_null("SurvivalEquipment")
 		if equipment != null:
 			equipment.call("set_aiming", false)
@@ -362,7 +363,7 @@ func _start_look(index: int, _pos: Vector2) -> void:
 func _update_look(rel: Vector2) -> void:
 	var p := _get_player()
 	if p != null and p.has_method("add_look_input"):
-		var adjusted := rel
+		var adjusted := rel * (720.0/maxf(size.y,1.0))
 		if GameSettings.invert_look:
 			adjusted.y = -adjusted.y
 		p.add_look_input(adjusted, look_sensitivity * GameSettings.look_speed)

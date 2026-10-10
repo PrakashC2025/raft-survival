@@ -326,6 +326,9 @@ func _root_leaf_count(stage: int) -> int:
 
 
 func _build_root_visual(stage: int) -> void:
+	if bool(_def.get("garden_crop",false)):
+		var garden:=preload("res://scripts/garden_visual.gd").plant(plant_id,stage==Stage.MATURE)
+		garden.scale=Vector3.ONE*_hvar;_container.add_child(garden);return
 	if plant_id == "Onion":
 		var onion := ONION_STAGES[clampi(stage,Stage.SEED,Stage.MATURE)].instantiate() as Node3D
 		onion.name = "OnionPlantModel"
@@ -410,6 +413,11 @@ func _build_root_visual(stage: int) -> void:
 
 
 func _build_tree_visual(stage: int) -> void:
+	if plant_id=="Papaya":
+		var papaya:=preload("res://scripts/garden_visual.gd").plant(plant_id,stage==Stage.MATURE)
+		papaya.scale=Vector3.ONE*_hvar;_container.add_child(papaya)
+		papaya.get_node("Canopy").reparent(_container)
+		_update_collision();return
 	if plant_id == "Coconut":
 		_build_coconut_palm_visual(stage)
 		return
@@ -607,6 +615,7 @@ func _update_fruits(delta: float) -> void:
 
 
 func _make_fruit_mesh() -> Node3D:
+	if plant_id=="Papaya":return preload("res://scripts/garden_visual.gd").produce(plant_id)
 	if plant_id == "Banana":
 		return preload("res://scripts/produce_visual.gd").create("Banana")
 	var root := Node3D.new()
@@ -935,7 +944,7 @@ func _do_dig() -> void:
 			return
 		_pending_dig_drop[yield_item] = amount
 	var seed_item: String = str(_def.get("seed_item", ""))
-	if not seed_item.is_empty():
+	if not seed_item.is_empty() and not bool(_def.get("garden_crop",false)):
 		_pending_dig_drop[seed_item] = 2
 	if not Inventory.can_store_rewards(_pending_dig_drop):
 		_pending_dig_drop.clear()

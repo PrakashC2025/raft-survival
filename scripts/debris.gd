@@ -98,6 +98,14 @@ func is_fade_done() -> bool:
 	return _is_fading_out and _fade_timer >= _fade_duration
 
 func _apply_profile() -> void:
+	var garden_box:=not preload("res://scripts/garden_items.gd").box_crop(item_name).is_empty()
+	if garden_box or item_name in ["Potato","Tomato","Carrot","Onion","Coconut","Banana"]:
+		freeboard=.12 if garden_box else .06
+		mass_kg=3.0 if garden_box else .35
+		_set_collision_box_size(Vector3(.45,.26,.38) if garden_box else Vector3(.26,.16,.26))
+		_model_visual=RESOURCE_VISUAL.create(item_name) if garden_box else preload("res://scripts/survival_item_visual.gd").create(item_name)
+		add_child(_model_visual);(get_node("MeshInstance3D") as MeshInstance3D).hide()
+		_cache_visual_geometry();_set_visual_alpha(0);return
 	if not ITEM_PROFILES.has(item_name):
 		if item_name in ["Screw","Wire","Motor","Battery","Solar Torch","Walkie Talkie","Binoculars"]:
 			freeboard=0.08

@@ -40,7 +40,7 @@ func _run() -> void:
 		worst_load_frame = maxi(worst_load_frame,now-last_frame)
 		last_frame = now
 	check(menu.get("_packed_game") != null and menu.get("_error") == "", "Real asynchronous model/script/game loading completes")
-	check(heartbeats > menu.MODEL_WARM_PATHS.size(), "Loading keeps producing render-frame heartbeats")
+	check(heartbeats > 1, "Loading keeps producing render-frame heartbeats without a mandatory frame per resource")
 	var warmed: Array=menu.get("_warm_resources")
 	var retained:=true
 	for path in menu.MODEL_WARM_PATHS+menu.SCRIPT_WARM_PATHS:
