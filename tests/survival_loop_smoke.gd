@@ -120,7 +120,7 @@ func _run() -> void:
 		player.velocity.y -= player.GRAVITY * player.get_physics_process_delta_time()
 		player.move_and_slide()
 		maximum = maxf(maximum, player.position.y)
-	check(maximum - start_y > 0.40 and maximum - start_y < 0.65, "Actual land jump rises about half a metre")
+	check(maximum - start_y > 0.55 and maximum - start_y < 0.72, "Actual land jump rises a little higher, around two-thirds of a metre")
 	player.global_position = Vector3(1000, 4.92, 999.25)
 	player.velocity = Vector3.ZERO
 	await frames(3)

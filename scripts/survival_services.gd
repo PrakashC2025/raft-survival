@@ -5,6 +5,8 @@ const JOB := preload("res://scripts/station_job.gd")
 const BOX := preload("res://scripts/storage_box.gd")
 const HUD_FIELDS := ["_bag_open","_craft_open","_map_open","_paused","_death_open"]
 const LIGHT_GROUPS := ["campfire","wall_torch","electric_lamp"]
+const LIGHT_BUDGET := 6
+const LIGHT_SELECTION_MARGIN := 1.5
 var player: CharacterBody3D
 var ui: CanvasLayer
 var menu_open := false
@@ -15,6 +17,7 @@ var focused_job: Node3D
 var _action_start := Vector3.ZERO
 var _damage_revision := 0
 var _light_tick := 0.0
+var _light_ids: Dictionary = {}
 var _progress_tick := 0.0
 var _job_label := ""
 var _drops: Array[Node3D] = []
@@ -61,6 +64,7 @@ func _station_ready(target: Node3D) -> bool:
 
 func use_item(item: String) -> bool:
 	if _blocked() or menu_open or busy() or item!=str(player.active_item) or not Inventory.has(item,1):return false
+	if player.get_node("SurvivalAction").kind in ["eat","drink","take_fish"]:return false
 	if item=="Medkit":
 		if Stats.health>=Stats.MAX_VALUE:return false
 		_start_action("medkit",1.5,item)
@@ -80,7 +84,7 @@ func use_item(item: String) -> bool:
 		var values:=RULES.effects(item)
 		Stats.eat(float(values[0]));Stats.drink(float(values[1]));Stats.change_health(float(values[2]))
 		var drinking:=RULES.is_drink(item)
-		player.get_node("SurvivalAction").call("play","drink" if drinking else "eat",1.55 if drinking else 1.75,Vector3.ZERO,item)
+		player.get_node("SurvivalAction").call("play","drink" if drinking else "eat",2.8 if drinking else 1.75,Vector3.ZERO,item)
 		if item=="Ocean Water Tumbler":player.call("_hud_toast","RAW SEAWATER · -8 HEALTH · BOIL YOUR NEXT CUP")
 		player.call("_queue_save")
 		return true
@@ -176,12 +180,18 @@ func start_cooking(dish: String) -> bool:
 	if recipe.ingredients.has("Clean Water Can"):empties["Can"]=int(recipe.ingredients["Clean Water Can"])
 	if not Inventory.try_exchange(recipe.ingredients,empties):return false
 	var target:=station
+	var profile_start:=Time.get_ticks_usec()
 	var job:=ensure_job(target)
+	if "--profile-loading" in OS.get_cmdline_user_args():print("COOK PREP job ",(Time.get_ticks_usec()-profile_start)/1000.0," ms")
+	profile_start=Time.get_ticks_usec()
 	job.restore_job({"kind":"cook","item":dish,"remaining":recipe.seconds})
+	if "--profile-loading" in OS.get_cmdline_user_args():print("COOK PREP visuals ",(Time.get_ticks_usec()-profile_start)/1000.0," ms")
 	focused_job=job
 	_job_label=dish.to_upper()
 	close_menu()
+	profile_start=Time.get_ticks_usec()
 	player.call("play_action","cook",2.0,target.global_position,dish)
+	if "--profile-loading" in OS.get_cmdline_user_args():print("COOK PREP hands ",(Time.get_ticks_usec()-profile_start)/1000.0," ms")
 	player.call("_queue_save")
 	return true
 func start_filtering() -> bool:
@@ -295,7 +305,28 @@ func _process(delta: float) -> void:
 	if _light_tick>=.5:_light_tick=0.0;_limit_lights()
 func _limit_lights() -> void:
 	var sources: Array[Node3D]=[]
+	var eligible: Array[Node3D]=[]
 	for group in LIGHT_GROUPS:
-		for source in get_tree().get_nodes_in_group(group):sources.append(source)
-	sources.sort_custom(func(a,b):return player.global_position.distance_squared_to(a.global_position)<player.global_position.distance_squared_to(b.global_position))
-	for index in sources.size():sources[index].set_meta("light_allowed",index<6)
+		for source in get_tree().get_nodes_in_group(group):
+			if source.is_queued_for_deletion():continue
+			sources.append(source)
+			if _wants_light(source):eligible.append(source)
+	# Retain nearby selected lights through small movement around a distance tie.
+	eligible.sort_custom(func(a,b):
+		var a_distance: float=player.global_position.distance_to(a.global_position)-(LIGHT_SELECTION_MARGIN if _light_ids.has(a.get_instance_id()) else 0.0)
+		var b_distance: float=player.global_position.distance_to(b.global_position)-(LIGHT_SELECTION_MARGIN if _light_ids.has(b.get_instance_id()) else 0.0)
+		if is_equal_approx(a_distance,b_distance):return a.get_instance_id()<b.get_instance_id()
+		return a_distance<b_distance)
+	_light_ids.clear()
+	for index in mini(LIGHT_BUDGET,eligible.size()):_light_ids[eligible[index].get_instance_id()]=true
+	for source in sources:source.set_meta("light_allowed",_light_ids.has(source.get_instance_id()))
+
+func _wants_light(source: Node3D) -> bool:
+	if not source.is_in_group("electric_lamp"):
+		return source.get("burning")==true and float(source.get("fuel"))>0.0
+	if not source.enabled or not source.led_cell or source.led_battery<=0 or not str(source.fault).is_empty():return false
+	if not source.automatic_night:return true
+	var scene:=get_tree().current_scene
+	var sky: Node=scene.get_node_or_null("Sky3D") if scene!=null else null
+	var hour: float=float(sky.get("current_time")) if sky!=null else 0.0
+	return hour<6.0 or hour>=18.0

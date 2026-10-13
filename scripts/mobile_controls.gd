@@ -247,7 +247,7 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag:
 		if _button_touches.has(event.index):
 			var held: Button = _button_touches[event.index]
-			if not held.visible or not held.get_global_rect().grow(18.0).has_point(event.position):
+			if not held.is_visible_in_tree() or not held.get_global_rect().grow(18.0).has_point(event.position):
 				_release_touch_button(event.index, false)
 			get_viewport().set_input_as_handled()
 			return
@@ -269,6 +269,11 @@ func _over_button(pos: Vector2) -> bool:
 
 
 func _button_at(pos: Vector2) -> Button:
+	var actor:=_get_player()
+	var tools:=actor.get_node_or_null("PortableElectronics") if actor!=null else null
+	if tools!=null:
+		var tool_button:=tools.call("touch_button_at",pos) as Button
+		if tool_button!=null:return tool_button
 	for b in _all_buttons:
 		if b != null and b.visible and b.get_global_rect().has_point(pos):
 			return b
@@ -284,7 +289,7 @@ func _release_touch_button(index: int, activate: bool) -> void:
 		var p := _get_player()
 		if p != null and p.get_node_or_null("SurvivalEquipment") != null:
 			p.get_node("SurvivalEquipment").call("cancel_draw")
-	if activate and button.visible:
+	if activate and button.is_visible_in_tree() and not button.disabled:
 		button.pressed.emit()
 	queue_redraw()
 
@@ -446,7 +451,7 @@ func _build_buttons() -> void:
 	_btn_next.button_up.connect(_release_action.bind("cycle_build"))
 	_btn_remove.button_down.connect(_press_action.bind("remove_build"))
 	_btn_remove.button_up.connect(_release_action.bind("remove_build"))
-	_btn_recall.button_down.connect(_press_action.bind("rope_cancel"))
+	_btn_recall.button_down.connect(_request_rope_return)
 	_btn_recall.button_up.connect(_release_action.bind("rope_cancel"))
 
 	# Tap-style: USE is momentary (like pressing E), EDIT picks the aimed piece,
@@ -493,6 +498,13 @@ func _release_action(action: StringName) -> void:
 	if _owned_actions.has(action):
 		Input.action_release(action)
 		_owned_actions.erase(action)
+
+func _request_rope_return() -> void:
+	if not visible or _input_blocked(): return
+	_press_action(&"rope_cancel")
+	var actor := _get_player()
+	if actor != null and actor.get_node_or_null("RopeSystem") != null:
+		actor.get_node("RopeSystem").call("request_return")
 
 
 ## One tap = the desktop "E, E" double-pickup of the piece under the crosshair.
@@ -589,7 +601,7 @@ func _sync_mode() -> void:
 
 	var normal: bool = mode == "normal"
 	_btn_jump.visible = normal
-	_btn_run.visible = normal and moving and not swimming
+	_btn_run.visible = normal and moving
 	# The HAND button only appears when the center crosshair is actually over
 	# an interactable (debris / door / usable piece) — same logic as the E key.
 	_btn_use.visible = normal and can_interact and not can_climb and use_caption not in ["GROWING","READY",""]
@@ -599,7 +611,7 @@ func _sync_mode() -> void:
 	# (same test as the E key) — never on land, never in open water.
 	_btn_climb.visible = normal and can_climb
 	_btn_rope.visible = normal and rope_equipped and not rope_busy
-	_btn_recall.visible = false
+	_btn_recall.visible = normal and rope_busy
 	_btn_edit.visible = normal and can_edit
 	_btn_place.visible = mode != "normal"
 	_btn_rotate.visible = mode != "normal"
@@ -656,8 +668,8 @@ func _layout() -> void:
 	_btn_use.size = Vector2.ONE*(primary+12.0*scale_factor)
 	_btn_climb.position = _btn_use.position
 	_btn_climb.size = _btn_use.size
-	_btn_recall.position = Vector2(right-utility,action_top-gap-utility)
-	_btn_recall.size = Vector2.ONE*utility
+	_btn_recall.position = _btn_rope.position
+	_btn_recall.size = _btn_rope.size
 	_btn_aim.position = Vector2(inner_x,action_top-gap-secondary)
 	_btn_aim.size = Vector2.ONE*secondary
 	_btn_edit.position = Vector2(inner_x-gap-utility,action_top)
@@ -686,6 +698,8 @@ func _layout() -> void:
 # ============================================================
 func _button_icon_kind(b: Button) -> String:
 	var kind: String = str(b.get_meta("icon_kind", "?"))
+	if b == _btn_run and _swimming:
+		return "swim"
 	if b == _btn_use and _bow_equipped:
 		return "shoot"
 	if b == _btn_use:
@@ -741,6 +755,8 @@ func _draw_action_button(b: Button) -> void:
 
 
 func _button_caption(b: Button) -> String:
+	if b == _btn_run and _swimming:
+		return "FAST SWIM"
 	if b == _btn_aim:
 		var p := _get_player()
 		var equipment := p.get_node_or_null("SurvivalEquipment") if p != null else null
@@ -749,7 +765,7 @@ func _button_caption(b: Button) -> String:
 		var player := _get_player()
 		if player != null and player.has_method("interaction_caption"):
 			return str(player.call("interaction_caption"))
-	var captions := {"jump": "JUMP", "run": "RUN", "hand": "USE", "down": "DIVE", "hook": "CAST", "back": "RECALL", "climb": "CLIMB", "hammer": "BUILD", "x": "CANCEL", "check": "PLACE", "rot": "ROTATE", "next": "NEXT", "pencil": "EDIT", "trash": "REMOVE", "help": "HELP"}
+	var captions := {"jump": "JUMP", "run": "RUN", "hand": "USE", "down": "DIVE", "hook": "CAST", "back": "RETURN", "climb": "CLIMB", "hammer": "BUILD", "x": "CANCEL", "check": "PLACE", "rot": "ROTATE", "next": "NEXT", "pencil": "EDIT", "trash": "REMOVE", "help": "HELP"}
 	return str(captions.get(_button_icon_kind(b), "USE"))
 
 
@@ -785,6 +801,8 @@ func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
 			Icons.cross(self, center, r, w, col)
 		"run":
 			Icons.run(self, center, r * 1.15, w * 0.9, col)
+		"swim":
+			Icons.swim(self, center, r, w * 0.7, col)
 		"hand":
 			Icons.hand(self, center, r, w * 0.7, col)
 		"climb":
@@ -864,13 +882,13 @@ func _dock_center() -> Vector2:
 # ============================================================
 const HELP_CONTENT := "[center][b]GAME CONTROLS[/b][/center]\n\n" \
 	+ "[b]BIRD HUNTING[/b]\nCraft a Bow and Arrows in BAG → CRAFT. Move the Bow to a hotbar slot and select it; Arrows can stay in the bag. Tap AIM to zoom, drag the view to line up a bird, then hold SHOOT to draw and release to fire. Lead moving birds and aim slightly above distant ones. Tap UN-AIM to return to normal view. Collect the bird where it lands and cook Raw Bird on a bonfire.\n\n" \
-	+ "[b]MOVE[/b]\nJoystick (bottom-left) = walk. Big button = jump / swim up. RUN = sprint (hold).\n\n" \
+	+ "[b]MOVE[/b]\nJoystick (bottom-left) = walk. Big button = jump / swim up. Hold RUN to sprint; in water it becomes FAST SWIM (3.5 m/s). Release to swim normally. Fast swimming uses stamina.\n\n" \
 	+ "[b]DIVING[/b]\nCraft the Handmade Air Tank on the first CRAFT page, select it and tap EQUIP. It supplies 3 minutes of underwater air. Look up/down while moving forward to swim; hold DIVE to descend and JUMP to rise. Surface before breath runs out. With empty hands on dry ground or your raft, tap REFILL AIR and stay still for 6 seconds. Aim a spear at fish, crabs, turtles or rays and tap HUNT; the hit happens during the thrust. Aim at the seabed to collect sand, or use a shovel. Diving sites appear on MAP, where your cyan arrow shows your location and facing direction. Sharks only make rare attacks from level 6.\n\n" \
 	+ "[b]USE / HAND[/b] (tap or hold)\nCollect debris and open doors. Farming: hold a potato, tomato, carrot, coconut or banana; aim at a suitable empty pot or dry island soil and tap PLANT. Aim away and tap EAT to eat it. Tap a ripe fruit to pick it. Hold on a potato to dig it, hold on a tree trunk to chop it, hold on a stump to remove it.\n\n" \
 	+ "[b]BUILD[/b]\nHammer button (left) = enter/exit build mode. NEXT = choose piece (Wall, Roof, ... PlanterPot, PlanterBox, TreePot). Big PLACE button = put the green piece down. ROT = turn it.\n\n" \
 	+ "[b]EDIT / REPAIR[/b]\nWhile aiming at your own piece, tap the pencil to lift it, then PLACE to set it down or the trash button to remove it (materials refunded).\n\n" \
 	+ "[b]FARMING QUICK START[/b]\n1) BAG → CRAFT → select Plant Pot, Plant Bed or Tree Pot. Review HAVE / NEED, choose a spot, then PLACE. Gather Soil on higher island land if needed. 2) Exit build mode. Tap a crop in the bag, then HOLD TO PLANT, or select it in the hotbar. 3) Aim at the empty pot or dry island sand/soil and tap PLANT. Coconut and banana need a Tree Pot on the raft. 4) Water soil and wait for maturity. 5) Hold HARVEST on root crops; tap ripe tree fruit to pick it. The harvested produce can be eaten with USE / EAT or planted again.\n\n" \
-	+ "[b]ROPE GUN[/b]\nSelect the gun in the first quick slot. Hold CAST to charge and release to launch; RECALL returns the hook. Selecting another quick slot hides CAST. Your gun cannot be dropped, spent or lost; Rope stacks in the bag are crafting materials.\n\n" \
+	+ "[b]ROPE GUN[/b]\nSelect the gun in the first quick slot. Hold CAST to charge and release to launch. RETURN appears while the hook is out and brings back its catch. Empty casts also return automatically. Selecting another quick slot hides CAST. Your gun cannot be dropped, spent or lost; Rope stacks in the bag are crafting materials.\n\n" \
 	+ "[b]BAG[/b]\nTap the BAG button to open your 30-slot inventory; drag items to move/swap/merge them. Tap a hotbar slot to select that item.\n\n" \
 	+ "[b]KEYBOARD (PC)[/b]\nWASD move · Space jump · Ctrl dive · E use · C craft · M map · B build · Tab next piece · P place · R/Y rotate · Delete remove · Q rope · F3 build overlay · F5 quick-save"
 

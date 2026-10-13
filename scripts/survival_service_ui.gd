@@ -30,6 +30,9 @@ var _recipe_touch := -1
 var _recipe_touch_start := Vector2.ZERO
 var _recipe_dragging := false
 var _recipe_suppress_until := 0
+var _cook_body: VBoxContainer
+var _cook_widgets: Dictionary={}
+var cooking_prepared := false
 func _ready() -> void:
 	layer=12
 	slot_style=StyleBoxFlat.new();slot_style.bg_color=Color(.035,.065,.072,.97);slot_style.border_color=Color(.34,.47,.39);slot_style.set_border_width_all(1);slot_style.set_corner_radius_all(5)
@@ -54,6 +57,12 @@ func _ready() -> void:
 	for index in 4:
 		var popup:=Label.new();popup.add_theme_font_size_override("font_size",18);popup.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP);popup.offset_left=-160;popup.offset_right=160;popup.offset_top=130+index*23;popup.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;popup.mouse_filter=Control.MOUSE_FILTER_IGNORE;popup.hide();add_child(popup);_popups.append(popup)
 	Stats.stat_delta.connect(_stat_delta)
+	_prepare_cooking.call_deferred()
+func _prepare_cooking() -> void:
+	if service.menu_open or not _cook_widgets.is_empty():return
+	# Prepare the reusable kitchen while loading; no player menu is opened.
+	show_cooking();_overlay.position.x=get_viewport().get_visible_rect().size.x*2;_mode=""
+
 func _stat_delta(kind: String,amount: float) -> void:
 	if service.menu_open:return
 	var index:=_popup_next;_popup_next=(_popup_next+1)%4;_popup_ages[index]=0.0
@@ -72,18 +81,30 @@ func _inventory_changed() -> void:
 		elif _mode=="storage":refresh_storage()
 		elif _mode=="filter" and is_instance_valid(_filter_button):_filter_button.disabled=not Inventory.has("Dirty Water Can",1)
 func _begin(title: String,mode: String) -> void:
+	_overlay.position.x=0
 	_recipe_scroll=null;_recipe_touch=-1;_recipe_dragging=false
 	for popup in _popups:popup.hide()
-	for child in _body.get_children():_body.remove_child(child);child.queue_free()
-	_rows.clear();_slots.clear();drag_source=null;_mode=mode;_boil_button=null;_boil_hint=null
+	# Retain the kitchen cards instead of recreating hundreds of controls per visit.
+	if mode=="cook" and is_instance_valid(_cook_body):
+		if _body!=_cook_body:_panel.remove_child(_body);_body.queue_free()
+		_body=_cook_body;_body.show();_mode=mode;_slots.clear();drag_source=null;_fit_panel();_overlay.show();return
+	if _body==_cook_body:
+		_body.hide();_body=VBoxContainer.new();_body.add_theme_constant_override("separation",9);_panel.add_child(_body)
+	else:
+		for child in _body.get_children():_body.remove_child(child);child.queue_free()
+	_rows=[];_slots.clear();drag_source=null;_mode=mode;_boil_button=null;_boil_hint=null
 	_fire_status=null;_fire_button=null
-	var viewport_size:=get_viewport().get_visible_rect().size
-	var width:=minf(viewport_size.x*.92,980);var height:=minf(viewport_size.y*.88,610)
-	_panel.offset_left=-width*.5;_panel.offset_right=width*.5;_panel.offset_top=-height*.5;_panel.offset_bottom=height*.5
+	_fit_panel()
 	var header:=HBoxContainer.new();_body.add_child(header)
 	_title=Label.new();_title.text=title;_title.add_theme_font_size_override("font_size",22);_title.size_flags_horizontal=Control.SIZE_EXPAND_FILL;header.add_child(_title)
 	var close_button:=Button.new();close_button.text="CLOSE";close_button.custom_minimum_size=Vector2(85,38);close_button.pressed.connect(service.close_menu);header.add_child(close_button)
 	_overlay.show()
+
+func _fit_panel() -> void:
+	var viewport_size:=get_viewport().get_visible_rect().size
+	var width:=minf(viewport_size.x*.92,980);var height:=minf(viewport_size.y*.88,610)
+	_panel.offset_left=-width*.5;_panel.offset_right=width*.5;_panel.offset_top=-height*.5;_panel.offset_bottom=height*.5
+
 func close() -> void:_overlay.hide();drag_source=null;_mode="";_recipe_touch=-1;_recipe_dragging=false
 func _card_style(surface: Color,edge: Color,radius: int=10) -> StyleBoxFlat:
 	var result:=StyleBoxFlat.new();result.bg_color=surface;result.border_color=edge;result.set_border_width_all(1);result.set_corner_radius_all(radius)
@@ -104,6 +125,11 @@ func _filter_recipes(category: String) -> void:
 	for row in _rows:row.card.visible=category=="ALL" or RULES.category(row.dish)==category
 func show_cooking() -> void:
 	_begin("CAMP KITCHEN","cook")
+	if not _cook_widgets.is_empty():
+		_rows=_cook_widgets.rows;_recipe_scroll=_cook_widgets.scroll
+		_boil_button=_cook_widgets.boil;_boil_hint=_cook_widgets.hint
+		_fire_status=_cook_widgets.status;_fire_button=_cook_widgets.fire
+		_filter_recipes("ALL");_refresh_cooking();return
 	_cook_category="ALL"
 	var fire_row:=HBoxContainer.new();fire_row.add_theme_constant_override("separation",10);_body.add_child(fire_row)
 	_fire_status=_note("",16,Color(.98,.74,.39));_fire_status.size_flags_horizontal=Control.SIZE_EXPAND_FILL;fire_row.add_child(_fire_status)
@@ -132,6 +158,14 @@ func show_cooking() -> void:
 	_boil_hint=_note("");water_details.add_child(_boil_hint)
 	water_body.add_child(_note("Heat the filled metal tumbler; keep the cup after drinking."))
 	_boil_button=Button.new();_boil_button.text="BOIL WATER";_boil_button.custom_minimum_size.y=48;_boil_button.pressed.connect(_boil_recipe);water_body.add_child(_boil_button)
+	_forward_recipe_swipes(list)
+	_cook_body=_body
+	_cook_widgets={"rows":_rows,"scroll":_recipe_scroll,"boil":_boil_button,"hint":_boil_hint,"status":_fire_status,"fire":_fire_button}
+	_refresh_cooking()
+	_build_cooking_recipes(list,_rows)
+
+func _build_cooking_recipes(list: GridContainer, rows: Array[Dictionary]) -> void:
+	var batch:=0
 	for dish in RULES.RECIPES:
 		var recipe: Dictionary=RULES.RECIPES[dish]
 		var card:=PanelContainer.new();card.name="RecipeCard";card.size_flags_horizontal=Control.SIZE_EXPAND_FILL;card.add_theme_stylebox_override("panel",_card_style(Color(.047,.084,.083),Color(.19,.27,.23)));list.add_child(card)
@@ -143,9 +177,17 @@ func show_cooking() -> void:
 		content.add_child(_note(RULES.method(dish)))
 		var ingredients:=RichTextLabel.new();ingredients.bbcode_enabled=true;ingredients.fit_content=true;ingredients.scroll_active=false;ingredients.add_theme_font_size_override("normal_font_size",14);ingredients.custom_minimum_size.y=24;content.add_child(ingredients)
 		var button:=Button.new();button.name="CookRecipe";button.text="COOK · %ds"%int(recipe.seconds);button.custom_minimum_size.y=48;button.pressed.connect(_cook_recipe.bind(dish));content.add_child(button)
-		_rows.append({"dish":dish,"ingredients":ingredients,"button":button,"card":card})
-	_forward_recipe_swipes(list)
-	_refresh_cooking()
+		button.disabled=true
+		card.visible=_cook_category=="ALL" or RULES.category(dish)==_cook_category
+		rows.append({"dish":dish,"ingredients":ingredients,"button":button,"card":card})
+		_forward_recipe_swipes(card)
+		_refresh_cooking_rows([rows[-1]])
+		batch+=1
+		if batch%2==0:
+			await get_tree().process_frame
+			if not is_inside_tree():return
+	if _mode.is_empty():_overlay.hide();_overlay.position.x=0
+	cooking_prepared=true
 func _forward_recipe_swipes(control: Control) -> void:
 	# Decorative cards/text must not swallow the ScrollContainer's drag events.
 	control.mouse_filter=Control.MOUSE_FILTER_PASS
@@ -185,7 +227,9 @@ func _refresh_cooking() -> void:
 		_fire_button.text="PUT OUT FIRE" if service.station.burning else "LIGHT FIRE"
 	if is_instance_valid(_boil_button):
 		_boil_button.disabled=not service.can_boil();_boil_hint.text="Ocean Water Tumbler  %d / 1"%Inventory.total("Ocean Water Tumbler")
-	for row in _rows:
+	_refresh_cooking_rows(_rows)
+func _refresh_cooking_rows(rows: Array[Dictionary]) -> void:
+	for row in rows:
 		var text_value:=""
 		for item in RULES.RECIPES[row.dish].ingredients:
 			var need:=int(RULES.RECIPES[row.dish].ingredients[item]);var have:=Inventory.total(item)

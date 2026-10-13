@@ -1,14 +1,15 @@
 extends Node
-## Mobile quality profiles and adaptive resolution.
+## Quality profiles and adaptive Auto resolution on phone and desktop.
 ## Auto starts at a modest 3D resolution, reduces it under sustained slow frames,
 ## and recovers quality when there is headroom. The 30/60 FPS setting determines
 ## the frame budget. Canvas rendering remains clear at every quality level.
 
 const MIN_RENDER_SCALE := 0.55
 const MAX_RENDER_SCALE := 1.0
+const MOBILE_AUTO_MAX_RENDER_SCALE := 0.82
 const SCALE_STEP_DOWN := 0.08
 const SCALE_STEP_UP := 0.04
-const SAMPLE_WINDOW_SECONDS := 1.25
+const SAMPLE_WINDOW_SECONDS := 0.75
 const SLOW_WINDOWS_BEFORE_SCALE := 2
 const FAST_WINDOWS_BEFORE_RECOVERY := 5
 
@@ -48,7 +49,7 @@ func _ready() -> void:
 	# current_scene is assigned after the children enter the tree.
 	call_deferred("_apply_profile")
 	GameSettings.changed.connect(_apply_profile)
-	set_process(_mobile and GameSettings.quality == 0)
+	set_process(GameSettings.quality == 0)
 
 
 func _apply_profile() -> void:
@@ -67,7 +68,7 @@ func _apply_profile() -> void:
 	_frame_count = 0
 	_slow_windows = 0
 	_fast_windows = 0
-	set_process(_mobile and GameSettings.quality == 0)
+	set_process(GameSettings.quality == 0)
 	_limit_mobile_shadow_distance()
 	if not _mobile and GameSettings.quality == 0:
 		_set_render_scale(1.0)
@@ -113,7 +114,7 @@ func _update_quality(avg_frame_seconds: float) -> void:
 		_fast_windows = 0
 		return
 
-	if avg_frame_seconds > frame_budget * 1.25:
+	if avg_frame_seconds > frame_budget * 1.12:
 		_slow_windows += 1
 		_fast_windows = 0
 		if _slow_windows >= SLOW_WINDOWS_BEFORE_SCALE:
@@ -136,8 +137,9 @@ func _update_quality(avg_frame_seconds: float) -> void:
 				refresh_foliage()
 			# Restore resolution slowly. Mobile Auto keeps volumetric clouds off;
 			# only the explicitly selected High profile enables that expensive pass.
-			if _can_scale_3d and _render_scale < MAX_RENDER_SCALE:
-				_set_render_scale(_render_scale + SCALE_STEP_UP)
+			var recovery_limit := MOBILE_AUTO_MAX_RENDER_SCALE if _mobile else MAX_RENDER_SCALE
+			if _can_scale_3d and _render_scale < recovery_limit:
+				_set_render_scale(minf(_render_scale + SCALE_STEP_UP,recovery_limit))
 			elif _cumulus_reduced and (not _mobile or GameSettings.quality >= 3):
 				_set_cumulus_visible(true)
 			_fast_windows = 0
@@ -199,6 +201,8 @@ func _set_cumulus_visible(visible: bool) -> void:
 	if _sky_material == null:
 		return
 	_sky_material.set_shader_parameter("cumulus_visible", visible)
+	# Visible clouds keep moving; reflection lighting only needs their average.
+	_sky_material.set_shader_parameter("fast_radiance_enabled",GameSettings.quality in [1,2] or (_mobile and GameSettings.quality==0))
 	_cumulus_reduced = not visible
 
 

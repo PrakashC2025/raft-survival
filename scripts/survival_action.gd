@@ -5,7 +5,7 @@ const GRIP := preload("res://scripts/rope_hand_grip.gd")
 const ART := preload("res://scripts/machine_visual.gd")
 const MAT := preload("res://scripts/object_materials.gd")
 const FOOD := preload("res://scripts/survival_item_visual.gd")
-const FOLEY := {"bite": preload("res://audio/action_bite.wav"), "sip": preload("res://audio/action_sip.wav"),
+const FOLEY := {"bite": preload("res://audio/action_bite.wav"), "sip": preload("res://audio/contact/drink_sip.wav"),
 	"water":preload("res://audio/action_stir.wav"), "earth":preload("res://audio/contact/sand2.wav"), "anchor":preload("res://audio/contact/cloth.wav"),
 	"stir": preload("res://audio/action_stir.wav")}
 const FIRE_KINDS := ["ignite_fire","snuff_fire","torch_light","torch_off","torch_mount","fire"]
@@ -22,6 +22,9 @@ var _torch_first: Node3D
 var _torch_third: Node3D
 var _sparks: Node3D
 var kind := ""
+var _fish_contact := false
+var _mouth_rig: Skeleton3D
+var _mouth_bone := -1
 var elapsed := 0.0
 var duration := 0.0
 var target := Vector3.ZERO
@@ -45,6 +48,10 @@ var _cue_times: Array[float] = []
 var _cue_sound := ""
 var _foley_count := 0
 var _anchor_raising := false
+var hands_prepared := false
+var _cook_pool: Dictionary={}
+static var _spoon_mesh: SphereMesh
+var _warm_view: SubViewport
 var _garden_whole: Array[Node3D]=[]
 var _garden_cut: Array[Node3D]=[]
 var _garden_seeds: Array[Node3D]=[]
@@ -55,7 +62,7 @@ const LABELS := {"cast":"CASTING LINE", "reel":"REELING IN", "chop":"CHOPPING TI
 	"scoop":"GATHERING EARTH", "plant":"PLANTING SEED", "water":"WATERING SOIL",
 	"build":"ASSEMBLING", "craft":"CRAFTED", "eat":"EATING", "drink":"DRINKING",
 	"bandage":"BANDAGING", "strike":"SPEAR THRUST", "bow":"RELEASING ARROW", "door":"OPENING", "install":"FITTING EQUIPMENT",
-	"hook":"LAUNCHING HOOK", "fire":"TENDING FIRE", "fill":"FILLING CAN",
+	"hook":"LAUNCHING HOOK", "fire":"TENDING FIRE", "fill":"FILLING CAN", "take_fish":"UNHOOKING FISH",
 	"battery":"REPLACING BATTERY", "radio":"RADIO TRANSMISSION", "look":"RAISING BINOCULARS",
 	"brake":"TURBINE BRAKE",
 	"shake":"RESEATING LOOSE CONTACT", "repair":"REPAIRING EQUIPMENT", "assemble_electronics":"ASSEMBLING EQUIPMENT",
@@ -76,6 +83,7 @@ func _ready() -> void:
 	_panel.add_child(_label);_panel.add_child(_bar)
 	player.get_node("CanvasLayer").add_child(_panel);_panel.hide()
 	get_viewport().size_changed.connect(_fit_feedback)
+	_warm_hands.call_deferred()
 	_sound=AudioStreamPlayer.new();_sound.name="ActionFoley";_sound.bus=&"Master";add_child(_sound)
 	# Install the modifier even when the launcher is not selected.
 	for candidate in player.get_node("Body").find_children("*","Skeleton3D",true,false):
@@ -88,10 +96,70 @@ func _ready() -> void:
 			rig.add_child(modifier)
 		break
 
+func _warm_hands() -> void:
+	# Let the deferred phone profile select MSAA before compiling its variants.
+	await get_tree().process_frame
+	if not is_inside_tree():return
+	# Compile the small imported hand/material variants offscreen during setup.
+	# The original meshes stay shared; first swimming/cooking no longer pays this cost.
+	_warm_view=SubViewport.new();_warm_view.name="ActionMeshWarmup"
+	_warm_view.size=Vector2i(32,32);_warm_view.own_world_3d=true
+	_warm_view.msaa_3d=get_viewport().msaa_3d
+	_warm_view.use_hdr_2d=get_viewport().use_hdr_2d
+	_warm_view.render_target_update_mode=SubViewport.UPDATE_ALWAYS;add_child(_warm_view)
+	var scene:=get_tree().current_scene
+	if scene!=null:
+		var sky:=scene.get_node_or_null("Sky3D") as WorldEnvironment
+		if sky!=null:
+			var environment:=WorldEnvironment.new();environment.environment=sky.environment;_warm_view.add_child(environment)
+		for source in scene.find_children("*","DirectionalLight3D",true,false):
+			# Identical lights/ambient/MSAA avoid compiling a second variant on use.
+			var light:=source.duplicate() as DirectionalLight3D
+			_warm_view.add_child(light);light.global_transform=source.global_transform
+	var camera:=Camera3D.new();_warm_view.add_child(camera);camera.position=Vector3(0,0,1);camera.current=true
+	var veil:=ColorRect.new();veil.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var tint:=ShaderMaterial.new();tint.shader=preload("res://shaders/underwater_veil.gdshader")
+	tint.set_shader_parameter("top_col",Color(0,.1,.2,.1));tint.set_shader_parameter("bottom_col",Color(0,.1,.2,.1))
+	veil.material=tint;_warm_view.add_child(veil)
+	for stage in 3:
+		var sample:=Node3D.new();_warm_view.add_child(sample)
+		if stage==0:
+			for left in [false,true]:sample.add_child(preload("res://scripts/dive_visual.gd").swim_hand(left))
+		elif stage==1:
+			var hand:=preload("res://models/human_hand.glb").instantiate() as Node3D
+			MAT.apply_model(hand,MAT.Kind.SKIN);sample.add_child(hand)
+			var left:=hand.duplicate() as Node3D;left.scale.x=-1;sample.add_child(left)
+		else:
+			var station:=Node3D.new();sample.add_child(station)
+			var warm_job:=preload("res://scripts/station_job.gd").new();station.add_child(warm_job)
+			warm_job.set_process(false);warm_job._make_cooking_visual()
+			sample.add_child(_make_tool("cook"))
+			# Slice every recipe during loading, then reuse its shared mesh in play.
+			for dish in preload("res://scripts/food_rules.gd").RECIPES:
+				var food:=FOOD.create(dish);sample.add_child(food)
+				await get_tree().process_frame
+				await get_tree().process_frame
+				if not is_inside_tree():return
+				sample.remove_child(food);food.queue_free()
+		for unused in 2:
+			await get_tree().process_frame
+			if not is_inside_tree():return
+		_warm_view.remove_child(sample);sample.queue_free()
+	_warm_view.queue_free()
+	# Prepare the actual first/third-person props once, then park them hidden.
+	play("cook",2.0,Vector3.ZERO,"Cooked Potato")
+	_cook_pool={"tool":_tool,"view":_view_tool,"left":_left_tool,"dish":"Cooked Potato"}
+	stop()
+	for unused in 2:
+		await get_tree().process_frame
+		if not is_inside_tree():return
+	hands_prepared=true
+
 func play(action: String, seconds: float, at: Vector3, food_item: String="") -> void:
 	if not LABELS.has(action):return
 	_construction_idle = false
 	kind=action;duration=maxf(seconds,0.15);elapsed=0;target=at
+	_fish_contact=false
 	_panel.offset_top=180 if action in ["repair","assemble_electronics"] else 88
 	_panel.offset_bottom=_panel.offset_top+36
 	if action=="anchor":
@@ -104,7 +172,8 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 		"prepare_seed":_cue_times.assign([.30,.48,.72]);_cue_sound="cloth"
 		"unpack":_cue_times.assign([.25,.60]);_cue_sound="cloth"
 		"eat":_cue_times.assign([0.36,0.63]);_cue_sound="bite"
-		"drink":_cue_times.assign([0.40,0.64]);_cue_sound="sip"
+		"drink":_cue_times.assign([0.28]);_cue_sound="sip"
+		"take_fish":_cue_times.assign([.40]);_cue_sound="cloth"
 		"cook":_cue_times.assign([0.30,0.58,0.78]);_cue_sound="stir"
 		"paddle":_cue_times.assign([0.44]);_cue_sound="water"
 		"dig":_cue_times.assign([0.57]);_cue_sound="earth"
@@ -119,6 +188,15 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 		"shake":_cue_times.assign([.1875,.3125,.4375,.5625,.6875]);_cue_sound="metal"
 		"repair","assemble_electronics":_cue_times.assign([.16,.36,.46,.58,.70,.82]);_cue_sound="repair_contact"
 		"grab","pick","plant","harvest","scoop","bandage","install":_cue_times.assign([0.40]);_cue_sound="cloth"
+	if action=="cook" and not _cook_pool.is_empty():
+		_tool=_cook_pool.tool;_view_tool=_cook_pool.view;_left_tool=_cook_pool.left
+		var dish:=food_item if not food_item.is_empty() else "Cooked Potato"
+		if dish!=_cook_pool.dish:
+			for bowl in [_left_tool,_view_tool.get_node("PreparationBowl")]:
+				var old: Node=bowl.get_node("SlicedMeal");bowl.remove_child(old);old.queue_free()
+				var contents:=preload("res://scripts/meal_visual.gd").create(dish);contents.position.y=.042;bowl.add_child(contents)
+			_cook_pool.dish=dish
+		_fit_feedback();return
 	if action in ["eat","drink","fill"]:
 		_make_consumption(food_item if not food_item.is_empty() else str(player.get("active_item")))
 	if action in ["chop","build","craft","scoop","cook","mine","dig","paddle","anchor","pump"]:
@@ -138,10 +216,11 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 			GRIP.attach(_left_tool,player.get_node("Body"))
 			var grip:=_left_tool.get_node("AnimatedHandGrip")
 			grip.set("wrist",grip.get("skeleton").find_bone("Wrist.L"));grip.set("grip_offset",Vector3.ZERO);grip.set("animated_tool",true)
-	if action in ["chop","build","craft","scoop","cook","grab","pick","harvest","plant","door","brake","mine","dig","paddle","anchor","pump","strike"]:
+	if action in ["chop","build","craft","scoop","cook","grab","pick","harvest","plant","door","brake","mine","dig","paddle","anchor","pump","strike","take_fish"]:
 		_view_tool=_make_tool(action) if action in ["chop","build","craft","scoop","cook","mine","dig","paddle","anchor","pump","strike"] else Node3D.new()
 		var hand := preload("res://models/human_hand.glb").instantiate() as Node3D
 		MAT.apply_model(hand,MAT.Kind.SKIN);_view_tool.add_child(hand)
+		if action=="take_fish":hand.scale.x=-1.0
 		if action in ["harvest","build","craft","plant","cook","pump","strike"]:
 			var left := hand.duplicate() as Node3D
 			left.scale.x=-1.0;left.position.x=-0.36;left.position.z=-0.08
@@ -154,13 +233,16 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 			var bowl:=FOOD.create(food_item if not food_item.is_empty() else "Cooked Potato");bowl.name="PreparationBowl";bowl.position=Vector3(-.16,-.20,-.10);_view_tool.add_child(bowl)
 		player.get_node("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist").add_child(_view_tool)
 		_view_tool.scale=Vector3.ONE*0.85
-	if action in ["grab","pick","harvest"] and not food_item.is_empty():
+	if action in ["grab","pick","harvest","take_fish"] and not food_item.is_empty():
 		_pickup_first=_pickup_visual(food_item);_pickup_first.position=Vector3(0,-.01,-.19);_view_tool.add_child(_pickup_first);_pickup_first.hide()
 		_tool=Node3D.new();_tool.name="CollectedItem";player.add_child(_tool)
 		_pickup_third=_pickup_visual(food_item);_tool.add_child(_pickup_third);_pickup_third.hide()
 		GRIP.attach(_tool,player.get_node("Body"))
 		_tool.get_node("AnimatedHandGrip").set("grip_offset",Vector3.ZERO)
 		_tool.get_node("AnimatedHandGrip").set("animated_tool",true)
+		if action=="take_fish":
+			var fish_grip:=_tool.get_node("AnimatedHandGrip")
+			fish_grip.set("wrist",fish_grip.get("skeleton").find_bone("Wrist.L"))
 
 	if action in FIRE_KINDS:_make_fire_props(action)
 	if action in ["prepare_seed","unpack"]:_make_garden_props(food_item)
@@ -326,6 +408,10 @@ func _make_consumption(item: String) -> void:
 	_tool.get_node("AnimatedHandGrip").set("grip_offset",Vector3.ZERO)
 	_tool.get_node("AnimatedHandGrip").set("animated_tool",true)
 	_tool.get_node("AnimatedHandGrip").set("palm_clearance",0.0)
+	if kind=="drink":
+		_mouth_rig=_tool.get_node("AnimatedHandGrip").get("skeleton") as Skeleton3D
+		if _mouth_rig!=null:_mouth_bone=_mouth_rig.find_bone("Head")
+		_food_third.position.x=-.045
 	_view_tool=Node3D.new();_view_tool.name="EatingHands"
 	var hand:=preload("res://models/human_hand.glb").instantiate() as Node3D
 	MAT.apply_model(hand,MAT.Kind.SKIN);hand.position=Vector3(.01,-.045,-.02);_view_tool.add_child(hand)
@@ -334,6 +420,11 @@ func _make_consumption(item: String) -> void:
 
 func _advance_feedback() -> void:
 	var progress:=clampf(elapsed/maxf(duration,.01),0,1)
+	if kind=="take_fish" and progress>=.40 and not _fish_contact:
+		if not player.call("take_fishing_catch"):
+			player.call("_hud_toast","FISH STAYS ON THE LINE · FREE BAG SPACE AND TRY AGAIN")
+			stop();return
+		_fish_contact=true
 	for whole in _garden_whole:if is_instance_valid(whole):whole.visible=progress<.48
 	for cut in _garden_cut:if is_instance_valid(cut):cut.visible=progress>=.48
 	for seeds in _garden_seeds:if is_instance_valid(seeds):seeds.visible=progress>=.70
@@ -346,7 +437,10 @@ func _advance_feedback() -> void:
 	if kind in FIRE_KINDS:_advance_fire_feedback(progress)
 	if kind in ["repair","assemble_electronics"]:_advance_repair_feedback(progress)
 	for prop in [_pickup_first,_pickup_third]:
-		if is_instance_valid(prop):prop.visible=progress>=.38 and progress<.94
+		if is_instance_valid(prop):prop.visible=progress>=(.40 if kind=="take_fish" else .38) and progress<.94
+		if is_instance_valid(prop) and kind=="take_fish":
+			var settle:=smoothstep(.44,.82,progress)
+			prop.rotation=Vector3(sin(elapsed*17)*.10*(1-settle),0,PI/2*(1-settle))
 	var played_this_frame:=false
 	while _cues_played<_cue_times.size() and progress>=_cue_times[_cues_played]:
 		_cues_played+=1
@@ -364,26 +458,30 @@ func _advance_feedback() -> void:
 		for food in [_food_first,_food_third]:
 			if is_instance_valid(food):food.scale=Vector3.ONE*food_scale
 	if kind in ["eat","drink"]:
-		var lift:=smoothstep(.04,.30,progress)*(1.0-smoothstep(.72,.96,progress))
+		var lift:=smoothstep(.04,.26 if kind=="drink" else .30,progress)*(1.0-smoothstep(.84 if kind=="drink" else .72,.99 if kind=="drink" else .96,progress))
 		for food in [_food_first,_food_third]:
-			if is_instance_valid(food):food.rotation.x=(-.25 if kind=="eat" else -1.15)*lift
+			if is_instance_valid(food):food.rotation.x=(-.25 if kind=="eat" else 1.05)*lift
 			if kind=="drink" and is_instance_valid(food):
 				var water:=food.get_node_or_null("DrinkingWater") as Node3D
 				if water!=null:
-					water.position.y=.065-.018*_cues_played;water.rotation.x=.67*lift
+					water.position.y=.065-.040*smoothstep(.28,.79,progress)
+					# The liquid surface remains level while the vessel tilts.
+					water.rotation.x=-1.20*lift
 
 func stop() -> void:
 	_construction_idle = false
 	kind="";_panel.hide();_clear_tools()
 	if is_instance_valid(player.get("_hand_item")):player.get("_hand_item").visible=true
-	if is_instance_valid(player.get("_third_person_launcher")):player.get("_third_person_launcher").visible=int(player.get("cam_mode"))==1
+	if is_instance_valid(player.get("_third_person_launcher")):player.get("_third_person_launcher").visible=int(player.get("cam_mode"))==1 and not player.call("movement_owns_hands")
 
 func _clear_tools() -> void:
 	_garden_whole.clear();_garden_cut.clear();_garden_seeds.clear()
 	_garden_right=null
 	if is_instance_valid(_sound):_sound.stop()
 	for tool in [_tool,_view_tool,_left_tool]:
-		if is_instance_valid(tool): tool.hide();tool.queue_free()
+		if is_instance_valid(tool):
+			tool.hide()
+			if tool not in _cook_pool.values():tool.queue_free()
 	_tool=null;_view_tool=null;_left_tool=null
 	_food_first=null;_food_third=null
 	_pickup_first=null;_pickup_third=null
@@ -392,6 +490,8 @@ func _clear_tools() -> void:
 	_repair_item=""
 
 func _process(delta: float) -> void:
+	if kind=="take_fish" and (str(player.get("active_item"))!="Fishing Rod" or player.get("is_swimming") or player.get("build_mode")):stop()
+	if kind=="take_fish" and not _fish_contact:target=player.get_node("SurvivalEquipment").call("catch_position")
 	var construction: bool = bool(player.get("build_mode")) or is_instance_valid(player.get("_editing"))
 	if (construction and kind not in ["","build","assemble_electronics"]) or (not construction and kind=="build"):stop()
 	if _construction_idle and not construction: stop()
@@ -407,6 +507,7 @@ func _process(delta: float) -> void:
 		_panel.hide()
 	_sync_held()
 	var first := int(player.get("cam_mode"))==0
+	var free_hands: bool = player.call("movement_owns_hands")
 	if is_instance_valid(_tool):_tool.visible=not first and (kind!="torch_mount" or elapsed/duration<.70)
 	if is_instance_valid(_left_tool):_left_tool.visible=not first
 	if is_instance_valid(_view_tool):
@@ -414,10 +515,11 @@ func _process(delta: float) -> void:
 		var pose := sample_pose()
 		_view_tool.position=pose.view_pos;_view_tool.rotation=pose.view_rot
 	var hand := player.get("_hand_item") as Node3D
-	if is_instance_valid(hand):hand.visible=not is_instance_valid(_view_tool)
-	if is_instance_valid(_held):_held.visible=not first and not is_instance_valid(_tool) and not construction
-	if is_instance_valid(player.get("_third_person_launcher")) and (kind in FIRE_KINDS or kind in ["chop","build","craft","scoop","grab","pick","harvest","plant","eat","drink","cook","prepare_seed","unpack","mine","dig","paddle","anchor"]):
-		player.get("_third_person_launcher").visible=false
+	if is_instance_valid(hand):hand.visible=(not is_instance_valid(_view_tool) or kind=="take_fish") and not (free_hands and bool(player.get("is_swimming")))
+	if is_instance_valid(_held):_held.visible=not first and (not is_instance_valid(_tool) or kind=="take_fish") and not construction and not free_hands
+	if is_instance_valid(player.get("_third_person_launcher")):
+		var action_hides_launcher := kind in FIRE_KINDS or kind in ["chop","build","craft","scoop","grab","pick","harvest","plant","eat","drink","cook","prepare_seed","unpack","mine","dig","paddle","anchor"]
+		player.get("_third_person_launcher").visible=not first and not free_hands and not action_hides_launcher and str(player.get("active_item"))=="Rope"
 
 func _sync_held() -> void:
 	var item := str(player.get("active_item"))
@@ -460,7 +562,21 @@ func sample_pose() -> Dictionary:
 	var view_pos := Vector3.ZERO
 	var view_rot := Vector3.ZERO
 	var torso := Vector3.ZERO
+	if kind.is_empty() and str(player.get("active_item"))=="Fishing Rod" and player.get("_fishing_catch"):
+		# A raised tip supports the fish below it; the line cannot lift from below.
+		return {"right":Vector3(.27,.32,-.32),"left":Vector3(-.12,.18,-.33),"weight":1.0,"torso":Vector3.ZERO,"view_pos":Vector3(0,.08,0),"view_rot":Vector3(.60,0,0)}
 	match kind:
+		"take_fish":
+			var reach:=smoothstep(.04,.34,t)
+			var pull:=smoothstep(.44,.78,t)
+			var local_catch:=player.global_transform.affine_inverse()*target
+			right=Vector3(.27,.32,-.32)
+			left=Vector3(-.25,.12,-.30).lerp(local_catch,reach).lerp(Vector3(-.16,.20,-.32),pull)
+			view_rot=Vector3(.60,0,-.12*pull)
+			view_pos=Vector3(-.34,-.10,.02)
+			if is_instance_valid(_view_tool):
+				var view_contact:=(_view_tool.get_parent() as Node3D).to_local(target)-Basis.from_euler(view_rot)*_pickup_first.position*.85
+				view_pos=view_pos.lerp(view_contact,reach).lerp(Vector3(-.24,-.14,.12),pull)
 		"prepare_seed","unpack":
 			var reach:=smoothstep(.04,.18,t)*(1.-smoothstep(.85,1.,t))
 			var cut:=maxf(0,sin(t*TAU*3.))*reach if t<.62 else 0.
@@ -544,15 +660,32 @@ func sample_pose() -> Dictionary:
 		"reel":
 			var crank := t*TAU*3.0
 			right=Vector3(0.24,0.27,-0.42);left=Vector3(-0.08+cos(crank)*0.05,0.08+sin(crank)*0.05,-0.34)
-			view_rot.x=-0.12+sin(crank)*0.025;view_pos.y=0.035
-		"eat","drink":
+			view_rot.x=lerpf(-.12,.60,smoothstep(.20,.85,t))+sin(crank)*.025;view_pos.y=.035
+		"eat":
 			var lift := smoothstep(.04,.30,t)*(1.0-smoothstep(.72,.96,t))
 			var bite := sin(smoothstep(.32,.69,t)*PI*4.0)*.012*lift
 			right=Vector3(.25,.15,-.35).lerp(Vector3(.08,.42,-.20),lift)
 			right.y+=bite;left=Vector3(-.18,.12,-.30)
 			view_pos=Vector3(-.22*lift,.27*lift+bite,.11*lift)
-			view_rot=Vector3((.30 if kind=="eat" else .48)*lift,0,-.10*lift)
+			view_rot=Vector3(.30*lift,0,-.10*lift)
 			torso.x=-.035*lift
+		"drink":
+			var lift:=smoothstep(.04,.26,t)*(1.0-smoothstep(.84,.99,t))
+			view_rot=Vector3(.15*lift,0,0)
+			right=Vector3(.25,.15,-.35)
+			left=Vector3(-.18,.12,-.30)
+			if is_instance_valid(_mouth_rig) and _mouth_bone>=0:
+				var head:=_mouth_rig.global_transform*_mouth_rig.get_bone_global_pose(_mouth_bone)
+				var mouth:=player.to_local(head.origin)+Vector3(0,-.015,-.075)
+				var grip_basis:=player.global_basis.inverse()*(player.get_node("Body") as Node3D).global_basis.orthonormalized()*Basis.from_euler(view_rot)
+				var rim:=grip_basis*(_food_third.position+Basis.from_euler(Vector3(1.05*lift,0,0))*Vector3(0,.095,0))*.8
+				var wrist_pose:=_mouth_rig.global_transform*_mouth_rig.get_bone_global_pose(_mouth_rig.find_bone("Wrist.R"))
+				var palm_offset:=player.global_basis.inverse()*wrist_pose.basis*Vector3(0,.00085,0)
+				right=right.lerp(mouth-rim-palm_offset,lift)
+			if is_instance_valid(_view_tool):
+				var centre: Vector3=player.get("camera").to_global(Vector3(-.04,-.12,-.17))
+				var contact:=(_view_tool.get_parent() as Node3D).to_local(centre)-Basis.from_euler(view_rot)*_food_first.position
+				view_pos=contact*lift
 		"cook":
 			var reach:=smoothstep(.04,.22,t)*(1.0-smoothstep(.80,.97,t))
 			var angle:=t*TAU*2.5
@@ -624,7 +757,9 @@ func _make_tool(action: String) -> Node3D:
 		return root
 	if action=="cook":
 		var handle:=ART.cylinder(root,Vector3(-.05,-.10,-.06),.012,.28,wood);handle.rotation=Vector3(.32,0,-.40)
-		var spoon:=SphereMesh.new();spoon.radius=.045;spoon.height=.025;spoon.radial_segments=12;spoon.rings=6
+		if _spoon_mesh==null:
+			_spoon_mesh=SphereMesh.new();_spoon_mesh.radius=.045;_spoon_mesh.height=.025;_spoon_mesh.radial_segments=12;_spoon_mesh.rings=6
+		var spoon:=_spoon_mesh
 		var scoop:=MeshInstance3D.new();scoop.mesh=spoon;scoop.material_override=wood;scoop.position=Vector3(-.11,-.24,-.10);scoop.scale.z=1.45;root.add_child(scoop)
 		return root
 	ART.cylinder(root,Vector3(0,0.15,0),0.023,0.52,wood)

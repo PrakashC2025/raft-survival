@@ -19,6 +19,8 @@ var _air_refill := 0.0
 var _refill_damage := 0
 var _refill_start := Vector3.ZERO
 var _back_tank: Node3D
+var _tank_rig: Skeleton3D
+var _tank_chest := -1
 var oxygen := 100.0
 var stamina := 100.0
 var wetness := 0.0
@@ -26,6 +28,7 @@ var torch_fuel := 0.0
 var torch_end_time := 0.0
 var legacy_torch := false
 const TORCH_CYCLE := preload("res://scripts/torch_cycle.gd")
+const TORCH_VISUAL := preload("res://scripts/torch_visual.gd")
 var _mount_preview: MeshInstance3D
 var _preview_tick := 0.0
 var _torch_light: OmniLight3D
@@ -47,13 +50,13 @@ func _ready() -> void:
 	_torch_light = OmniLight3D.new()
 	_torch_light.name = "TorchLight"
 	_torch_light.light_color = Color(1,0.51,0.19)
-	_torch_light.light_energy = 1.2
-	_torch_light.omni_range = 4.5
-	_torch_light.omni_attenuation = 2.0
+	_torch_light.light_energy = TORCH_VISUAL.LIGHT_ENERGY
+	_torch_light.omni_range = TORCH_VISUAL.LIGHT_RANGE
+	_torch_light.omni_attenuation = TORCH_VISUAL.LIGHT_ATTENUATION
 	_torch_light.shadow_enabled = false
 	_torch_light.position = Vector3(0,1.2,0)
 	add_child(_torch_light)
-	_third_torch = preload("res://scripts/torch_visual.gd").new()
+	_third_torch = TORCH_VISUAL.new()
 	_third_torch.position = Vector3(0.35,0.7,-0.12)
 	add_child(_third_torch)
 	preload("res://scripts/rope_hand_grip.gd").attach(_third_torch,player.get_node("Body"))
@@ -74,6 +77,20 @@ func _ready() -> void:
 	_back_tank=preload("res://scripts/dive_visual.gd").tank()
 	_back_tank.name="EquippedAirTank";player.get_node("Body").add_child(_back_tank)
 	_back_tank.position=Vector3(0,.20,.23)
+	_back_tank.hide()
+	for candidate in player.get_node("Body").find_children("*","Skeleton3D",true,false):
+		var rig := candidate as Skeleton3D
+		var chest := rig.find_bone("Chest")
+		if chest>=0:_tank_rig=rig;_tank_chest=chest;break
+
+func _update_back_tank() -> void:
+	if not is_instance_valid(_back_tank): return
+	_back_tank.visible=diving_tank and player.cam_mode==1
+	if not _back_tank.visible or not is_instance_valid(_tank_rig) or _tank_chest<0: return
+	var chest := _tank_rig.global_transform*_tank_rig.get_bone_global_pose(_tank_chest)
+	var orientation := chest.basis.orthonormalized()
+	# Match the recorded torso pitch, without inheriting FBX bone scale.
+	_back_tank.global_transform=Transform3D(orientation*Basis(Vector3.UP,PI),chest.origin+orientation*Vector3(0,-.05,-.20))
 
 func _recover_existing_camp() -> void:
 	await get_tree().physics_frame
@@ -126,7 +143,7 @@ func objective() -> String:
 func _process(delta: float) -> void:
 	var scene:=get_tree().current_scene
 	if scene==null:return
-	if is_instance_valid(_back_tank): _back_tank.visible=diving_tank and player.cam_mode==1
+	_update_back_tank()
 	if _air_refill>0:
 		var hud:=player.get_node_or_null("CanvasLayer/SurvivalHUD")
 		if player.is_swimming or GameSettings.is_open or Stats.damage_revision!=_refill_damage or player.global_position.distance_squared_to(_refill_start)>1 or (hud!=null and hud.call("gameplay_input_blocked")):
@@ -166,7 +183,7 @@ func _process(delta: float) -> void:
 	var rain := get_tree().get_first_node_in_group("rain_system")
 	var exposed := false
 	if rain != null and rain.call("is_raining"):
-		var start := player.global_position+Vector3.UP*1.8
+		var start: Vector3 = player.get_node("CamPivot").global_position+Vector3.UP*.05
 		var ray := PhysicsRayQueryParameters3D.create(start,start+Vector3.UP*8,1,[player.get_rid()])
 		exposed = player.get_world_3d().direct_space_state.intersect_ray(ray).is_empty()
 	if lit and (swimming or exposed):
@@ -226,12 +243,11 @@ func held_torch_caption() -> String:
 	if selected not in ["Torch","Burning Torch"] or not Inventory.has(selected,1):return ""
 	var target := player.get("aim_collider") as Node3D
 	if bool(player.aim_valid) and is_instance_valid(target):
-		if str(player.call("_find_piece_name",target))=="WallTorch" and player.global_position.distance_to(target.global_position)<=3.2:return "TAKE TORCH"
+		if target.is_in_group("wall_torch") and player.global_position.distance_to(target.global_position)<=3.2:
+			return "LIGHT TORCH" if not is_held_lit() and fire_source_ready(target) else "TAKE TORCH"
 	if bool(player.call("_resolve_wall_torch").get("valid",false)):return "PLACE TORCH"
 	if is_held_lit():return "PUT OUT"
-	if bool(player.aim_valid) and is_instance_valid(target) and target.is_in_group("campfire") \
-		and player.global_position.distance_to(target.global_position)<=3.5 \
-		and player.get_node("SurvivalServices")._station_ready(target):return "LIGHT TORCH"
+	if bool(player.aim_valid) and is_instance_valid(target) and fire_source_ready(target):return "LIGHT TORCH"
 	return ""
 
 func use_torch() -> void:
@@ -241,7 +257,8 @@ func use_torch() -> void:
 	if bool(player.get("aim_valid")) and player.get("aim_collider") != null:
 		var target := player.get("aim_collider") as Node3D
 		if str(player.call("_find_piece_name",target)) == "WallTorch" and player.global_position.distance_to(target.global_position) <= 3.2:
-			target.call("interact_survival",player)
+			if not is_held_lit() and fire_source_ready(target):player.get_node("FireActions").start("torch_light",target)
+			else:target.call("interact_survival",player)
 			return
 	if bool(player.call("_resolve_wall_torch").get("valid",false)):
 		player.get_node("FireActions").start("torch_mount",player.aim_collider);return
@@ -249,11 +266,9 @@ func use_torch() -> void:
 		player.get_node("FireActions").start("torch_off")
 	else:
 		var fire:=player.get("aim_collider") as Node3D
-		if bool(player.get("aim_valid")) and fire!=null and fire.is_in_group("campfire") \
-			and fire.global_position.distance_to(player.global_position)<=3.5 and fire.get("burning")==true \
-			and float(fire.get("fuel"))>0 and not fire.call("exposed_to_rain"):
+		if bool(player.get("aim_valid")) and fire_source_ready(fire):
 			player.get_node("FireActions").start("torch_light",fire)
-		else:player.call("_hud_toast","AIM AT A BURNING BONFIRE OR COOKING SETUP TO LIGHT")
+		else:player.call("_hud_toast","AIM AT A LIT TORCH, BONFIRE OR COOKING SETUP")
 	player.call("_queue_save")
 
 func extinguish_torch() -> void:
@@ -278,3 +293,9 @@ func _update_mount_preview(lit: bool) -> void:
 	else:_mount_preview.global_position=player.aim_point+player.aim_normal*.2
 	(_mount_preview.material_override as StandardMaterial3D).albedo_color=Color(.2,1,.4,.45) if valid else Color(1,.15,.1,.45)
 	_mount_preview.show()
+
+func fire_source_ready(target: Node3D) -> bool:
+	return is_instance_valid(target) and target.is_inside_tree() and not target.is_queued_for_deletion() \
+		and player.global_position.distance_to(target.global_position)<=3.5 \
+		and (target.is_in_group("campfire") or target.is_in_group("wall_torch")) \
+		and target.get("burning")==true and float(target.get("fuel"))>0 and not target.call("exposed_to_rain")

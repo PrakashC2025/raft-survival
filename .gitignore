@@ -33,6 +33,7 @@ grass/*.obj
 grass/*.glb
 models/*.glb
 !models/coconut_palm.glb
+!models/coconut_palm_single.glb
 !models/realistic_grass.glb
 !models/coastal_fish.glb
 !models/coastal_gull.glb
@@ -48,6 +49,9 @@ models/*.glb
 !models/diving_tank.glb
 
 !models/survivalist.glb
+!models/mixamo_survivor.glb
+/tools/asset_downloads/mixamo/
+/tools/asset_downloads/surface-refresh/
 !models/banana_plant.glb
 !models/carrot_plant.glb
 !models/onion_sprout.glb

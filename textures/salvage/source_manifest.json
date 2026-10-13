@@ -1,0 +1,95 @@
+{
+  "prepared": "2026-10-13",
+  "maps": [
+    {
+      "file": "textures/salvage/steel_diff.jpg",
+      "source": "https://ambientcg.com/view?id=Metal038",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "351793f1b5f7d8992ec106eba3d10ba613a9b59e073abfe62a95f40362a2feb0"
+    },
+    {
+      "file": "textures/salvage/steel_nor_gl.jpg",
+      "source": "https://ambientcg.com/view?id=Metal038",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "e716e353cc23fd1c3ee284e07436702bfb416643a05c8c446df11f062bd823a1"
+    },
+    {
+      "file": "textures/salvage/steel_arm.jpg",
+      "source": "https://ambientcg.com/view?id=Metal038",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "a429f115261201c15ebef9d85732e6ed651402147eebcd2fb5caccfed8f6e90e"
+    },
+    {
+      "file": "textures/salvage/rust_diff.jpg",
+      "source": "https://polyhaven.com/a/rusty_metal_02",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "adaf094391518b6afe787a123942110aa88ef521c844f970b124420f5ed5d3d9"
+    },
+    {
+      "file": "textures/salvage/rust_nor_gl.jpg",
+      "source": "https://polyhaven.com/a/rusty_metal_02",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "995197a62cac6fbb000e6e6591a3330a3b77ef069c4ac58f505b586b9bdbd97b"
+    },
+    {
+      "file": "textures/salvage/rust_arm.jpg",
+      "source": "https://polyhaven.com/a/rusty_metal_02",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "2982943ffe3273a65bf788b77fc0c7a4fd8227824386d065d13a8c8c0e07db10"
+    },
+    {
+      "file": "textures/underwater/coast_diff.jpg",
+      "source": "https://polyhaven.com/a/coast_sand_01",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "58af2e40100f7f405703a86d593af64379f822c4786850def23ecfc921450d54"
+    },
+    {
+      "file": "textures/underwater/coast_nor_gl.jpg",
+      "source": "https://polyhaven.com/a/coast_sand_01",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "fe4d045aec99e71e80f682fcf0ad958d2dff1fe614b73178b304d1bac047b54a"
+    },
+    {
+      "file": "textures/underwater/coast_arm.jpg",
+      "source": "https://polyhaven.com/a/coast_sand_01",
+      "license": "CC0-1.0",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sha256": "eeb552fb26de45ae5c52d3db6f96f8f0414fdbfa335c1d27ef5f59b6ef01a5c8"
+    }
+  ]
+}

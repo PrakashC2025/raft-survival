@@ -132,6 +132,54 @@ func _run() -> void:
 	catch.global_position = rope.get("_hook_world_pos")
 	rope.call("_check_debris")
 	check(catch.is_hooked and catch.freeze, "Distant hook captures floating materials")
+	var caught_at := catch.global_position
+	rope.call("_enter_hooked")
+	rope.call("_handle_hooked", 1.0 / 60.0)
+	check(catch.global_position.distance_to(caught_at) < 0.02, "Contact does not teleport the catch or slide the hook through it")
+	controls.call("_sync_mode")
+	var back := controls.get("_btn_recall") as Button
+	check(back.visible and not button.visible, "Return replaces Cast only while the hook is out")
+	var recall_touch := InputEventScreenTouch.new()
+	recall_touch.index = 8; recall_touch.pressed = true; recall_touch.position = back.get_global_rect().get_center()
+	root.push_input(recall_touch, true)
+	recall_touch.pressed = false; root.push_input(recall_touch,true)
+	rope.call("_handle_hooked", 1.0 / 60.0)
+	check(int(rope.get("_state")) == 4 and catch.is_hooked and catch.freeze, "A Return tap released before physics still keeps the catch and starts reeling")
+	await process_frame
+	var wood_before: int = root.get_node("Inventory").call("total","Wood")
+	var bounded_tow := true
+	for frame in 900:
+		if int(rope.get("_state")) != 4: break
+		var position_before := catch.global_position
+		rope.call("_handle_reeling",1.0/60.0)
+		if is_instance_valid(catch): bounded_tow = bounded_tow and catch.global_position.distance_to(position_before) <= 0.201
+	check(bounded_tow and int(root.get_node("Inventory").call("total","Wood")) == wood_before+1, "The actual return pulls in and collects a catch with bounded motion")
+	await process_frame
+	# Only physical head contact, rather than the former 1.8m magnetic scoop.
+	rope.call("_force_cancel"); rope.call("_throw_hook")
+	var nearby := TestDebris.new(); root.add_child(nearby); nearby.add_to_group("debris")
+	nearby.global_position = rope.get("_hook_world_pos") + Vector3.RIGHT
+	rope.call("_check_debris")
+	check(not nearby.is_hooked, "An item one metre beside the head is not grabbed from empty space")
+	var real_debris := load("res://scenes/debris.tscn").instantiate() as RigidBody3D
+	root.add_child(real_debris); real_debris.set_physics_process(false)
+	var real_shape := real_debris.get_node("CollisionShape3D") as CollisionShape3D
+	var contact: Vector3 = rope.call("_debris_contact",real_debris,real_shape.global_transform*Vector3(-3,0,0),real_shape.global_transform*Vector3(3,0,0))
+	check(contact != Vector3.INF, "A swept head detects the actual fitted salvage box between frames")
+	real_debris.queue_free(); nearby.queue_free()
+	var smooth_roll := true
+	for sample in range(1,60):
+		rope.set("_hook_travelled",float(rope.get("_throw_dist"))*sample/60.0)
+		rope.set("_hook_world_pos",rope.call("_flight_position",rope.get("_hook_travelled")))
+		var prior_right := (rope.get("_hook") as Node3D).global_basis.x
+		rope.call("_update_hook_visual")
+		smooth_roll = smooth_roll and prior_right.dot((rope.get("_hook") as Node3D).global_basis.x)>0.9
+	check(smooth_roll, "Ballistic hook orientation has no abrupt roll or drilling rotation")
+	var flight_forward := -(rope.get("_hook") as Node3D).global_basis.z
+	rope.call("_request_return"); rope.call("_update_hook_visual")
+	check(flight_forward.dot(-(rope.get("_hook") as Node3D).global_basis.z)>.9,"Returning tail first does not abruptly reverse the metal head")
+	catch = TestDebris.new(); root.add_child(catch); catch.add_to_group("debris"); catch.global_position = rope.get("_hook_world_pos")
+	rope.call("_check_debris")
 	rope.call("_start_return")
 	check(not catch.is_hooked and not catch.freeze, "Recall releases captured materials safely")
 	for frame in range(300):
@@ -139,6 +187,9 @@ func _run() -> void:
 			break
 		rope.call("_handle_returning", 1.0 / 60.0)
 	check(int(rope.get("_state")) == 0, "Long-distance recall returns without overshooting")
+	controls.call("_sync_mode")
+	check(not back.visible and button.visible, "Return hides and Cast is available when the hook reaches the hand")
+	catch.queue_free()
 	player.set("cam_mode", 1)
 	player.call("_apply_camera_mode")
 	rope.call("_update_hook_origin")
@@ -184,6 +235,20 @@ func _run() -> void:
 	var full_slots: Array = inventory.get("slots").duplicate(true)
 	player.call("select_hotbar_slot", 5)
 	check(full and player.call("equip_rope_gun") and inventory.get("slots") == full_slots, "Permanent gun equips with a full bag without displacing any inventory")
+	rope.call("_force_cancel")
+	rope.set("_hook_world_pos",rope.call("_hand_pos"))
+	var overflow_catch := TestDebris.new(); root.add_child(overflow_catch); overflow_catch.add_to_group("debris")
+	for candidate in ["Solar Torch","Binoculars","Walkie Talkie","Onion Seed","Carrot Seed","ElectricLamp"]:
+		if int(inventory.call("total",candidate))==0:
+			overflow_catch.item_name=candidate
+			break
+	overflow_catch.global_position = rope.get("_hook_world_pos")
+	rope.call("_check_debris"); rope.call("_enter_hooked"); rope.call("_request_return")
+	rope.call("_handle_reeling",1.0/60.0)
+	check(not overflow_catch.is_hooked and not overflow_catch.freeze and not overflow_catch.collected and inventory.get("slots")==full_slots,"A full bag releases the returned catch without losing it or changing inventory")
+	rope.call("_check_debris")
+	check(not overflow_catch.is_hooked,"The same cast cannot repeatedly recapture a rejected full-bag catch")
+	overflow_catch.queue_free(); rope.call("_force_cancel")
 	player.call("quick_save")
 	inventory.call("load_game", "quick")
 	change_scene_to_file("res://scenes/main.tscn")

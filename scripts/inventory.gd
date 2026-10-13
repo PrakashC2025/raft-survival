@@ -373,7 +373,7 @@ func craft(recipe: String) -> bool:
 	return try_exchange(recipe_cost(recipe),{})
 
 
-func can_afford_item(item_name: String) -> bool:
+func can_afford_item(item_name: String, quantity: int=1) -> bool:
 	if not recipe_unlocked(item_name):
 		return false
 	if not ITEM_RECIPES.has(item_name):
@@ -381,7 +381,7 @@ func can_afford_item(item_name: String) -> bool:
 	if infinite:
 		return true
 	for item in ITEM_RECIPES[item_name]:
-		if total(item) < int(ITEM_RECIPES[item_name][item]):
+		if total(item) < int(ITEM_RECIPES[item_name][item])*quantity:
 			return false
 	return true
 
@@ -394,22 +394,22 @@ func can_store(item_name: String, amount: int = 1) -> bool:
 
 ## Tests whether the result fits after its recipe ingredients are consumed. This
 ## lets a full inventory craft a tool when the recipe itself frees a slot.
-func can_store_craft_result(item_name: String) -> bool:
+func can_store_craft_result(item_name: String, quantity: int=1) -> bool:
 	if not ITEM_RECIPES.has(item_name):
 		return false
 	_ensure_slots()
 	var simulated := slots.duplicate(true)
 	if not infinite:
 		for ingredient in ITEM_RECIPES[item_name]:
-			var missing := _simulate_remove(simulated, str(ingredient), int(ITEM_RECIPES[item_name][ingredient]))
+			var missing := _simulate_remove(simulated, str(ingredient), int(ITEM_RECIPES[item_name][ingredient])*quantity)
 			if missing > 0:
 				return false
-	return _simulate_add(simulated, item_name, 1) == 0
+	return _simulate_add(simulated, item_name, quantity) == 0
 
 
-func can_craft_item(item_name: String) -> bool:
-	return ITEM_RECIPES.has(item_name) and can_afford_item(item_name) \
-			and can_store_craft_result(item_name)
+func can_craft_item(item_name: String, quantity: int=1) -> bool:
+	return quantity>=1 and quantity<=99 and ITEM_RECIPES.has(item_name) and can_afford_item(item_name,quantity) \
+			and can_store_craft_result(item_name,quantity)
 
 
 ## Tests several rewards together without mutating the live inventory.
@@ -486,22 +486,17 @@ func _simulate_remove(simulated: Array, item_name: String, amount: int) -> int:
 	return remaining
 
 
-func craft_item(item_name: String) -> bool:
-	if not ITEM_RECIPES.has(item_name) or not can_afford_item(item_name):
-		return false
-	# Never consume ingredients if the finished tool would be lost to a full bag.
-	if not can_store_craft_result(item_name):
-		emit_signal("bag_full", 1)
-		return false
-	if not infinite:
-		for ingredient in ITEM_RECIPES[item_name]:
-			remove(str(ingredient), int(ITEM_RECIPES[item_name][ingredient]))
-	var success := add(item_name, 1) == 0
-	if success:
-		var progress := get_tree().get_first_node_in_group("survival_progression")
-		if progress != null:
-			progress.call("record", "craft:" + item_name)
-	return success
+func craft_cost(item_name: String, quantity: int=1) -> Dictionary:
+	var costs: Dictionary=ITEM_RECIPES.get(item_name,{}).duplicate()
+	for ingredient in costs:costs[ingredient]=int(costs[ingredient])*quantity
+	return costs
+
+func craft_item(item_name: String, quantity: int=1) -> bool:
+	if not can_craft_item(item_name,quantity):return false
+	if not try_exchange({} if infinite else craft_cost(item_name,quantity),{item_name:quantity}):return false
+	var progress:=get_tree().get_first_node_in_group("survival_progression")
+	if progress!=null:progress.call("record","craft:"+item_name,quantity)
+	return true
 
 func recipe_unlocked(recipe: String) -> bool:
 	if recipe in ["WindGenerator","ElectricLamp"] and has(recipe,1):return true

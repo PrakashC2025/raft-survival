@@ -1,0 +1,11 @@
+{
+  "author": "Ashe Kirk / OwlishMedia",
+  "license": "CC0-1.0",
+  "source": "https://opengameart.org/content/202-more-sound-effects",
+  "download": "https://opengameart.org/sites/default/files/MoreSounds.zip",
+  "member": "Drink/Drink_05.wav",
+  "source_sha256": "e2f455d9bfd61dbfd596dd7939d5579c01f3f238ea4f011c4dc7027d383831a3",
+  "runtime_sha256": "e6befe8bed71255bc31f16fbafbf6ad4ffd28d893ce6909ef25cbd295a2b9d66",
+  "seconds": 1.3881632653061224,
+  "processing": "mono 22050 Hz PCM; silence trim with attack/tail padding; peak normalization only"
+}

@@ -3,6 +3,9 @@ const SURFACES := preload("res://scripts/object_materials.gd")
 const FLAME := preload("res://shaders/campfire.gdshader")
 const PARTS := preload("res://scripts/machine_visual.gd")
 const TIMBER := preload("res://scripts/construction_visual.gd")
+const LIGHT_RANGE := 100.0
+const LIGHT_ENERGY := 3.0
+const LIGHT_ATTENUATION := 0.5
 var flames: Node3D
 func _ready() -> void:
 	var stick := MeshInstance3D.new()
@@ -33,17 +36,21 @@ func _ready() -> void:
 	flames = Node3D.new()
 	flames.name = "TorchFlames"
 	add_child(flames)
-	for index in 3:
+	for index in 1:
 		var mat := ShaderMaterial.new();mat.shader=FLAME
 		mat.set_shader_parameter("flame_phase",index*2.17)
 		var visual := MeshInstance3D.new()
 		var quad := QuadMesh.new()
 		quad.size = Vector2(.145,.27-index*.026)
+		mat.set_shader_parameter("torch_readability",1.0)
+		mat.set_shader_parameter("torch_flame_size",quad.size)
 		visual.mesh = quad
 		visual.material_override = mat
 		visual.position=Vector3(sin(index*2.17)*.012,.46-index*.013,cos(index*2.17)*.012)
 		visual.rotation.y = index*PI/3.0
 		visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# Shader expansion must still be rendered at the edge of the camera view.
+		visual.extra_cull_margin = 16.0
 		flames.add_child(visual)
 func set_burning(lit: bool) -> void:
 	if flames != null: flames.visible = lit

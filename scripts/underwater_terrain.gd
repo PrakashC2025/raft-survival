@@ -40,22 +40,38 @@ static func normal_at(p: Vector2) -> Vector3:
 		height_at(p-Vector2(0,.3))-height_at(p+Vector2(0,.3))).normalized()
 
 static func mesh_at(tile: Vector2i) -> ArrayMesh:
-	var vertices := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var uv := PackedVector2Array()
-	var indices := PackedInt32Array()
-	var origin := Vector2(tile)*TILE
+	var arrays:=_empty_arrays()
+	for z in STEPS+1:_append_row(arrays,Vector2(tile)*TILE,z)
+	return _commit_mesh(arrays)
+
+static func mesh_at_incremental(tile: Vector2i, tree: SceneTree) -> ArrayMesh:
+	var arrays:=_empty_arrays()
 	for z in STEPS+1:
-		for x in STEPS+1:
-			var point := origin + Vector2(x,z)*CELL
-			vertices.append(Vector3(x*CELL, height_at(point), z*CELL))
-			normals.append(normal_at(point)); uv.append(point*.25)
-			if x<STEPS and z<STEPS:
-				var a := z*(STEPS+1)+x
-				indices.append_array(PackedInt32Array([a,a+1,a+STEPS+1,a+1,a+STEPS+2,a+STEPS+1]))
-	var arrays := []; arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX]=vertices; arrays[Mesh.ARRAY_NORMAL]=normals
-	arrays[Mesh.ARRAY_TEX_UV]=uv; arrays[Mesh.ARRAY_INDEX]=indices
-	var result := ArrayMesh.new()
-	result.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		_append_row(arrays,Vector2(tile)*TILE,z)
+		if z%4==3:await tree.process_frame
+	return _commit_mesh(arrays)
+
+static func _empty_arrays() -> Array:
+	var arrays:=[];arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX]=PackedVector3Array();arrays[Mesh.ARRAY_NORMAL]=PackedVector3Array()
+	arrays[Mesh.ARRAY_TEX_UV]=PackedVector2Array();arrays[Mesh.ARRAY_INDEX]=PackedInt32Array()
+	return arrays
+
+static func _append_row(arrays: Array, origin: Vector2, z: int) -> void:
+	var vertices: PackedVector3Array=arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array=arrays[Mesh.ARRAY_NORMAL]
+	var uv: PackedVector2Array=arrays[Mesh.ARRAY_TEX_UV]
+	var indices: PackedInt32Array=arrays[Mesh.ARRAY_INDEX]
+	for x in STEPS+1:
+		var point:=origin+Vector2(x,z)*CELL
+		vertices.append(Vector3(x*CELL,height_at(point),z*CELL))
+		normals.append(normal_at(point));uv.append(point*.25)
+		if x<STEPS and z<STEPS:
+			var a:=z*(STEPS+1)+x
+			indices.append_array(PackedInt32Array([a,a+1,a+STEPS+1,a+1,a+STEPS+2,a+STEPS+1]))
+	arrays[Mesh.ARRAY_VERTEX]=vertices;arrays[Mesh.ARRAY_NORMAL]=normals
+	arrays[Mesh.ARRAY_TEX_UV]=uv;arrays[Mesh.ARRAY_INDEX]=indices
+
+static func _commit_mesh(arrays: Array) -> ArrayMesh:
+	var result:=ArrayMesh.new();result.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,arrays)
 	return result

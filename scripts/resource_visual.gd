@@ -212,6 +212,8 @@ static func weather(root: Node3D,item: String) -> void:
 				skin.set_shader_parameter("detail_scale",detail_scale)
 				skin.set_shader_parameter("horizontal_wood",item=="Wood")
 				skin.set_shader_parameter("barrel",item=="Barrel")
+				if material_kind==MATERIALS.Kind.METAL:
+					preload("res://scripts/salvage_surfaces.gd").apply(skin,true)
 				if texture!=null:skin.set_shader_parameter("source_texture",texture);skin.set_shader_parameter("has_texture",true)
 				if material_kind==MATERIALS.Kind.WOOD:
 					skin.set_shader_parameter("timber_texture",TIMBER_ATLAS)

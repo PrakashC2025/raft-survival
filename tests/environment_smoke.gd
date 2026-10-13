@@ -142,6 +142,12 @@ func _run() -> void:
 		"Imported grass roots stay grounded at a natural 0.38 m tuft height")
 	check(field.multimesh.use_custom_data and field.visibility_range_end == 100.0, "Grass variation stays batched and has a distance limit")
 	var performance := get_first_node_in_group("mobile_performance")
+	check(performance.is_processing(), "Desktop Auto monitors slow camera frames")
+	var auto_before: float = performance.get("_render_scale")
+	var frame_budget := 1.0 / float(root.get_node("GameSettings").target_fps)
+	performance.call("_update_quality", frame_budget * 1.20)
+	performance.call("_update_quality", frame_budget * 1.20)
+	check(float(performance.get("_render_scale")) < auto_before, "Auto reduces resolution before the former 25-percent slowdown threshold")
 	performance.set("_mobile", true)
 	root.get_node("GameSettings").call("update_setting", "quality", 1)
 	var material := (ocean as MeshInstance3D).get_active_material(0) as ShaderMaterial
@@ -173,11 +179,12 @@ func _run() -> void:
 		"Realistic planter tree preserves saved chopping health and fruit slots")
 	tree_pot.queue_free()
 	root.get_node("GameSettings").call("update_setting", "quality", 0)
-	performance.call("_set_render_scale", 1.0)
-	for sample in range(5):
+	performance.call("_set_render_scale", 0.72)
+	for sample in range(20):
 		performance.call("_update_quality", 0.01)
 	check(performance.get("_cumulus_reduced") == true,
 		"Mobile Auto recovery never silently enables expensive volumetric clouds")
+	check(is_equal_approx(float(performance.get("_render_scale")), 0.82), "Phone Auto recovers within its stable resolution ceiling")
 	ambience.call("stop_environment")
 	change_scene_to_file("res://scenes/main_menu.tscn")
 	await scene_changed

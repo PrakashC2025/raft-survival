@@ -1,5 +1,5 @@
 extends Node3D
-const BUDGET:=preload("res://scripts/frame_work_budget.gd")
+const MESH_DATA:=preload("res://scripts/underwater_mesh_data.gd")
 const ART:=preload("res://scripts/machine_visual.gd")
 const CREATURE:=preload("res://scripts/dive_creature.gd")
 const TERRAIN:=preload("res://scripts/underwater_terrain.gd")
@@ -23,6 +23,8 @@ var _ground_material: ShaderMaterial
 var _ruin_material: ShaderMaterial
 var _kelp_material: ShaderMaterial
 var _ruin_builder: SurfaceTool
+var _mesh_task := -1
+var _mesh_data: RefCounted
 static var _kelp_mesh: ArrayMesh
 
 func _ready() -> void:
@@ -35,21 +37,23 @@ static func height_at(point: Vector2) -> float:return TERRAIN.height_at(point)
 static func surface_height(point: Vector2) -> float:return TERRAIN.surface_height(point)
 
 func _prepare() -> void:
-	var vertices:=PackedVector3Array();var normals:=PackedVector3Array();var indices:=PackedInt32Array()
-	for z in range(GRID+1):
-		for x in range(GRID+1):
-			var p:=Vector2(float(x)/GRID-.5,float(z)/GRID-.5)*EXTENT*2
-			vertices.append(Vector3(p.x,height_at(p)-6.0,p.y));normals.append(TERRAIN.normal_at(p))
-			if x<GRID and z<GRID:
-				var a:=z*(GRID+1)+x;indices.append_array(PackedInt32Array([a,a+1,a+GRID+1,a+1,a+GRID+2,a+GRID+1]))
-			if BUDGET.exhausted():await get_tree().process_frame;if not is_inside_tree():return
-	var arrays:=[];arrays.resize(Mesh.ARRAY_MAX);arrays[Mesh.ARRAY_VERTEX]=vertices;arrays[Mesh.ARRAY_NORMAL]=normals;arrays[Mesh.ARRAY_INDEX]=indices
+	_mesh_data = MESH_DATA.new()
+	_mesh_task = WorkerThreadPool.add_task(_mesh_data.build.bind(GRID,EXTENT),false,"Ocean floor geometry")
+	while not WorkerThreadPool.is_task_completed(_mesh_task):
+		await get_tree().process_frame
+		if not is_inside_tree():return
+	WorkerThreadPool.wait_for_task_completion(_mesh_task)
+	_mesh_task = -1
+	var arrays: Array = _mesh_data.arrays
+	_mesh_data = null
 	var mesh:=ArrayMesh.new();mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,arrays)
 	_ground_material=ShaderMaterial.new();_ground_material.shader=preload("res://shaders/undersea_surface.gdshader")
-	_ground_material.set_shader_parameter("surface_texture",preload("res://textures/island/sand_diff.jpg"))
-	_ground_material.set_shader_parameter("surface_normal",preload("res://textures/island/sand_nor_gl.jpg"))
-	_ground_material.set_shader_parameter("surface_arm",preload("res://textures/island/sand_arm.jpg"))
+	_ground_material.set_shader_parameter("surface_texture",preload("res://textures/underwater/coast_diff.jpg"))
+	_ground_material.set_shader_parameter("surface_normal",preload("res://textures/underwater/coast_nor_gl.jpg"))
+	_ground_material.set_shader_parameter("surface_arm",preload("res://textures/underwater/coast_arm.jpg"))
+	_ground_material.set_shader_parameter("surface_scale",1.0/12.0)
 	_ruin_material=_ground_material.duplicate() as ShaderMaterial;_ruin_material.set_shader_parameter("masonry",true)
+	_ruin_material.set_shader_parameter("surface_scale",0.32)
 	_ruin_material.set_shader_parameter("surface_texture",preload("res://textures/island/rock_diff.jpg"));_ruin_material.set_shader_parameter("surface_normal",preload("res://textures/island/rock_nor_gl.jpg"))
 	_ruin_material.set_shader_parameter("surface_arm",preload("res://textures/island/rock_arm.jpg"))
 	var floor_visual:=ART.part(self,mesh,Vector3.ZERO,_ground_material.duplicate(),"OceanSandFloor");floor_visual.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -147,10 +151,10 @@ func _process(delta: float) -> void:
 	if swimming:
 		for index in 2:
 			var hand:=_hands.get_child(index) as Node3D;var phase:=_swim_time*3.8+index*PI
-			hand.visible=index==0 or str(_player.active_item).is_empty()
+			hand.visible=index==0 or _player.call("movement_owns_hands")
 			hand.position=Vector3((-1 if index==0 else 1)*(.25+.08*cos(phase)),-.28+.07*sin(phase),-.45-.26*maxf(0,sin(phase)))
 			hand.rotation=Vector3(.35+sin(phase)*.24,0,(-1 if index==0 else 1)*(.15+.22*cos(phase)))
-	var hide_fist:=swimming and str(_player.active_item).is_empty()
+	var hide_fist: bool=swimming and _player.call("movement_owns_hands")
 	if hide_fist!=_hands_visible:_hands_visible=hide_fist;_player.call("_apply_camera_mode");_player._fist_node.visible=not hide_fist and _player.cam_mode==0
 
 func save_state() -> Dictionary:
@@ -160,6 +164,11 @@ func save_state() -> Dictionary:
 	return data
 
 func _exit_tree() -> void:
+	# Join only the bounded CPU task before releasing its result/loader.
+	if _mesh_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_mesh_task)
+		_mesh_task = -1
+	_mesh_data = null
 	if is_instance_valid(_hands):_hands.queue_free()
 
 func _make_reef_passages() -> void:

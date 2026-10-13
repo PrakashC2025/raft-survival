@@ -81,12 +81,12 @@ func _refresh() -> void:
 	_repair.disabled=not can_repair;_repair.text="REPAIR · 6 SECONDS" if can_repair else "NEED TOOL / PARTS · CRAFT IN BAG"
 	_shake.visible=fault=="contact"
 
-func start(kind: String, target: Node, item: String) -> bool:
+func start(kind: String, target: Node, item: String, quantity: int=1) -> bool:
 	if busy() or _blocked() or kind not in ["repair","shake","assemble_electronics"]:return false
 	var cost: Dictionary={}
 	if kind=="assemble_electronics":
-		if item not in PORTABLE or not Inventory.can_afford_item(item) or not Inventory.can_store_craft_result(item):return false
-		cost=Inventory.ITEM_RECIPES[item].duplicate()
+		if item not in PORTABLE or not Inventory.can_craft_item(item,quantity):return false
+		cost=Inventory.craft_cost(item,quantity)
 	else:
 		if not _valid(target,item):return false
 		var fault:=str(target.call("fault_for",item))
@@ -96,7 +96,7 @@ func start(kind: String, target: Node, item: String) -> bool:
 	var seconds:=1.4 if kind=="shake" else 6.0
 	var raft:=player.call("_get_raft_node") as Node3D
 	if raft!=null and player.global_position.distance_to(raft.global_position)>15:raft=null
-	pending={"kind":kind,"item":item,"target":target,"cost":cost,"time":0.0,"seconds":seconds,
+	pending={"kind":kind,"item":item,"quantity":quantity,"target":target,"cost":cost,"time":0.0,"seconds":seconds,
 		"selected":str(player.active_item),"damage":Stats.damage_revision,"committed":false,"raft":raft,
 		"start":raft.to_local(player.global_position) if raft!=null else player.global_position}
 	close()
@@ -134,9 +134,8 @@ func _process(delta: float) -> void:
 func _commit() -> bool:
 	var item:=str(pending.item)
 	if pending.kind=="assemble_electronics":
-		if not Inventory.can_afford_item(item) or not Inventory.try_exchange({} if Inventory.infinite else pending.cost,{item:1}):return false
-		player.get_node("SurvivalProgression").record("craft:"+item)
-		player.call("_hud_toast",item.to_upper()+" ASSEMBLED · READY IN BAG");return true
+		if not Inventory.craft_item(item,int(pending.quantity)):return false
+		player.call("_hud_toast",item.to_upper()+" ×%d ASSEMBLED · READY IN BAG"%int(pending.quantity));return true
 	var target:=pending.target as Node
 	var fault:=str(target.call("fault_for",item))
 	if fault.is_empty() or (pending.kind=="shake" and fault!="contact"):return false

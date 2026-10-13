@@ -29,7 +29,7 @@ var _refresh_seconds := 0.0
 ## ============================================================
 
 const PIECE_ORDER := ["Foundation", "Wall", "Roof", "Stairs", "Door", "Window"]
-const CRAFT_ORDER := ["Torch","Bonfire","Diving Tank","Spear","Axe","Shovel","Pickaxe","Paddle","Anchor","PlanterPot","PlanterBox","TreePot","Foundation","Wall","Roof","Stairs","Door","Window","RainCollector","SandFilter","Fishing Rod", "Sail Kit", "Motor Kit", "Life Vest", "Bow", "Arrow", "Bandage","Solar Torch","Binoculars","Walkie Talkie","Battery","Repair Kit","Screw","Wire","Motor","Medkit","Can","Tumbler","StorageBox","CookingSetup","HalfWall","CargoCrate","WallTorch","WaterPurifier","WindGenerator","ElectricPurifier","RescueRadio"]
+const CRAFT_ORDER := ["Torch","Diving Tank","Spear","Axe","Shovel","Pickaxe","Paddle","Anchor","Fishing Rod","Sail Kit","Motor Kit","Life Vest","Bow","Arrow","Bandage","Solar Torch","Binoculars","Walkie Talkie","Battery","Repair Kit","Screw","Wire","Motor","Medkit","Can","Tumbler","Barrel"]
 const RESOURCE_PILL_ITEMS := []
 const STATS := [["health", "HEALTH"], ["thirst", "WATER"], ["hunger", "HUNGER"]]
 const FOOD_RULES := preload("res://scripts/food_rules.gd")
@@ -247,14 +247,15 @@ func toggle_crafting() -> void:
 	_craft_menu=preload("res://scripts/craft_menu.gd").new()
 	add_child(_craft_menu)
 	var products:=CRAFT_ORDER.duplicate()
-	products.append_array(["Barrel","FishingNet","SeedDryingTray"])
+	for item in Inventory.ITEM_RECIPES:
+		if not products.has(item):products.append(item)
 	var labels:=ITEM_LABELS.duplicate();labels.FishingNet="Fishing Net";labels.ElectricLamp="Salvaged LED"
 	labels.SeedDryingTray="Seed Drying Tray"
 	_craft_menu.setup(products,labels)
 	_craft_menu.closed.connect(_close_crafting)
-	_craft_menu.build_requested.connect(func(item: String):
+	_craft_menu.build_requested.connect(func(item: String, quantity: int):
 		_craft_selected=item
-		_confirm_craft_selection())
+		_confirm_craft_selection(quantity))
 	_compute_layout()
 	queue_redraw()
 
@@ -944,26 +945,26 @@ func _start_selected_course() -> void:
 		_close_map()
 
 
-func _craft_item(item_name: String) -> void:
+func _craft_item(item_name: String, quantity: int=1) -> void:
 	if not Inventory.recipe_unlocked(item_name):
 		_show_toast("COMPLETE YOUR MISSION TO UNLOCK " + item_name.to_upper())
 		return
 	if item_name in preload("res://scripts/equipment_repairs.gd").PORTABLE:
-		if not Inventory.can_afford_item(item_name) or not Inventory.can_store_craft_result(item_name):_show_toast("NEED PARTS OR BAG SPACE FOR "+item_name.to_upper());return
+		if not Inventory.can_afford_item(item_name,quantity) or not Inventory.can_store_craft_result(item_name,quantity):_show_toast("NEED PARTS OR BAG SPACE FOR "+item_name.to_upper());return
 		_close_crafting();_bag_open=false;GameSettings.release_gameplay_input()
 		var actor:=_get_player()
-		if actor!=null:actor.get_node("EquipmentRepairs").start("assemble_electronics",null,item_name)
+		if actor!=null:actor.get_node("EquipmentRepairs").start("assemble_electronics",null,item_name,quantity)
 		queue_redraw();return
-	if Inventory.craft_item(item_name):
+	if Inventory.craft_item(item_name,quantity):
 		_close_crafting()
 		var player := _get_player()
 		if player!=null:player.call("play_action","craft",0.7)
-		_show_toast(str(ITEM_LABELS.get(item_name,item_name)).to_upper()+" BUILT · ADDED TO BAG",4.0)
+		_show_toast(str(ITEM_LABELS.get(item_name,item_name)).to_upper()+" ×%d BUILT · ADDED TO BAG"%quantity,4.0)
 	else:
 		_show_toast("NEED MATERIALS FOR " + item_name.to_upper())
 	queue_redraw()
 
-func _confirm_craft_selection() -> void:
+func _confirm_craft_selection(quantity: int=1) -> void:
 	if Inventory.RECIPES.has(_craft_selected):
 		if not Inventory.can_afford(_craft_selected):
 			_show_toast("NEED MATERIALS OR MISSION UNLOCK")
@@ -972,7 +973,7 @@ func _confirm_craft_selection() -> void:
 		var actor:=_get_player()
 		if actor!=null:actor.call("select_piece_for_build",actor.BUILD_RECIPE_NAMES.find(_craft_selected))
 		_show_toast("AIM AT A CLEAR DECK · PLACE CONFIRMS AND SPENDS MATERIALS")
-	else:_craft_item(_craft_selected)
+	else:_craft_item(_craft_selected,quantity)
 
 func _use_bag_selection(eat: bool) -> void:
 	if _inspect_slot<0 or Inventory.slot_empty(_inspect_slot):return

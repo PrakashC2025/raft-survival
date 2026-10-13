@@ -27,13 +27,15 @@ var led: OmniLight3D
 var _mount: Button
 var _audio: AudioStreamPlayer
 var _ui: CanvasLayer
-var _panel: VBoxContainer
+var _panel: PanelContainer
+var _buttons: VBoxContainer
 var _status: Label
 var _power: Button
 var _cover: Button
 var _remove: Button
 var _replace: Button
 var _solar_button: Button
+var _desktop_cursor := false
 var _ui_tick := 0.0
 var _visuals: Array[Dictionary] = []
 var _first_root: Node3D
@@ -54,18 +56,19 @@ func _ready() -> void:
 	player.get_node("CamPivot/SpringArm3D/Camera3D").add_child(beam)
 	beam.position=Vector3(0.16,-0.12,-0.25)
 	beam.hide()
-	led=OmniLight3D.new();led.name="HeldSalvagedLED";led.light_color=Color(1,.87,.65);led.light_energy=1.4;led.omni_range=6;led.omni_attenuation=2
+	led=OmniLight3D.new();led.name="HeldSalvagedLED";led.light_color=Color(1,.87,.65);led.light_energy=1.4;led.omni_range=12;led.omni_attenuation=1.25
 	led.shadow_enabled=false;led.position=Vector3(.16,-.10,-.30);player.get_node("CamPivot/SpringArm3D/Camera3D").add_child(led);led.hide()
 	_audio=AudioStreamPlayer.new();_audio.volume_db=-12;add_child(_audio)
 	_build_ui()
 
 func _build_ui() -> void:
 	_ui=CanvasLayer.new();_ui.layer=8;add_child(_ui)
-	_panel=VBoxContainer.new();_panel.name="PortableToolControls";_panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	_panel=PanelContainer.new();_panel.name="PortableToolControls"
 	_panel.theme=preload("res://scripts/ocean_ui.gd").theme()
-	_panel.offset_left=-242;_panel.offset_right=-20;_panel.offset_top=-376;_panel.offset_bottom=-110
-	_panel.add_theme_constant_override("separation",5);_ui.add_child(_panel)
-	_status=Label.new();_status.add_theme_font_size_override("font_size",16);_panel.add_child(_status)
+	_panel.add_theme_stylebox_override("panel",preload("res://scripts/ocean_ui.gd").box(Color("092333"),Color("346073"),14))
+	_ui.add_child(_panel)
+	_buttons=VBoxContainer.new();_buttons.add_theme_constant_override("separation",6);_panel.add_child(_buttons)
+	_status=Label.new();_status.add_theme_font_size_override("font_size",16);_buttons.add_child(_status)
 	_status.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
 	_power=_button("POWER ON / OFF",toggle_power)
 	_mount=_button("MOUNT / PLACE LED",func():
@@ -79,10 +82,11 @@ func _build_ui() -> void:
 	_panel.hide()
 
 func _button(label: String,action: Callable) -> Button:
-	var button:=Button.new();button.text=label;button.custom_minimum_size=Vector2(220,44)
+	var button:=Button.new();button.text=label;button.custom_minimum_size=Vector2(250,48)
 	button.add_theme_font_size_override("font_size",14)
-	button.button_down.connect(func():GameSettings.release_gameplay_input())
-	button.pressed.connect(action);_panel.add_child(button)
+	button.pressed.connect(func():
+		GameSettings.release_gameplay_input()
+		action.call());_buttons.add_child(button)
 	return button
 
 func _blocked() -> bool:
@@ -112,7 +116,7 @@ func use() -> void:
 
 func toggle_power() -> void:
 	var item:=str(player.get("active_item"))
-	if item not in POWERED or _blocked() or battery_animation>0.0 or not Inventory.has(item,1):return
+	if item not in POWERED or _blocked() or cover_open or battery_animation>0.0 or not Inventory.has(item,1):return
 	if not installed[item] or float(charge[item])<=0.0:
 		player.call("_hud_toast","INSERT A CHARGED BATTERY" if item=="ElectricLamp" else "INSERT A CHARGED BATTERY OR RAISE THE PANEL TO SUNLIGHT");return
 	enabled[item]=not enabled[item]
@@ -132,8 +136,9 @@ func set_zoom(value: bool) -> void:
 	zoomed=value
 
 func toggle_cover() -> void:
-	if _blocked() or battery_animation>0:return
+	if _blocked() or battery_animation>0 or str(player.active_item) not in POWERED:return
 	cover_open=not cover_open
+	if cover_open:enabled[str(player.active_item)]=false
 	_sound("switch")
 	player.call("play_action","battery",0.65)
 
@@ -174,7 +179,7 @@ func _sun_exposed() -> bool:
 	if hour<6.5 or hour>17.5:return false
 	var rain:=get_tree().get_first_node_in_group("rain_system")
 	if rain!=null and rain.call("is_raining"):return false
-	var origin:=player.global_position+Vector3.UP*1.8
+	var origin: Vector3=player.get_node("CamPivot").global_position+Vector3.UP*.05
 	var sun:=sky.find_child("SunLight",true,false) as DirectionalLight3D
 	var toward:=sun.global_basis.z if sun!=null else Vector3.UP
 	if toward.y<=0.1:return false
@@ -225,16 +230,20 @@ func _process(delta: float) -> void:
 		var ui_scale:=preload("res://scripts/ocean_ui.gd").scale_for(get_viewport())
 		_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
 		_panel.scale=Vector2.ONE*ui_scale
-		_panel.size=Vector2(222,0)
-		_panel.position=Vector2(get_viewport().get_visible_rect().size.x-(_panel.size.x+20)*ui_scale,maxf(12*ui_scale,get_viewport().get_visible_rect().size.y-(maxf(_panel.get_combined_minimum_size().y,160)+112)*ui_scale))
+		_panel.size=Vector2(278,0)
+		_panel.position=Vector2(get_viewport().get_visible_rect().size.x-(_panel.size.x+20)*ui_scale,80*ui_scale)
 		var status_text:=("RADIO CH 16" if item=="Walkie Talkie" else "SALVAGED LED" if item=="ElectricLamp" else "SOLAR FLASHLIGHT")+" · "+("ON" if enabled[item] else "OFF")+"\n"+("BATTERY %d%%"%roundi(float(charge[item])) if installed[item] else "NO BATTERY")+(" · SOLAR ☀" if solar and item!="ElectricLamp" else "")
 		if _status.text!=status_text:_status.text=status_text
 		var fault:=fault_for(item)
+		if not GameSettings.mobile_effects_profile():_status.text+="\nHold Alt to use these controls"
 		if not fault.is_empty():_status.text+="\n"+("LOOSE CONTACT · SHAKE / REPAIR" if fault=="contact" else "WIRING DAMAGED · REPAIR")
 		_repair_button.visible=not fault.is_empty();_shake_button.visible=fault=="contact"
 		_mount.visible=item=="ElectricLamp" and fault.is_empty()
 		_solar_button.visible=fault.is_empty() and item!="ElectricLamp";_cover.visible=fault.is_empty()
+		_power.text="POWER OFF" if enabled[item] else "POWER ON"
 		_cover.text="CLOSE BATTERY COVER" if cover_open else "OPEN BATTERY COVER"
+		_mount.disabled=battery_animation>0 or cover_open
+		_power.disabled=battery_animation>0 or cover_open
 		_remove.visible=cover_open and fault.is_empty();_replace.visible=cover_open and fault.is_empty()
 		_remove.disabled=battery_animation>0 or not installed[item]
 		_replace.disabled=battery_animation>0
@@ -283,21 +292,24 @@ func _update_visuals(item: String,update_text: bool=true) -> void:
 			var screen_text:=("FAULT" if not fault_for("Walkie Talkie").is_empty() else "CH16" if enabled["Walkie Talkie"] else "OFF")+"\n"+("%d%%"%roundi(float(charge["Walkie Talkie"])) if installed["Walkie Talkie"] else "NO CELL")+(" SUN" if solar and item=="Walkie Talkie" else "")
 			if screen.text!=screen_text:screen.text=screen_text
 		if is_instance_valid(screen):screen.modulate=Color(.43,.72,.46) if working("Walkie Talkie") else Color(.20,.29,.21)
+		var cover_origin: Vector3=parts.get("cover_origin",Vector3.ZERO)
 		var cover: Node3D=parts.cover if is_instance_valid(parts.cover) else null
 		if is_instance_valid(cover):
-			cover.position.z=lerpf(cover.position.z,0.11 if cover_open else 0.049,0.2)
+			cover.position.z=lerpf(cover.position.z,cover_origin.z+0.10 if cover_open else cover_origin.z,0.2)
 			cover.rotation.x=lerpf(cover.rotation.x,-1.1 if cover_open else 0.0,0.2)
 		var cell: Node3D=parts.cell if is_instance_valid(parts.cell) else null
 		if is_instance_valid(cell):
 			cell.visible=battery_animation>0.0 and item==_battery_item
 			var t:=1.0-battery_animation/1.8
 			var slide:=sin(t*PI)
-			cell.position=Vector3(0,-0.085-0.08*slide,0.045+0.16*slide)
+			cell.position=(parts.get("cell_origin",Vector3.ZERO) as Vector3)+Vector3(0,-0.08*slide,0.16*slide)
 			cell.rotation.z=0.35*slide
 
 func _cache_visual(held: Node3D) -> void:
 	if not is_instance_valid(held):return
-	_visuals.append({"screen":held.find_child("RadioScreen",true,false),"cover":held.find_child("BatteryCover",true,false),"cell":held.find_child("AnimatedBattery",true,false),"lens":held.find_child("LEDLens",true,false)})
+	var cover:=held.find_child("BatteryCover",true,false) as Node3D
+	var cell:=held.find_child("AnimatedBattery",true,false) as Node3D
+	_visuals.append({"cover_origin":cover.position if cover!=null else Vector3.ZERO,"cell_origin":cell.position if cell!=null else Vector3.ZERO,"screen":held.find_child("RadioScreen",true,false),"cover":held.find_child("BatteryCover",true,false),"cell":held.find_child("AnimatedBattery",true,false),"lens":held.find_child("LEDLens",true,false)})
 
 func store_led(machine: Node) -> void:
 	charge.ElectricLamp=machine.led_battery;installed.ElectricLamp=machine.led_cell;enabled.ElectricLamp=machine.enabled
@@ -327,3 +339,18 @@ func restore_state(data: Variant) -> void:
 func _notification(what: int) -> void:
 	if what in [NOTIFICATION_APPLICATION_FOCUS_OUT,NOTIFICATION_APPLICATION_PAUSED] and is_instance_valid(player):
 		set_zoom(false)
+
+func touch_button_at(at: Vector2) -> Button:
+	if not _panel.visible:return null
+	for child in _buttons.get_children():
+		if child is Button and child.is_visible_in_tree() and child.get_global_rect().has_point(at):return child
+	return null
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.physical_keycode==KEY_ALT and not event.echo:
+		if event.pressed and (str(player.active_item) not in POWERED or _blocked()):return
+		if not event.pressed and not _desktop_cursor:return
+		_desktop_cursor=event.pressed
+		GameSettings.release_gameplay_input()
+		Input.mouse_mode=Input.MOUSE_MODE_VISIBLE if event.pressed or _blocked() else Input.MOUSE_MODE_CAPTURED
+		get_viewport().set_input_as_handled()

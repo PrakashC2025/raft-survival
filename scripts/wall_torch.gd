@@ -23,9 +23,9 @@ func _ready() -> void:
 	_light = OmniLight3D.new()
 	_light.position.y = 0.46
 	_light.light_color = Color(1.0,0.56,0.23)
-	_light.light_energy = 1.45
-	_light.omni_range = 4.5
-	_light.omni_attenuation = 2.0
+	_light.light_energy = _visual.LIGHT_ENERGY
+	_light.omni_range = _visual.LIGHT_RANGE
+	_light.omni_attenuation = _visual.LIGHT_ATTENUATION
 	# Mobile: avoid a cubemap shadow pass for every additional torch.
 	_light.shadow_enabled = false
 	add_child(_light)
@@ -64,7 +64,7 @@ func interact_survival(player: Node) -> void:
 	if selected == "Wood":
 		player.call("_hud_toast","TAKE THE TORCH TO A BONFIRE OR COOKING SETUP TO RELIGHT")
 	else:
-		if burning and float(progress.get("torch_fuel")) > 0.0:
+		if burning and progress.is_held_lit():
 			player.call("_hud_toast","PUT OUT YOUR HELD TORCH BEFORE TAKING ANOTHER")
 			return
 		var item:="Burning Torch" if burning else "Torch"
@@ -73,7 +73,9 @@ func interact_survival(player: Node) -> void:
 			return
 		Inventory.add(item,1)
 		player.call("play_action","grab",.8,global_position,item)
-		if burning: progress.set("torch_fuel",fuel);progress.set("torch_end_time",end_time)
+		if burning:
+			if end_time<=0:end_time=CYCLE.next_dawn(player)
+			progress.set("torch_fuel",fuel);progress.set("torch_end_time",end_time);progress.set("legacy_torch",false)
 		player.get_node("SurvivalServices").equip_owned(item)
 		fuel = 0.0
 		burning = false

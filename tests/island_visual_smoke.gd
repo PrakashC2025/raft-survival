@@ -24,7 +24,7 @@ func _run() -> void:
 		for name in ["Island","ReefIsle","DriftwoodCay","FarCove"]:
 			ready = ready and current_scene.get_node(name+"/IslandLandscape").landscape_ready
 		if ready: break
-	var reference_material: Material
+	var reference_material: Material=null
 	for name in ["Island","ReefIsle","DriftwoodCay","FarCove"]:
 		var island := current_scene.get_node(name) as Node3D
 		var landscape := island.get_node("IslandLandscape")
@@ -72,7 +72,7 @@ func _run() -> void:
 	var ocean := get_first_node_in_group("ocean")
 	var water := (ocean as MeshInstance3D).get_active_material(0) as ShaderMaterial
 	var zones: PackedVector4Array = water.get_shader_parameter("island_shores")
-	check(zones.size() == 6 and zones[0].z > 0 and zones[3].z > 0,"Original four shore masks retain their slots beside two new biomes")
+	check(zones.size() == 7 and zones[0].z > 0 and zones[3].z > 0,"Original four shore masks retain their slots beside three new biomes")
 	for index in range(4):
 		var texture: Texture2D = water.get_shader_parameter("shore_height_" + str(index))
 		check(texture != null and texture.get_width() == 32 and texture.get_height() == 32,"Shore " + str(index) + " uses a compact 32-square height texture")

@@ -17,7 +17,7 @@ func frames(count: int=3) -> void:
 func settle(point: Vector2) -> void:
 	player.global_position=Vector3(point.x,TERRAIN.surface_height(point)+2.0,point.y)
 	sea.stream.call("request_position",point)
-	for unused in 420:
+	for unused in 1200:
 		await frames(1)
 		if sea.stream.call("ready_at",point) and sea.stream._pending.is_empty() and not sea.stream._busy:break
 	await frames(3)

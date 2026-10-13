@@ -68,6 +68,7 @@ func _ready() -> void:
 	_rot_speed = randf_range(-0.12, 0.12)
 
 	_apply_profile()
+	_fit_visual_collision()
 	if is_instance_valid(_model_visual):RESOURCE_VISUAL.weather(_model_visual,item_name)
 
 	mass = mass_kg
@@ -155,6 +156,16 @@ func _apply_profile() -> void:
 		mesh_instance.set_surface_override_material(0, material)
 		_fade_material = material
 
+
+func _fit_visual_collision() -> void:
+	if not is_instance_valid(_model_visual): return
+	var bounds := _node_local_aabb(_model_visual)
+	if bounds.size.length_squared() < 0.000001: return
+	# Use the same model transform as rendering, including portable tool floats.
+	bounds = _model_visual.transform * bounds
+	_set_collision_box_size(bounds.size + Vector3.ONE * 0.02)
+	var collider := get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if collider != null: collider.position = bounds.get_center()
 
 func _set_collision_box_size(size: Vector3) -> void:
 	var collision_shape := get_node_or_null("CollisionShape3D") as CollisionShape3D

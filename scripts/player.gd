@@ -17,7 +17,7 @@ const SURVIVOR_RUN_STRIDE_M := 2.37
 const SURVIVOR_RUN_CYCLE_SECONDS := 0.79
 const SWIM_SPEED := 2.0
 const SWIM_SPRINT_SPEED := 3.5
-const JUMP_VELOCITY := 4.5 # about 0.56 m, rather than a five-metre leap
+const JUMP_VELOCITY := 4.9 # about 0.67 m; a small increase from the 0.56 m jump
 const WATER_JUMP_VELOCITY := 2.8
 const GRAVITY := 18.0
 const MOUSE_SENSITIVITY := 0.00225
@@ -32,9 +32,10 @@ const SWIM_DOWN_SPEED := 3.0
 const SWIM_ACCELERATION := 12.0
 const SWIM_DECELERATION := 6.0
 const FLOAT_FORCE := 8.0
-const FLOAT_DAMPING := 0.95
-const WATER_ENTER_OFFSET := 0.3
-const WATER_EXIT_OFFSET := 1.5
+const WATER_ENTER_OFFSET := 0.08
+const WATER_EXIT_OFFSET := 0.28
+const SURFACE_SWIM_OFFSET := -0.12
+const SURFACE_TREAD_OFFSET := -0.34
 const MAX_SWIM_DEPTH := 90.0
 
 # Aim
@@ -157,12 +158,14 @@ var _sand_gather_cooldown := 0.0
 var _fishing_time_remaining := 0.0
 var _fishing_cast_target := Vector3.ZERO
 var _fishing_cooldown := 0.0
+var _fishing_catch := false
 var survival_day := 1
 var raft_upgrade_tier := 0
 var life_vest_equipped := false
 var _life_vest_visual: MeshInstance3D = null
 var _survivor_animator: AnimationPlayer = null
 var _survivor_animation: String = ""
+var _survivor_motion: RefCounted = null
 var ghost: Node3D = null
 var build_rotation: float = 0.0
 var build_rotation_x: float = 0.0
@@ -295,6 +298,7 @@ func _ready() -> void:
 		Stats.player_died.connect(_on_player_died)
 	raft_upgrade_tier = clampi(int(Inventory.loaded_meta.get("raft_upgrade_tier", 0)), 0, 2)
 	life_vest_equipped = bool(Inventory.loaded_meta.get("life_vest_equipped", false))
+	_fishing_catch = bool(Inventory.loaded_meta.get("fishing_catch",false))
 	# The raft is a sibling and may not have joined its group yet during this
 	# node's _ready(); defer until the whole scene has entered the tree.
 	call_deferred("_restore_raft_upgrade_state")
@@ -406,6 +410,15 @@ func _setup_survivor_materials() -> void:
 		return
 	# Imported model faces +Z; gameplay/camera forward is -Z.
 	survivor.rotation.y = PI
+	if survivor.scene_file_path=="res://models/mixamo_survivor.glb":
+		# Keep the new human's authored skin, clothing, eyes and normal maps.
+		for visual in survivor.find_children("*","GeometryInstance3D",true,false):
+			visual.ignore_occlusion_culling=true;visual.extra_cull_margin=.8
+		_survivor_motion=preload("res://scripts/survivor_motion.gd").new()
+		var gait_data:=preload("res://scripts/mixamo_motion_data.gd")
+		_survivor_motion.call("configure",gait_data.WALK_STRIDE_M,gait_data.RUN_STRIDE_M)
+		_setup_survivor_animations(survivor)
+		return
 	for candidate in survivor.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := candidate as MeshInstance3D
 		if mesh_instance == null or mesh_instance.mesh == null:
@@ -461,8 +474,15 @@ func _setup_survivor_animations(survivor: Node3D) -> void:
 		if idle_clip.is_empty() or walk_clip.is_empty() or run_clip.is_empty():
 			continue
 		_survivor_animator = animator
-		_add_swim_animation(animator, idle_clip, survivor)
-		for clip_name in [idle_clip, walk_clip, run_clip]:
+		if _survivor_motion != null:
+			animator.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+		if _find_survivor_clip(animator,"Swim").is_empty():_add_swim_animation(animator,idle_clip,survivor)
+		if _find_survivor_clip(animator,"Jump").is_empty():_add_jump_animation(animator,idle_clip)
+		var loop_clips: Array[String]=[idle_clip,walk_clip,run_clip]
+		for loop_name in ["WalkLeft","WalkRight","RunLeft","RunRight","WalkBack","Swim","TreadWater","Fall","Work","Hold","Carry"]:
+			var loop_clip:=_find_survivor_clip(animator,loop_name)
+			if not loop_clip.is_empty():loop_clips.append(loop_clip)
+		for clip_name in loop_clips:
 			var animation := animator.get_animation(clip_name)
 			if animation != null:
 				animation.loop_mode = Animation.LOOP_LINEAR
@@ -484,12 +504,25 @@ func _play_survivor_animation(requested_name: String) -> void:
 	var clip_name := _find_survivor_clip(_survivor_animator, requested_name)
 	if clip_name.is_empty() or clip_name == _survivor_animation:
 		return
-	_survivor_animator.play(clip_name, 0.15)
+	_survivor_animator.play(clip_name, 0.06 if requested_name=="Jump" else 0.15)
 	_survivor_animation = clip_name
 
 
 func _update_survivor_animation(sprinting: bool) -> void:
 	if _survivor_animator == null or _body_visual == null:
+		return
+	if _survivor_motion!=null:
+		_body_visual.rotation.x=lerp_angle(_body_visual.rotation.x,0.0,clampf(get_physics_process_delta_time()*5.0,0,1))
+		var motion_pose: Dictionary=_survivor_motion.call("sample",self,sprinting,get_physics_process_delta_time())
+		_play_survivor_animation(str(motion_pose.clip))
+		_survivor_animator.speed_scale=float(motion_pose.speed)
+		if float(motion_pose.phase)>=0:
+			var motion_clip:=_survivor_animator.get_animation(_survivor_animation)
+			# One physical clock advances clips and blend weights. Do not also
+			# advance them in the render loop after seeking a ballistic pose.
+			var sample_time := float(motion_pose.phase)*motion_clip.length
+			_survivor_animator.seek(maxf(0.0,sample_time-get_physics_process_delta_time()),false)
+		_survivor_animator.advance(get_physics_process_delta_time())
 		return
 	var real_velocity := get_real_velocity()
 	var horizontal_speed := _gait_speed if not is_swimming else Vector2(real_velocity.x, real_velocity.z).length()
@@ -499,6 +532,8 @@ func _update_survivor_animation(sprinting: bool) -> void:
 	var animation_name := "Idle"
 	if is_swimming:
 		animation_name = "Swim"
+	elif not is_on_floor():
+		animation_name = "Jump"
 	if is_on_floor() and not is_swimming and horizontal_speed >= 0.65:
 		animation_name = "Run" if sprinting else "Walk"
 		var stride_m := SURVIVOR_RUN_STRIDE_M if sprinting else SURVIVOR_WALK_STRIDE_M
@@ -510,7 +545,12 @@ func _update_survivor_animation(sprinting: bool) -> void:
 	else:
 		_survivor_animator.speed_scale = clampf(horizontal_speed/2.0,.65,1.35) if is_swimming else 1.0
 	_play_survivor_animation(animation_name)
-	if _gait_active and animation_name in ["Walk","Run"]:
+	if animation_name=="Jump":
+		# Follow the real ballistic arc; keep the falling pose if a drop is longer.
+		var jump_clip:=_survivor_animator.get_animation(_survivor_animation)
+		var jump_phase:=clampf((JUMP_VELOCITY-velocity.y)/(2.0*JUMP_VELOCITY),0.0,.98)
+		_survivor_animator.seek(jump_phase*jump_clip.length,true)
+	elif _gait_active and animation_name in ["Walk","Run"]:
 		# The contact clock also drives the displayed feet in both camera modes.
 		var clip:=_survivor_animator.get_animation(_survivor_animation)
 		_survivor_animator.seek(_gait_phase*clip.length,true)
@@ -597,6 +637,7 @@ func _advance_gait(delta: float, speed: float, sprinting: bool, grounded: bool) 
 		return
 	_gait_active=true
 	var stride:=SURVIVOR_RUN_STRIDE_M if sprinting else SURVIVOR_WALK_STRIDE_M
+	if _survivor_motion!=null:stride=float(_survivor_motion.get("run_stride" if sprinting else "walk_stride"))
 	var previous:=_gait_phase
 	# Discard missed contact time after a stalled frame; never replay a burst.
 	var next:=previous+speed*clampf(delta,0,.10)/stride
@@ -650,6 +691,7 @@ func _stamp_sand_footprint() -> void:
 # ============================================================
 func _handle_camera_and_hotbar_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
+		if Input.mouse_mode!=Input.MOUSE_MODE_CAPTURED:return
 		var relative := (event as InputEventMouseMotion).screen_relative
 		if GameSettings.invert_look:relative.y=-relative.y
 		add_look_input(relative,MOUSE_SENSITIVITY*GameSettings.look_speed)
@@ -773,12 +815,14 @@ func _physics_process(delta: float) -> void:
 		input_dir = Vector2.ZERO
 	var direction := _get_movement_direction(input_dir)
 	var sprinting := Input.is_action_pressed("sprint")
+	_update_swimming_state(water_y,has_ocean)
 	if is_swimming:
 		_update_swimming(delta, direction, water_y, sprinting)
 	else:
 		_update_land(delta, direction, sprinting)
 		_try_step_up()
 	move_and_slide()
+	if has_ocean: water_y = oc.get_height(global_position)
 	_update_swimming_state(water_y, has_ocean)
 	_update_footsteps(delta, sprinting)
 	_update_survivor_animation(sprinting)
@@ -788,16 +832,21 @@ func _physics_process(delta: float) -> void:
 
 func _update_swimming_state(water_y: float, has_ocean: bool) -> void:
 	was_swimming = is_swimming
-	if has_ocean:
+	if has_ocean and not (is_on_floor() and global_position.y > water_y-0.35):
 		if is_swimming:
-			is_swimming = global_position.y < water_y + WATER_EXIT_OFFSET and (not is_on_floor() or camera.global_position.y < water_y-0.3)
+			is_swimming = global_position.y < water_y + WATER_EXIT_OFFSET
 		else:
 			is_swimming = global_position.y < water_y + WATER_ENTER_OFFSET
 	else:
 		is_swimming = false
-	if is_swimming != was_swimming:
-		if not is_swimming:
-			velocity.y = min(velocity.y, 0.0)
+	# Leaving water keeps the real vertical momentum; land gravity handles it.
+	# Follow-camera position cannot put a dry grounded body back into swimming.
+
+func movement_owns_hands() -> bool:
+	if not is_swimming and is_on_floor(): return false
+	if build_mode or is_instance_valid(_editing): return false
+	if _action != null and not str(_action.get("kind")).is_empty(): return false
+	return rope_system == null or not rope_system.is_active()
 
 func _get_movement_direction(input_dir: Vector2) -> Vector3:
 	var forward := -global_transform.basis.z
@@ -823,8 +872,12 @@ func _update_swimming(delta: float, direction: Vector3, water_y: float, sprintin
 	if get_node("SurvivalProgression").stamina < 10:
 		spd = SWIM_SPEED * 0.65
 	var input_axis := Input.get_vector("move_left","move_right","move_back","move_forward")
-	var vertical_aim := (-camera.global_basis.z).y * input_axis.y
+	# The follow camera normally looks downward at the avatar, not where a
+	# swimmer wants to dive. Third person uses the explicit Dive/Up controls.
+	var vertical_aim := (-camera.global_basis.z).y * input_axis.y if cam_mode==CAM_FPS else 0.0
 	var steering := Vector3(direction.x,vertical_aim,direction.z).limit_length(1.0)
+	var depth := water_y - global_position.y
+	var near_surface := depth > -WATER_EXIT_OFFSET and depth < 1.4
 	velocity.x = move_toward(velocity.x,steering.x*spd,SWIM_ACCELERATION*delta)
 	velocity.z = move_toward(velocity.z,steering.z*spd,SWIM_ACCELERATION*delta)
 	if Input.is_action_just_pressed("jump"):
@@ -833,15 +886,16 @@ func _update_swimming(delta: float, direction: Vector3, water_y: float, sprintin
 		velocity.y = move_toward(velocity.y, SWIM_UP_CONTINUOUS, SWIM_ACCELERATION * delta)
 	elif Input.is_action_pressed("move_down"):
 		velocity.y = move_toward(velocity.y, -SWIM_DOWN_SPEED, SWIM_ACCELERATION * delta)
-	else:
+	elif absf(vertical_aim)>.15 or not near_surface:
 		velocity.y = move_toward(velocity.y, steering.y*spd, SWIM_ACCELERATION * delta)
-	var depth := water_y - global_position.y
-	if depth > -1.0 and depth < 2.0:
-		var surface_target := water_y + 0.2
-		var error := surface_target - global_position.y
-		if abs(error) > 0.3 and absf(vertical_aim)<0.15 and not Input.is_action_pressed("jump") and not Input.is_action_pressed("move_down"):
-			velocity.y += error * FLOAT_FORCE * delta
-		velocity.y *= FLOAT_DAMPING
+	var surface_target := water_y + (SURFACE_SWIM_OFFSET if Vector2(velocity.x,velocity.z).length()>.35 else SURFACE_TREAD_OFFSET)
+	if near_surface:
+		if not Input.is_action_pressed("jump") and not Input.is_action_pressed("move_down") and absf(vertical_aim)<.15:
+			var surface_velocity := clampf((surface_target-global_position.y)*4.0,-1.3,1.3)
+			velocity.y=lerpf(velocity.y,surface_velocity,1.0-exp(-FLOAT_FORCE*delta))
+		# Holding swim-up/aiming upward must not propel strokes into clear air.
+		elif global_position.y>=surface_target+.05 and not Input.is_action_just_pressed("jump"):
+			velocity.y=minf(velocity.y,0.0)
 	if depth > MAX_SWIM_DEPTH:
 		velocity.y = move_toward(velocity.y, 0.0, SWIM_DECELERATION * delta)
 
@@ -902,6 +956,9 @@ func _try_step_up() -> void:
 	velocity.y = 0.0
 func _handle_pickup() -> void:
 	if not Input.is_action_just_pressed("interact"):
+		return
+	if active_item=="Fishing Rod" and _fishing_catch:
+		_handle_selected_item_use()
 		return
 	if active_item in ["Pickaxe","Shovel","Paddle","Anchor","Spear"] and not (active_item=="Shovel" and aim_collider is PlantInstance):
 		get_node("SurvivalTools").call("use")
@@ -1045,6 +1102,13 @@ func _handle_selected_item_use() -> void:
 			get_node("SurvivalTools").call("use")
 			return
 		"Fishing Rod":
+			if _fishing_catch:
+				if _action.kind=="take_fish":return
+				if not Inventory.can_store_rewards({"Fish":1}):
+					_hud_toast("BAG FULL · FISH STAYS ON THE LINE")
+					return
+				play_action("take_fish",1.25,_equipment.call("catch_position"),"Fish")
+				return
 			if _fishing_time_remaining > 0.0:
 				return
 			if _fishing_cooldown > 0.0:
@@ -1112,14 +1176,20 @@ func _tick_fishing(delta: float) -> void:
 	_fishing_time_remaining = maxf(0.0, _fishing_time_remaining - delta)
 	if before>1.2 and _fishing_time_remaining<=1.2:play_action("reel",1.2,_fishing_cast_target)
 	if _fishing_time_remaining <= 0.0:
-		var overflow := Inventory.add("Fish", 1)
-		if overflow > 0:
-			_spawn_item_pickup("Fish", overflow, global_position + Vector3(0.0, -0.55, -0.45))
-			_hud_toast("FISH CAUGHT  •  DROPPED NEARBY")
-		else:
-			_hud_toast("FISH CAUGHT")
-		play_world_sfx(PICKUP_SOUND, -11.0)
+		_fishing_catch = true
+		_hud_toast("FISH ON THE LINE · TAP THE HAND TO TAKE IT")
 		_queue_save()
+
+func take_fishing_catch() -> bool:
+	# One atomic transfer at the visible unhook contact, including late overflow.
+	if not _fishing_catch or active_item!="Fishing Rod" or is_swimming or build_mode or get_tree().paused or GameSettings.is_open:return false
+	var hud:=get_node("CanvasLayer/SurvivalHUD")
+	if hud.call("gameplay_input_blocked") or not Inventory.try_exchange({}, {"Fish":1}):return false
+	_fishing_catch=false
+	_equipment.call("_update_cast")
+	Inventory.notify_pickup("Fish",1)
+	_queue_save()
+	return true
 
 func _valid_fishing_cast() -> bool:
 	if camera == null or is_swimming:
@@ -1690,6 +1760,7 @@ func _write_save(slot: String) -> bool:
 		meta[stat_name] = stat_state[stat_name]
 	meta["raft_upgrade_tier"] = raft_upgrade_tier
 	meta["life_vest_equipped"] = life_vest_equipped
+	meta["fishing_catch"] = _fishing_catch
 	var rain := get_tree().get_first_node_in_group("rain_system")
 	if rain != null:
 		meta["weather"] = rain.call("save_weather_state")
@@ -2281,8 +2352,13 @@ func _update_hand_sway(_delta: float) -> void:
 		_hand_item.rotation.x -= draw_fraction * 0.12
 	if _action!=null:
 		var action_pose: Dictionary=_action.call("sample_pose")
-		_hand_item.position+=action_pose.view_pos
-		_hand_item.rotation+=action_pose.view_rot
+		if active_item=="Fishing Rod" and _action.kind=="take_fish":
+			# The left-hand reach must not drag the right-hand rod across the view.
+			_hand_item.position+=Vector3(0,.08,0)
+			_hand_item.rotation.x+=.60
+		else:
+			_hand_item.position+=action_pose.view_pos
+			_hand_item.rotation+=action_pose.view_rot
 	if _rope_launcher != null and is_instance_valid(_rope_launcher):
 		_rope_launcher.get_node("LoadedHook").visible = not rope_system.is_active()
 	if _third_person_launcher != null and is_instance_valid(_third_person_launcher):
@@ -2297,6 +2373,7 @@ func _update_hand_sway(_delta: float) -> void:
 ##     case — in real life you only take debris that is within your pickable
 ##     range, and the E key collects those even without precise aiming).
 func interaction_caption() -> String:
+	if active_item=="Fishing Rod" and _fishing_catch:return "TAKING FISH" if _action.kind=="take_fish" else "TAKE FISH"
 	if not preload("res://scripts/garden_items.gd").box_crop(active_item).is_empty():return "OPEN BOX"
 	if active_item=="Wire":return _power_wiring().caption()
 	if active_item=="ElectricLamp":
@@ -2313,6 +2390,9 @@ func interaction_caption() -> String:
 	if not is_instance_valid(aim_collider):aim_collider=null;aim_valid=false
 	if active_item=="Binoculars":return "LOWER" if get_node("PortableElectronics").zoomed else "LOOK"
 	if active_item in ["Solar Torch","Walkie Talkie","ElectricLamp"] and not get_node("PortableElectronics").fault_for(active_item).is_empty():return "SHAKE" if get_node("PortableElectronics").fault_for(active_item)=="contact" else "REPAIR"
+	if active_item in ["Solar Torch","Walkie Talkie","ElectricLamp"]:
+		var tools:=get_node("PortableElectronics")
+		if tools.cover_open or tools.battery_animation>0:return ""
 	if active_item in ["Solar Torch","ElectricLamp"]:return "LIGHT OFF" if get_node("PortableElectronics").enabled[active_item] else "LIGHT ON"
 	if active_item=="Walkie Talkie":return "SEND SIGNAL" if get_node("PortableElectronics").enabled[active_item] else "POWER ON"
 	if active_item in ["Torch","Burning Torch"]:
@@ -2357,6 +2437,7 @@ func interaction_caption() -> String:
 
 
 func can_interact_now() -> bool:
+	if active_item=="Fishing Rod" and _fishing_catch:return not is_swimming and not build_mode and _action.kind!="take_fish"
 	if not preload("res://scripts/garden_items.gd").box_crop(active_item).is_empty():return Inventory.has(active_item,1)
 	if active_item=="Wire":return Inventory.has("Wire",1) and _power_wiring().target()!=null
 	if active_item.is_empty() and get_node("SurvivalProgression").call("can_refill_air"): return true
@@ -3870,16 +3951,27 @@ func mount_held_torch(locked: Dictionary={}) -> bool:
 	var torch := build_pieces[BUILD_RECIPE_NAMES.find("WallTorch")].instantiate() as Node3D
 	torch.name = "WallTorch_%d" % torch.get_instance_id()
 	torch.transform = raft.global_transform.affine_inverse() * (placement.transform as Transform3D)
-	torch.set("fuel",float(progress.get("torch_fuel")))
-	torch.set("end_time",float(progress.get("torch_end_time")))
-	torch.set("burning",float(progress.get("torch_fuel")) > 0.0)
-	if not Inventory.try_exchange({selected:1},{}):
+	var was_lit: bool=progress.is_held_lit()
+	torch.set("fuel",float(progress.get("torch_fuel")) if was_lit else 0.0)
+	torch.set("end_time",float(progress.get("torch_end_time")) if was_lit else 0.0)
+	torch.set("burning",was_lit)
+	var costs: Dictionary={selected:1}
+	var next_item:="Burning Torch" if was_lit else "Torch"
+	var remaining_lit:=Inventory.total("Burning Torch")-(1 if selected=="Burning Torch" else 0)
+	var remaining_unlit:=Inventory.total("Torch")-(1 if selected=="Torch" else 0)
+	var relay:=was_lit and remaining_lit<=0 and remaining_unlit>0
+	if relay:costs["Torch"]=int(costs.get("Torch",0))+1
+	if not Inventory.try_exchange(costs,{"Burning Torch":1} if relay else {}):
 		torch.free()
 		return false
-	progress.set("torch_fuel",0.0)
-	progress.set("torch_end_time",0.0)
-	progress.set("legacy_torch",false)
+	if not Inventory.has("Burning Torch",1):
+		progress.set("torch_fuel",0.0)
+		progress.set("torch_end_time",0.0)
+		progress.set("legacy_torch",false)
+	if was_lit:progress.set("legacy_torch",false)
 	container.add_child(torch)
+	if Inventory.has(next_item,1):get_node("SurvivalServices").equip_owned(next_item)
+	else:select_hotbar_slot(active_slot_index)
 	_hud_toast("TORCH MOUNTED · USE TO TAKE · STONES TO LIGHT / PUT OUT")
 	_queue_save()
 	return true
@@ -6438,7 +6530,9 @@ func _update_head_bob(delta: float) -> void:
 	camera.position = _head_bob_offset
 
 func _update_swim_splash() -> void:
-	var active := is_swimming and Vector2(velocity.x,velocity.z).length() > 0.5 and GameSettings.quality != 1
+	var sea := _get_ocean()
+	var water_y := sea.get_height(global_position) if sea!=null else 0.0
+	var active := is_swimming and sea!=null and absf(global_position.y-water_y)<.55 and Vector2(velocity.x,velocity.z).length() > 0.5 and GameSettings.quality != 1
 	if _swim_splash == null and active:
 		_swim_splash = GPUParticles3D.new()
 		_swim_splash.amount = 16
@@ -6459,15 +6553,40 @@ func _update_swim_splash() -> void:
 		quad.size = Vector2(0.028,0.06)
 		var mat := StandardMaterial3D.new()
 		mat.albedo_color = Color(0.72,0.86,0.93,0.5)
+		mat.albedo_texture=preload("res://textures/underwater/swim_droplet.svg")
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 		mat.roughness = 0.2
 		quad.material = mat
 		_swim_splash.draw_pass_1 = quad
 		_swim_splash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_swim_splash.position.y = -0.45
 		add_child(_swim_splash)
-	if _swim_splash != null: _swim_splash.emitting = active
+	if _swim_splash != null:
+		_swim_splash.emitting=active;_swim_splash.visible=active
+		if active:_swim_splash.global_position=Vector3(global_position.x,water_y+.02,global_position.z)
+
+func _add_jump_animation(animator: AnimationPlayer,idle_name: String) -> void:
+	var animation:=animator.get_animation(idle_name).duplicate() as Animation
+	animation.length=1.0
+	animation.loop_mode=Animation.LOOP_NONE
+	for track in animation.get_track_count():
+		if animation.track_get_type(track)!=Animation.TYPE_ROTATION_3D or animation.track_get_key_count(track)==0:continue
+		var path:=str(animation.track_get_path(track))
+		var bend:=0.0
+		if path.contains("UpperLeg"):bend=-.45
+		elif path.contains("LowerLeg"):bend=.85
+		elif path.contains("UpperArm"):bend=-.40
+		elif path.contains("LowerArm"):bend=-.55
+		elif path.ends_with(":Chest"):bend=.10
+		if is_zero_approx(bend):continue
+		var resting: Quaternion=animation.track_get_key_value(track,0)
+		while animation.track_get_key_count(track)>0:animation.track_remove_key(track,0)
+		var times: Array[float]=[0.0,.18,.50,.82,1.0]
+		var weights: Array[float]=[.20,.80,1.0,.25,0.0]
+		for index in times.size():
+			animation.rotation_track_insert_key(track,times[index],resting*Quaternion(Vector3.RIGHT,bend*weights[index]))
+	if not animator.has_animation_library("Survival"):animator.add_animation_library("Survival",AnimationLibrary.new())
+	animator.get_animation_library("Survival").add_animation("Jump",animation)
 
 func _add_swim_animation(animator: AnimationPlayer, idle_name: String, _survivor: Node3D) -> void:
 	var animation := animator.get_animation(idle_name).duplicate() as Animation

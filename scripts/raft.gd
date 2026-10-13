@@ -43,6 +43,8 @@ func _ready() -> void:
 	rotation = Vector3.ZERO
 	var starter := preload("res://scripts/starter_raft_visual.gd").create()
 	add_child(starter)
+	for visual in starter.find_children("*","GeometryInstance3D",true,false):
+		visual.ignore_occlusion_culling = true
 	var old_deck := get_node_or_null("MeshInstance3D") as MeshInstance3D
 	if old_deck != null: old_deck.hide()
 	set_anchored(bool(Inventory.loaded_meta.get("raft_anchored",false)),false)

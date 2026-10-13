@@ -1,0 +1,29 @@
+{
+  "source": "Owner-supplied models/coconut_palm.glb",
+  "source_sha256": "be3d6fef279bc41760f673e188a4096bb3c5071f55c5ce69399a111d2ecd92e5",
+  "change": "Retain taller stem and only its complete collar, fronds, leaf stems and crown; textures unchanged",
+  "rights": "Inherits the supplied asset's rights; no new external asset or license claim",
+  "generator": "tools/prepare_single_coconut.py",
+  "geometry": {
+    "Tree_0_Trunk": {
+      "parts": 1,
+      "triangles": 440
+    },
+    "Tree_1_leaf_collar": {
+      "parts": 1,
+      "triangles": 56
+    },
+    "leafs": {
+      "parts": 18,
+      "triangles": 1296
+    },
+    "Tree_3_leaf_stems": {
+      "parts": 22,
+      "triangles": 564
+    },
+    "Tree_4_leaf_crown": {
+      "parts": 16,
+      "triangles": 984
+    }
+  }
+}

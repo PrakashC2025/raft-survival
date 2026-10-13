@@ -1,0 +1,318 @@
+{
+  "character": "Remy",
+  "clips": [
+    {
+      "file": "Neutral Idle.fbx",
+      "loop": true,
+      "name": "Idle",
+      "pack": "",
+      "seconds": 8.76666666666667,
+      "sha256": "b701b360d532051ebbfe23eb4a771132d4ffe19c1b66ef1d134b9ba79b1195b5",
+      "stride_m": 1.53154947179767e-08
+    },
+    {
+      "file": "walking.fbx",
+      "loop": true,
+      "name": "Walk",
+      "pack": "Male Locomotion Pack",
+      "seconds": 1.03333333333333,
+      "sha256": "0b5ef7b0572bdfdd0b2a262ecb0a07deae6fb63dfec3597b1db07526267a6036",
+      "stride_m": 1.60059348760213
+    },
+    {
+      "file": "standard run.fbx",
+      "loop": true,
+      "name": "Run",
+      "pack": "Male Locomotion Pack",
+      "seconds": 0.733333333333333,
+      "sha256": "cecc0d20777ce0c9f348c7aed76e8a26c29a658e1f5112499829d20cc25a71ac",
+      "stride_m": 3.00639787163612
+    },
+    {
+      "file": "left strafe walking.fbx",
+      "loop": true,
+      "name": "WalkLeft",
+      "pack": "Male Locomotion Pack",
+      "seconds": 1.03333333333333,
+      "sha256": "68e44d17d4c9eaa3d1dee765c9a3524736a2b1d6a756e99c8f5b49547e691c27",
+      "stride_m": 1.66080459625306
+    },
+    {
+      "file": "right strafe walking.fbx",
+      "loop": true,
+      "name": "WalkRight",
+      "pack": "Male Locomotion Pack",
+      "seconds": 1.03333333333333,
+      "sha256": "60624c58aa660c6992dfcd23ce75edd84b9ff4ed3e61570322594dfb868c62fc",
+      "stride_m": 1.66080470850429
+    },
+    {
+      "file": "left strafe.fbx",
+      "loop": true,
+      "name": "RunLeft",
+      "pack": "Male Locomotion Pack",
+      "seconds": 0.666666666666667,
+      "sha256": "c21555df118b4118a199132d99874044bb322f8b52f95d8cc43daf50e38af237",
+      "stride_m": 2.79743570376385
+    },
+    {
+      "file": "right strafe.fbx",
+      "loop": true,
+      "name": "RunRight",
+      "pack": "Male Locomotion Pack",
+      "seconds": 0.666666666666667,
+      "sha256": "c6c9232e9b605fbb6a3e8251f437ff41530bb993643c9cf93c1260a91dc2aba3",
+      "stride_m": 2.7974359282663
+    },
+    {
+      "file": "Unarmed Walk Back.fbx",
+      "loop": true,
+      "name": "WalkBack",
+      "pack": "",
+      "seconds": 1.3,
+      "sha256": "27714b345f125deac16a9ad3234cf16e05ee6b3a759a7c4b497a1b5f1c9a3c2c",
+      "stride_m": 2.97829037696658e-07
+    },
+    {
+      "file": "Standing Jump.fbx",
+      "loop": false,
+      "name": "Jump",
+      "pack": "",
+      "seconds": 0.7000000000000001,
+      "sha256": "719973a700a6c03f25a85ba32fe8396c38700f001cd7915d98b0eb448ff3f756",
+      "stride_m": 1.83916659403975e-07,
+      "source_window_seconds": [
+        0.57,
+        1.27
+      ],
+      "hip_yaw_removed": true
+    },
+    {
+      "file": "falling idle.fbx",
+      "loop": true,
+      "name": "Fall",
+      "pack": "",
+      "seconds": 0.7,
+      "sha256": "59d21e07125aadaa299aa4e59ca031c0546a0677351050a8811bb33928357cb0",
+      "stride_m": 0.0
+    },
+    {
+      "file": "Standing Jump.fbx",
+      "loop": false,
+      "name": "Land",
+      "pack": "",
+      "seconds": 0.8300000000000001,
+      "sha256": "719973a700a6c03f25a85ba32fe8396c38700f001cd7915d98b0eb448ff3f756",
+      "stride_m": 0.0740067071603621,
+      "source_window_seconds": [
+        1.27,
+        2.1
+      ],
+      "hip_yaw_removed": true
+    },
+    {
+      "file": "Swimming.fbx",
+      "loop": true,
+      "name": "Swim",
+      "pack": "",
+      "seconds": 4.53333333333333,
+      "sha256": "94f8e61409ca95e727bd96b9bc7f255f45287492745d2f4de51202705bb97977",
+      "stride_m": 4.22401170898998e-08
+    },
+    {
+      "file": "Treading Water.fbx",
+      "loop": true,
+      "name": "TreadWater",
+      "pack": "",
+      "seconds": 3.0,
+      "sha256": "ef984817f41e08c8b8f3b407277579958417d51424419694d8a5fffb89f66f38",
+      "stride_m": 3.64968249700683e-08
+    },
+    {
+      "file": "left turn 90.fbx",
+      "loop": false,
+      "name": "TurnLeft",
+      "pack": "Male Locomotion Pack",
+      "seconds": 0.933333333333333,
+      "sha256": "5d4ee9c29acc8e6896163cbec2afbe96a09824aa8fb25e39d13afc2f9af7e751",
+      "stride_m": 0.0128324154637481
+    },
+    {
+      "file": "right turn 90.fbx",
+      "loop": false,
+      "name": "TurnRight",
+      "pack": "Male Locomotion Pack",
+      "seconds": 0.933333333333333,
+      "sha256": "c5cea19b101b982668cca8452c9244f4ee47077a3eb3bbab2694b3bf7fee79c6",
+      "stride_m": 0.0140559590895226
+    },
+    {
+      "file": "dig and plant seeds.fbx",
+      "loop": false,
+      "name": "Plant",
+      "pack": "Farming Pack",
+      "seconds": 5.5,
+      "sha256": "0f879a4bd940dfa5977e52ea92cdcd112d69039f5108dd1af1f5b6754653b3ad",
+      "stride_m": 2.28008954079979e-06
+    },
+    {
+      "file": "pull plant.fbx",
+      "loop": false,
+      "name": "Harvest",
+      "pack": "Farming Pack",
+      "seconds": 4.66666666666667,
+      "sha256": "7a1c67de067362422e1d48c8af3cea80f5ac4644da1e33c2591cf9dbe53adb8d",
+      "stride_m": 3.74410019886713e-06
+    },
+    {
+      "file": "pull plant (2).fbx",
+      "loop": false,
+      "name": "Gather",
+      "pack": "Farming Pack",
+      "seconds": 4.73333333333333,
+      "sha256": "0252b10135a636fecd8e95ec86959209d2282a603bb418ee8c0b8a4ea41a09ae",
+      "stride_m": 1.76401095992841e-07
+    },
+    {
+      "file": "plant tree.fbx",
+      "loop": false,
+      "name": "PlantTree",
+      "pack": "Farming Pack",
+      "seconds": 9.26666666666667,
+      "sha256": "58dd66133233926ac907d9c0a43924dabc6cb5f89a7ec680444677d58db5c129",
+      "stride_m": 4.89562416698001e-06
+    },
+    {
+      "file": "pick fruit.fbx",
+      "loop": false,
+      "name": "PickLow",
+      "pack": "Farming Pack",
+      "seconds": 8.0,
+      "sha256": "f5f38ee7b1bc4e57b5206e5e5cfe51749aea48eeb5f8dce17e68342062f97d07",
+      "stride_m": 5.6218439187049e-06
+    },
+    {
+      "file": "pick fruit (2).fbx",
+      "loop": false,
+      "name": "PickFruit",
+      "pack": "Farming Pack",
+      "seconds": 6.2,
+      "sha256": "6e51c228d367d228778d10bbf9f82a17deaf965acf6502610a3f2d997b519c3b",
+      "stride_m": 1.21027998752098e-07
+    },
+    {
+      "file": "pick fruit (3).fbx",
+      "loop": false,
+      "name": "PickHigh",
+      "pack": "Farming Pack",
+      "seconds": 7.1,
+      "sha256": "f96623a619b94771c2adfbdb8b4c415f2c794e976cf252db594d03d8972c9e15",
+      "stride_m": 9.25086031911285e-06
+    },
+    {
+      "file": "watering.fbx",
+      "loop": false,
+      "name": "Water",
+      "pack": "Farming Pack",
+      "seconds": 5.6,
+      "sha256": "695219a1ee7212e5e5e6cd846c7ba6aeb85095c7fccf208fcd6fe41057395719",
+      "stride_m": 3.03950835783175e-07
+    },
+    {
+      "file": "kneeling idle.fbx",
+      "loop": true,
+      "name": "Work",
+      "pack": "Farming Pack",
+      "seconds": 4.26666666666667,
+      "sha256": "62db04e3bc1855f932184911acdb0711ecb4d271b3564c5cd2a9a68c80844e34",
+      "stride_m": 3.34215603367461e-06
+    },
+    {
+      "file": "holding idle.fbx",
+      "loop": true,
+      "name": "Hold",
+      "pack": "Farming Pack",
+      "seconds": 6.0,
+      "sha256": "9d2325f2f8184c8b63c96e5a1b8b5d68853edc61d6e6c1da3f7f943b95dc4e46",
+      "stride_m": 1.68019930677338e-06
+    },
+    {
+      "file": "holding walk.fbx",
+      "loop": true,
+      "name": "Carry",
+      "pack": "Farming Pack",
+      "seconds": 1.36666666666667,
+      "sha256": "29c33abf7166084906d2206ac6d286ded12d27ba19ab0c69c9672480b8707a60",
+      "stride_m": 1.56954940077562
+    },
+    {
+      "file": "Drinking.fbx",
+      "loop": false,
+      "name": "Drink",
+      "pack": "",
+      "seconds": 8.86666666666667,
+      "sha256": "dc0a7c63450dd6d970832a4848070927a6e9d728b09a55e03645b32b870ba336",
+      "stride_m": 0.000297387726769908
+    }
+  ],
+  "height_m": 1.8,
+  "license": "Adobe Mixamo - royalty-free game use, not CC0",
+  "source": "https://www.mixamo.com/",
+  "textures": [
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 512,
+      "width": 512
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    },
+    {
+      "height": 1024,
+      "width": 1024
+    }
+  ],
+  "turn_root_yaw": "Removed Y-axis twist from turn hips; gameplay owns yaw; limb clips retained.",
+  "runtime_sha256": "889134e4629b2734d8909085be261aac27e1cfee5c3b37d6b930e2c87ebc2089",
+  "jump_landing_repair": "Flight and grounded recovery separated; landing retains original vertical crouch."
+}

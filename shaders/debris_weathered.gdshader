@@ -1,5 +1,6 @@
 shader_type spatial;
 render_mode diffuse_burley, specular_schlick_ggx;
+#include "res://shaders/salvage_photo.gdshaderinc"
 uniform vec4 base_color : source_color = vec4(0.5,0.4,0.3,1.0);
 uniform sampler2D source_texture : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D timber_texture : source_color, filter_linear_mipmap, repeat_enable;
@@ -18,7 +19,11 @@ float noise(vec3 p) {
 	vec3 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);
 	return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);
 }
-void vertex() { local_position=VERTEX*detail_scale; local_normal=NORMAL; world_height=(MODEL_MATRIX*vec4(VERTEX,1.0)).y; }
+void vertex() {
+ local_position=VERTEX*detail_scale; local_normal=NORMAL;
+ world_height=(MODEL_MATRIX*vec4(VERTEX,1.0)).y;
+ photo_local_normal=NORMAL;
+}
 void fragment() {
 	vec3 p=local_position;
 	float broad=noise(p*12.0),fine=noise(p*155.0);
@@ -28,7 +33,14 @@ void fragment() {
 	if (barrel && has_texture && max(color.r,max(color.g,color.b))-min(color.r,min(color.g,color.b))<0.12 && color.r>0.35) kind=1;
 	float relief=fine*0.25;
 	float rough=0.78,metal=0.0;
-	if (kind==0) {
+	bool photographed=photo_surface && kind==1;
+	if (photographed) {
+		vec3 arm,bump;
+		sample_salvage_photo(p,color,arm,bump);
+		color*=mix(vec3(1.0),base_color.rgb*2.0,0.18)*COLOR.rgb;
+		rough=clamp(arm.g,0.45,0.98);metal=arm.b;AO=arm.r;
+		NORMAL=normalize(mix(NORMAL,mat3(VIEW_MATRIX)*MODEL_NORMAL_MATRIX*bump,0.35));
+	} else if (kind==0) {
 		if (timber_atlas) {
 			float along=horizontal_wood?p.z:p.y;
 			float around=horizontal_wood?atan(p.y,p.x):atan(p.z,p.x);
@@ -73,6 +85,8 @@ void fragment() {
 	// Below bloom brightness; no added lights, outlines or per-object passes.
 	EMISSION=ALBEDO*vec3(0.68,0.78,0.94)*night_readability*0.45;
 	ROUGHNESS=clamp(rough-damp*0.12,0.2,0.98);METALLIC=metal;SPECULAR=0.35;
-	NORMAL_MAP=normalize(vec3(-dFdx(relief)*0.2,-dFdy(relief)*0.2,1.0))*0.5+0.5;
-	NORMAL_MAP_DEPTH=0.2;
+	if (!photographed) {
+		NORMAL_MAP=normalize(vec3(-dFdx(relief)*0.2,-dFdy(relief)*0.2,1.0))*0.5+0.5;
+		NORMAL_MAP_DEPTH=0.2;
+	}
 }

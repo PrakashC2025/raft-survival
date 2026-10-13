@@ -33,8 +33,9 @@ func _quality_changed() -> void:
 	if _active_quality!=GameSettings.quality:
 		_active_quality=GameSettings.quality
 		for chunk in chunks.values():
-			var shape: CollisionShape3D=chunk.get_meta("collision")
-			shape.queue_free();chunk.queue_free()
+			var shape: CollisionShape3D=chunk.get_meta("collision") if chunk.has_meta("collision") else null
+			if is_instance_valid(shape):shape.queue_free()
+			chunk.queue_free()
 		chunks.clear();_pending.clear()
 	_radius=[1,1,2,2,3][GameSettings.quality]
 	_centre=Vector2i(99999,99999)
@@ -62,8 +63,9 @@ func request_position(point: Vector2) -> void:
 	for tile in chunks.keys():
 		if tile in wanted:continue
 		var chunk: Node3D=chunks[tile]
-		var collision: CollisionShape3D=chunk.get_meta("collision")
-		collision.queue_free();chunk.queue_free();chunks.erase(tile)
+		var collision: CollisionShape3D=chunk.get_meta("collision") if chunk.has_meta("collision") else null
+		if is_instance_valid(collision):collision.queue_free()
+		chunk.queue_free();chunks.erase(tile)
 	_pending.sort_custom(func(a: Vector2i,b: Vector2i):return Vector2(a-centre).length_squared()<Vector2(b-centre).length_squared())
 
 func ready_at(point: Vector2) -> bool:
@@ -71,12 +73,17 @@ func ready_at(point: Vector2) -> bool:
 	return chunks.has(tile) and bool(chunks[tile].get_meta("complete",false))
 
 func _build_next() -> void:
+	if _pending.is_empty():_busy=false;return
 	var tile: Vector2i = _pending.pop_front()
 	var chunk := Node3D.new();chunk.name="ReefTile_%d_%d"%[tile.x,tile.y]
 	chunk.position=Vector3(tile.x*TERRAIN.TILE,0,tile.y*TERRAIN.TILE);add_child(chunk)
-	var mesh := TERRAIN.mesh_at(tile)
+	chunk.set_meta("collision",null);chunk.set_meta("complete",false);chunks[tile]=chunk
+	var mesh := await TERRAIN.mesh_at_incremental(tile,get_tree())
+	if not is_instance_valid(chunk) or chunk.is_queued_for_deletion():_busy=false;return
 	var floor_visual := MeshInstance3D.new();floor_visual.name="SandDetail";floor_visual.mesh=mesh
 	floor_visual.material_override=world._ground_material;floor_visual.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF;chunk.add_child(floor_visual)
+	await get_tree().process_frame
+	if not is_instance_valid(chunk) or chunk.is_queued_for_deletion():_busy=false;return
 	var collision := CollisionShape3D.new();collision.shape=mesh.create_trimesh_shape();collision.position=chunk.position;ground.add_child(collision)
 	chunk.set_meta("collision",collision);chunk.set_meta("complete",false);chunks[tile]=chunk
 	await get_tree().process_frame
@@ -109,6 +116,9 @@ func _build_next() -> void:
 			batch.set_instance_transform(placed,Transform3D(Basis(Vector3.UP,rng.randf()*TAU).scaled(size),at))
 			batch.set_instance_color(placed,Color(rng.randf_range(.75,1),rng.randf_range(.85,1),rng.randf_range(.72,1)))
 			placed+=1
+			if BUDGET.exhausted(1,&"reef_stream",24,1500):
+				await get_tree().process_frame
+				if not is_instance_valid(chunk) or chunk.is_queued_for_deletion():_busy=false;return
 		batch.visible_instance_count=placed
 		var draw := MultiMeshInstance3D.new();draw.name=kind+"Batch";draw.multimesh=batch
 		draw.material_override=world._ruin_material if kind=="Rock" else (_kelp if kind=="Kelp" else (_plants if kind=="Grass" else _coral))
@@ -147,5 +157,5 @@ func update_light(daylight: float) -> void:
 func _exit_tree() -> void:
 	# Collision shapes live on the shared collectible floor, not their tile node.
 	for chunk in chunks.values():
-		var shape: CollisionShape3D=chunk.get_meta("collision")
+		var shape: CollisionShape3D=chunk.get_meta("collision") if chunk.has_meta("collision") else null
 		if is_instance_valid(shape):shape.queue_free()

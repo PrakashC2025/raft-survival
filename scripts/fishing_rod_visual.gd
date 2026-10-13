@@ -31,9 +31,10 @@ func _process(delta: float) -> void:
 	if _player==null:return
 	var action:=_player.get_node_or_null("SurvivalAction")
 	var reeling:=action!=null and str(action.get("kind"))=="reel"
-	if reeling:_handle.rotation.x+=delta*15
+	if reeling:_handle.rotation.x+=delta*TAU*2.5
 	var waiting:=float(_player.get("_fishing_time_remaining"))>0
 	var bend: float=0.08 if waiting else 0.025
+	if _player.get("_fishing_catch"):bend=.12
 	if reeling:bend=0.19
 	var time:=float(_player.get("_hand_time"))
 	var start:=Vector3(0,0.02,0.07)

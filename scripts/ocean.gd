@@ -80,18 +80,15 @@ var _last_moon := 0.0
 var _sun_elev := 1.0
 var _moon_elev := -1.0
 
-const _UNDER_SHADER := """
-shader_type canvas_item;
-uniform vec4 top_col : source_color;
-uniform vec4 bottom_col : source_color;
-void fragment() {
-	COLOR = mix(top_col, bottom_col, UV.y);
-}
-"""
+const _UNDER_SHADER := preload("res://shaders/underwater_veil.gdshader")
+var _veil_warm_frames := 2
 
 func _ready() -> void:
 	# Displaced water must never project a moving wave silhouette onto a deck.
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Shader-displaced waves need bounds beyond the flat CPU mesh.
+	extra_cull_margin = maxf(extra_cull_margin,absf(wave_height)*0.75+0.05)
+	ignore_occlusion_culling = true
 	# The broad, slow ocean swells do not need a 160x160 grid on a phone.
 	# Keep enough tessellation for a smooth silhouette while cutting roughly
 	# a third of the per-vertex wave work and triangle count.
@@ -156,6 +153,8 @@ func _ready() -> void:
 		_mat.set_shader_parameter("wave_speed", wave_speed)
 		_push_factors(0.0, 0.0, 0.0)
 	_create_far_water()
+	# Prepare the dive pipeline while the world is loading, before entering water.
+	_ensure_underwater();_under_layer.show()
 
 func _process(delta: float) -> void:
 	var active_camera := get_viewport().get_camera_3d()
@@ -220,6 +219,8 @@ func _create_far_water() -> void:
 	far_water.mesh = builder.commit()
 	far_water.material_override = _mat
 	far_water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	far_water.extra_cull_margin = extra_cull_margin
+	far_water.ignore_occlusion_culling = true
 	add_child(far_water)
 
 func _push_factors(night: float, twilight: float, moon_factor: float) -> void:
@@ -286,7 +287,8 @@ func _update_underwater(delta: float=0.0) -> void:
 	amt=_dive_blend
 	if amt <= 0.001:
 		if _under_layer != null:
-			_under_layer.visible = false
+			_under_layer.visible = _veil_warm_frames>0
+		_veil_warm_frames=maxi(0,_veil_warm_frames-1)
 		return
 	_ensure_underwater()
 	_under_layer.visible = true
@@ -310,8 +312,9 @@ func _ensure_underwater() -> void:
 	_under_layer.visible = false
 	add_child(_under_layer)
 	_under_mat = ShaderMaterial.new()
-	_under_mat.shader = Shader.new()
-	_under_mat.shader.code = _UNDER_SHADER
+	_under_mat.shader = _UNDER_SHADER
+	_under_mat.set_shader_parameter("top_col",Color(0,0,0,0))
+	_under_mat.set_shader_parameter("bottom_col",Color(0,0,0,0))
 	_under_rect = ColorRect.new()
 	_under_rect.material = _under_mat
 	_under_rect.set_anchors_preset(Control.PRESET_FULL_RECT)

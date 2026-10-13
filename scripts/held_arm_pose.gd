@@ -13,6 +13,7 @@ func _process_modification() -> void:
 	var rig := get_skeleton()
 	if rig == null or player == null or upper < 0 or lower < 0 or wrist < 0: return
 	if int(player.get("cam_mode")) != 1: return
+	if player.call("movement_owns_hands"): return
 	var action := player.get_node_or_null("SurvivalAction")
 	var pose: Dictionary = action.call("sample_pose") if action!=null else {}
 	var acting := not pose.is_empty() and float(pose.weight)>0.001
@@ -21,7 +22,7 @@ func _process_modification() -> void:
 	if not _cached:
 		_cached=true;_spine=rig.find_bone("Chest")
 		for side in ["R","L"]:
-			for finger in ["Index","Middle","Pinky"]:
+			for finger in ["Index","Middle","Ring","Pinky"]:
 				for joint in [1,2,3,4]:
 					var bone := rig.find_bone("%s%d.%s"%[finger,joint,side])
 					if bone>=0:_finger_bones.append(bone)
@@ -43,10 +44,28 @@ func _process_modification() -> void:
 	if acting or str(player.get("active_item")) in ["Fishing Rod","Bow","Spear"]:
 		var left_target: Vector3=player.global_transform*(pose.left if acting else Vector3(-0.12,0.13,-0.39))
 		_solve(rig,rig.find_bone("UpperArm.L"),rig.find_bone("LowerArm.L"),rig.find_bone("Wrist.L"),left_target,-1.0)
+	if acting and str(action.get("kind"))=="drink":
+		# Turn the palm around the cup rather than keeping the idle wrist roll.
+		var knuckle:=rig.find_bone("Middle1.R")
+		if knuckle>=0:
+			var hand_pose:=rig.get_bone_global_pose(wrist)
+			var direction:=rig.get_bone_global_pose(knuckle).origin-hand_pose.origin
+			var forward:=rig.global_basis.inverse()*player.global_basis*Vector3(0,.12,-1)
+			if direction.length_squared()>.000001:
+				hand_pose.basis=Basis(Quaternion(direction.normalized(),forward.normalized()))*hand_pose.basis
+				rig.set_bone_global_pose(wrist,hand_pose)
 	# Apply fingers after the upper/lower-arm global overrides; local pose edits
 	# made before those overrides were lost in the rendered skin.
-	for bone in _finger_bones:_curl_finger(rig,bone,curl)
-	for bone in _thumb_bones:_curl_finger(rig,bone,curl*0.65)
+	var left_grip := acting or str(player.get("active_item")) in ["Fishing Rod","Bow","Spear"]
+	var left_curl := curl
+	if acting and str(action.get("kind"))=="take_fish":
+		left_curl=.85*smoothstep(.26,.40,float(action.get("elapsed"))/float(action.get("duration")))
+	for bone in _finger_bones:
+		var right_finger:=rig.get_bone_name(bone).ends_with(".R")
+		_curl_finger(rig,bone,curl if right_finger else left_curl if left_grip else 0.0)
+	for bone in _thumb_bones:
+		var right_thumb:=rig.get_bone_name(bone).ends_with(".R")
+		_curl_finger(rig,bone,(curl if right_thumb else left_curl if left_grip else 0.0)*.65)
 
 func _curl_finger(rig: Skeleton3D,bone: int,curl: float) -> void:
 	var finger_pose := rig.get_bone_global_pose(bone)

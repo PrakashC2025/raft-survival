@@ -25,6 +25,9 @@ const TARGET_SIZES := {"Coconut": 0.42, "Banana": 0.48, "Onion": 0.32, "Stone": 
 @export var amount := 1
 @export var pickup_id := ""
 
+var falling := false
+var fall_exclude: Array[RID]=[]
+var _fall_speed := 0.0
 var collected := false
 var _visual: Node3D = null
 var _amount_label: Label3D = null
@@ -80,6 +83,19 @@ func _update_amount_label() -> void:
 func _process(delta: float) -> void:
 	if _visual == null or collected:
 		return
+	if falling:
+		_fall_speed+=9.8*delta
+		var after:=global_position+Vector3.DOWN*_fall_speed*delta
+		var query:=PhysicsRayQueryParameters3D.create(global_position,after-Vector3.UP*.14,1,fall_exclude)
+		var hit:=get_world_3d().direct_space_state.intersect_ray(query)
+		if not hit.is_empty():
+			global_position=hit.position+Vector3.UP*.16;falling=false
+			var support:=hit.collider as Node
+			while support!=null and not support.is_in_group("raft"):support=support.get_parent()
+			if support!=null:reparent(support,true)
+		elif after.y<=.15:
+			global_position=Vector3(after.x,.15,after.z);falling=false
+		else:global_position=after
 	_bob_time += delta
 	_visual.position.y = _base_y + sin(_bob_time * 2.2) * 0.035
 	_visual.rotation.y += delta * 0.45

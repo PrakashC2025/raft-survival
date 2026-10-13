@@ -28,7 +28,7 @@ func start(kind: String,target: Node3D=null) -> bool:
 		if target==null or not target.has_method("exposed_to_rain"):return false
 		if target.call("exposed_to_rain"):player.call("_hud_toast","FIRE IS WET · SHELTER IT FIRST");return false
 		if float(target.get("fuel"))<=0 and not Inventory.has("Wood",1):player.call("_hud_toast","LIGHT FIRE · NEED 1 WOOD FOR FUEL");return false
-	if kind=="torch_light" and not service._station_ready(target):player.call("_hud_toast","AIM AT A BURNING BONFIRE OR COOKING SETUP");return false
+	if kind=="torch_light" and not player.get_node("SurvivalProgression").fire_source_ready(target):player.call("_hud_toast","AIM AT A LIT TORCH, BONFIRE OR COOKING SETUP");return false
 	var seconds:=2.2 if kind=="ignite_fire" else (1.3 if kind in ["torch_light","torch_mount"] else 1.0)
 	pending={"kind":kind,"target":target,"item":str(player.active_item),"elapsed":0.0,"seconds":seconds,"committed":false,
 		"damage":Stats.damage_revision,"start":player.global_position,"raft":player.call("_get_raft_node")}
@@ -85,7 +85,7 @@ func _commit() -> bool:
 			if target==null:return false
 			target.call("extinguish");player.call("_hud_toast","FIRE OFF · UNUSED FUEL SAVED")
 		"torch_light":
-			if not player.get_node("SurvivalServices")._station_ready(target) or not Inventory.try_exchange({"Torch":1},{"Burning Torch":1}):return false
+			if not progress.fire_source_ready(target) or not Inventory.try_exchange({"Torch":1},{"Burning Torch":1}):return false
 			progress.legacy_torch=false;progress.torch_end_time=preload("res://scripts/torch_cycle.gd").next_dawn(player)
 			progress.torch_fuel=preload("res://scripts/torch_cycle.gd").seconds_left(player,progress.torch_end_time)
 			player.get_node("SurvivalServices").equip_owned("Burning Torch")

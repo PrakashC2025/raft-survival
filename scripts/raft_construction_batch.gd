@@ -34,6 +34,7 @@ func refresh() -> void:
 	for piece in pieces:
 		var highlighted := piece == editing
 		for node in piece.find_children("*", "GeometryInstance3D", true, false):
+			node.ignore_occlusion_culling = true
 			var hidden := false
 			var ancestor: Node = node
 			while ancestor != piece:
@@ -55,6 +56,8 @@ func refresh() -> void:
 			else:
 				for index in node.multimesh.instance_count:
 					groups[key].transforms.append(relative * node.multimesh.get_instance_transform(index))
+	for key in groups.keys():
+		if groups[key].transforms.is_empty(): groups.erase(key)
 	for key in _draws.keys():
 		if not groups.has(key):
 			_draws[key].queue_free()
@@ -69,12 +72,17 @@ func refresh() -> void:
 			instance.multimesh.use_custom_data = true
 			instance.multimesh.mesh = group.mesh
 			instance.visibility_range_end = group.range
+			instance.ignore_occlusion_culling = true
 			add_child(instance)
 			_draws[key] = instance
 		else: instance = _draws[key]
-		instance.multimesh.instance_count = group.transforms.size()
+		if instance.multimesh.instance_count != group.transforms.size():
+			instance.multimesh.instance_count = group.transforms.size()
+		var bounds: AABB = group.transforms[0] * group.mesh.get_aabb()
 		for index in group.transforms.size():
 			var instance_transform: Transform3D = group.transforms[index]
+			bounds = bounds.merge(instance_transform * group.mesh.get_aabb())
 			instance.multimesh.set_instance_transform(index,instance_transform)
 			var seed_value := fposmod(sin(instance_transform.origin.x*17.31+instance_transform.origin.z*9.17)*43758.5,1.0)
 			instance.multimesh.set_instance_custom_data(index,Color(seed_value,0,0,1))
+		instance.multimesh.custom_aabb = bounds.grow(0.05)

@@ -30,6 +30,35 @@ func screenshot(name_value: String) -> void:
 	await frames(12)
 	var picture:=root.get_texture().get_image()
 	if picture!=null:picture.save_png("C:/GodotProjects/raft-survival/build/"+name_value+".png")
+func stable_lights() -> void:
+	var previous_position:=player.global_position
+	player.global_position=Vector3(0,50,0)
+	var torches: Array[Node3D]=[]
+	for index in 8:
+		var torch:=station("wall_torch",Vector3.ZERO)
+		var offset:=Vector3(float(index)*.1,0,0) if index<5 else Vector3(2 if index==5 else (-2 if index==6 else 20),0,0)
+		torch.global_position=player.global_position+offset
+		torch.restore_survival_state({"burning":true,"fuel":120,"end_time":1000})
+		torches.append(torch)
+	service.call("_limit_lights")
+	var selected: Dictionary=service._light_ids.duplicate()
+	check(selected.size()==6,"Six burning sources receive lighting without unlit fires taking slots")
+	var stable:=true
+	for index in 12:
+		player.global_position.x=.05 if index%2==0 else -.05
+		service.call("_limit_lights")
+		stable=stable and service._light_ids==selected
+	check(stable,"Small movement across a light-distance tie does not switch room brightness")
+	player.global_position.x=-2
+	service.call("_limit_lights")
+	check(torches[6].get_meta("light_allowed",false) and not torches[5].get_meta("light_allowed",false),"Moving clearly closer still transfers a slot to the nearer torch")
+	torches[0].burning=false;torches[0].fuel=0
+	service.call("_limit_lights")
+	check(not torches[0].get_meta("light_allowed",false) and service._light_ids.size()==6,"An extinguished source releases its slot to another burning source")
+	for torch in torches:torch.queue_free()
+	await frames()
+	player.global_position=previous_position
+	service.call("_limit_lights")
 func _run() -> void:
 	if not OS.get_user_data_dir().contains("MobileTests"):quit(2);return
 	inv=root.get_node("Inventory");stats=root.get_node("Stats");inv.call("new_game_reset",true);stats.enabled=false
@@ -84,7 +113,10 @@ func _run() -> void:
 	check(not service.can_cook("Fish Potato Tomato Soup") and not service.start_cooking("Forged Meal"),"Missing ingredients and forged dish names cannot start cooking")
 	for raw in ["Potato","Tomato","Fish","Banana","Carrot","Onion","Coconut","Raw Meat","Raw Bird","Raw Crab"]:put(raw,20)
 	put("Clean Water Can",20)
-	check(service.ui._rows[0].ingredients.text.contains("#8dd49c") and not service.ui._rows[0].button.disabled,"Recipe Have/Need counts turn green and enable affordable dishes")
+	var potato_row: Dictionary={}
+	for row in service.ui._rows:
+		if row.dish=="Cooked Potato":potato_row=row;break
+	check(not potato_row.is_empty() and potato_row.ingredients.text.contains("#8dd49c") and not potato_row.button.disabled,"Recipe Have/Need counts turn green and enable affordable dishes")
 	if "--preview" in OS.get_cmdline_user_args():await screenshot("cooking-recipes-preview")
 	var cans_before: int=inv.call("total","Can")
 	check(service.start_cooking("Fish Potato Tomato Soup"),"Soup consumes fish, potato, tomato and clean water centrally")
@@ -162,6 +194,7 @@ func _run() -> void:
 		for source in get_nodes_in_group(group):
 			if source.get_meta("light_allowed",false):allowed+=1
 	check(allowed<=6,"Built campfires, wall torches and lamps share a six-light budget")
+	await stable_lights()
 	clear_bag();put("Potato");service.open_cooking(fire);service.start_cooking("Cooked Potato")
 	put("Stone",inv.SLOT_COUNT*inv.MAX_STACK);job.advance(8)
 	check(inv.call("total","Cooked Potato")==0 and service._drops.back().contents[0].item=="Cooked Potato","Cooking into a full inventory drops its finished dish without losing it")

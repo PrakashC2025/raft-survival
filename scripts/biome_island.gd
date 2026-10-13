@@ -5,7 +5,9 @@ extends Node3D
 @export var pickup_seed := 48117
 const GRID := 52
 const RADIUS := 44.0
-const BUDGET := preload("res://scripts/frame_work_budget.gd")
+const MESH_DATA := preload("res://scripts/biome_mesh_data.gd")
+var _mesh_task := -1
+var _mesh_data: RefCounted
 const RESOURCE := preload("res://scripts/biome_resource.gd")
 const ART := preload("res://scripts/machine_visual.gd")
 static var _pine_mesh: ArrayMesh
@@ -30,23 +32,7 @@ func _ready() -> void:
 	call_deferred("_prepare")
 
 func height_at(point: Vector2) -> float:
-	var angle := atan2(point.y,point.x)
-	var irregular := 1.0+sin(angle*3.0+.4)*.045+sin(angle*7.0)*.025
-	var r := point.length()/(RADIUS*irregular)
-	if r>=1.0:return -4.0
-	var shore := -4.0+smoothstep(1.0,.69,r)*5.6
-	var relief := (sin(point.x*.38+sin(point.y*.23))*sin(point.y*.29))*.34*smoothstep(.98,.55,r)
-	if biome=="volcano":
-		# Broad walkable outer cone; recessed crater with a continuous solid floor.
-		var cone := maxf(0.0,1.0-absf(r-.285)/.48)*16.8
-		var crater := smoothstep(.18,.285,r)*4.0
-		if r<.285:cone=12.8+crater
-		cone+=(sin(angle*5.0+.6)*.75+sin(angle*9.0)*.45)*smoothstep(.65,.28,r)*smoothstep(.16,.25,r)
-		return shore+cone+relief
-	if biome=="spring":return shore+smoothstep(.85,.25,r)*2.2+relief*.5
-	var hill := smoothstep(.80,.18,r)*8.0
-	var ridge := exp(-pow((point.x+5.0)/12.0,2)-pow((point.y-2.0)/22.0,2))*9.0
-	return shore+hill+ridge+relief
+	return MESH_DATA.height_at(point,biome,RADIUS)
 
 func surface_height(point: Vector2) -> float:
 	# Interpolate the same indexed triangles used for collision and rendering.
@@ -61,21 +47,14 @@ func surface_height(point: Vector2) -> float:
 func _prepare() -> void:
 	await get_tree().process_frame
 	if not is_inside_tree():return
-	var vertices := PackedVector3Array();var normals := PackedVector3Array();var uv := PackedVector2Array();var indices := PackedInt32Array()
-	for z in range(GRID+1):
-		for x in range(GRID+1):
-			var p := Vector2((float(x)/GRID*2-1)*RADIUS,(float(z)/GRID*2-1)*RADIUS)
-			vertices.append(Vector3(p.x,height_at(p),p.y))
-			var dx := height_at(p+Vector2(.3,0))-height_at(p-Vector2(.3,0))
-			var dz := height_at(p+Vector2(0,.3))-height_at(p-Vector2(0,.3))
-			normals.append(Vector3(-dx,.6,-dz).normalized());uv.append(p*.1)
-			if x<GRID and z<GRID:
-				var a := z*(GRID+1)+x
-				indices.append_array(PackedInt32Array([a,a+1,a+GRID+1,a+1,a+GRID+2,a+GRID+1]))
-			if BUDGET.exhausted():
-				await get_tree().process_frame
-				if not is_inside_tree():return
-	var arrays := [];arrays.resize(Mesh.ARRAY_MAX);arrays[Mesh.ARRAY_VERTEX]=vertices;arrays[Mesh.ARRAY_NORMAL]=normals;arrays[Mesh.ARRAY_TEX_UV]=uv;arrays[Mesh.ARRAY_INDEX]=indices
+	_mesh_data=MESH_DATA.new()
+	_mesh_task=WorkerThreadPool.add_task(Callable(_mesh_data,"build").bind(biome,GRID,RADIUS),false,"Biome terrain data")
+	while not WorkerThreadPool.is_task_completed(_mesh_task):
+		await get_tree().process_frame
+		if not is_inside_tree():return
+	WorkerThreadPool.wait_for_task_completion(_mesh_task);_mesh_task=-1
+	var arrays: Array=_mesh_data.get("arrays")
+	var shore_bytes: PackedByteArray=_mesh_data.get("shore_bytes");_mesh_data=null
 	var mesh := ArrayMesh.new();mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,arrays)
 	var material := ShaderMaterial.new();material.shader=preload("res://shaders/biome_terrain.gdshader")
 	material.set_shader_parameter("winter",biome=="winter")
@@ -89,9 +68,7 @@ func _prepare() -> void:
 	var ground := StaticBody3D.new();ground.name="BiomeGround";ground.add_to_group("island_ground");add_child(ground)
 	var collision := CollisionShape3D.new();collision.name="CollisionShape3D";collision.shape=mesh.create_trimesh_shape();ground.add_child(collision)
 	# Height mask uses the same surface, without hundreds of terrain raycasts.
-	var image := Image.create(32,32,false,Image.FORMAT_RF)
-	for z in 32:
-		for x in 32:image.set_pixel(x,z,Color(height_at(Vector2((float(x)+.5)/32*88-44,(float(z)+.5)/32*88-44)),0,0))
+	var image := Image.create_from_data(32,32,false,Image.FORMAT_RF,shore_bytes)
 	var ocean := get_tree().get_first_node_in_group("ocean")
 	if ocean!=null:ocean.call("register_island_shore",self,ImageTexture.create_from_image(image),RADIUS)
 	if biome=="volcano":_lava()
@@ -221,4 +198,7 @@ func _process(delta: float) -> void:
 		_status.text="SPRING ISLE · CLEAR A PATCH AND PLANT YOUR CROPS";_status.modulate=Color(.75,.95,.57)
 
 func _exit_tree() -> void:
+	if _mesh_task>=0:
+		WorkerThreadPool.wait_for_task_completion(_mesh_task);_mesh_task=-1
+	_mesh_data=null
 	if is_instance_valid(_status):_status.queue_free()

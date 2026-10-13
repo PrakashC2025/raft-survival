@@ -120,6 +120,11 @@ func _process(delta: float) -> void:
 func _world_ready() -> bool:
 	if is_instance_valid(_player) and _player.get("restoration_complete") == false:
 		return false
+	if is_instance_valid(_player):
+		var action:=_player.get_node_or_null("SurvivalAction")
+		if action!=null and not action.hands_prepared:return false
+		var services:=_player.get_node_or_null("SurvivalServices")
+		if services!=null and not services.ui.cooking_prepared:return false
 	for setup in _setups:
 		if is_instance_valid(setup) and setup.get("setup_complete") != true:
 			return false

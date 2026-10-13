@@ -69,7 +69,7 @@ func _run() -> void:
 		var texture:=ART.station_texture(station)
 		check(texture!=null and texture.get_width()>=160 and texture.get_width()==texture.get_height(),"Distinct square actual-model picture exists: "+station)
 		paths.append(texture.resource_path);hashes.append(texture.get_image().get_data().hex_encode().sha256_text())
-	check(paths.size()==ART.STATION_IMAGES.size() and paths.all(func(path):return paths.count(path)==1) and hashes.all(func(hash):return hashes.count(hash)==1),"Every camp product has a unique picture file and pixels")
+	check(paths.size()==ART.STATION_IMAGES.size() and paths.all(func(path):return paths.count(path)==1) and hashes.all(func(pixel_hash):return hashes.count(pixel_hash)==1),"Every camp product has a unique picture file and pixels")
 	var fire:=fixture("Bonfire",Vector3(0,.15,-1.5));aim(fire);hold("Stone")
 	check(not fire.burning and not fire._flames.visible,"Newly placed bonfire waits for player ignition")
 	var stones: int=inv.call("total","Stone");var wood: int=inv.call("total","Wood")

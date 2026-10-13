@@ -97,6 +97,27 @@ func _run() -> void:
 	touch(controls, 0, dock + Vector2(0, -70), true)
 	controls.call("_update_movement_actions")
 	check(Input.is_action_pressed("move_forward"), "Joystick responds on touch-down")
+	player.set("is_swimming", true)
+	controls.call("_sync_mode")
+	var fast_swim: Button = controls.get("_btn_run")
+	check(fast_swim.visible and controls.call("_button_caption",fast_swim)=="FAST SWIM", "Moving underwater exposes the fast-swim button")
+	touch(controls, 25, fast_swim.get_global_rect().get_center(), true)
+	check(Input.is_action_pressed("sprint") and Input.is_action_pressed("move_forward"), "Fast swim has its own finger while the joystick stays held")
+	var progress: Node = player.get_node("SurvivalProgression")
+	progress.set("stamina",100.0)
+	var original_pos: Vector3 = player.global_position
+	player.global_position.y = -8
+	player.velocity = Vector3.ZERO
+	player.call("_update_swimming",1.0,Vector3.FORWARD,0.0,true)
+	var fast_speed: float = Vector2(player.velocity.x,player.velocity.z).length()
+	touch(controls, 25, fast_swim.get_global_rect().get_center(), false)
+	player.call("_update_swimming",1.0,Vector3.FORWARD,0.0,false)
+	check(fast_speed > 3.0 and Vector2(player.velocity.x,player.velocity.z).length() < fast_speed and not Input.is_action_pressed("sprint"), "Releasing fast swim returns from 3.5 m/s to normal swimming")
+	progress.set("stamina",5.0); player.call("_update_swimming",1.0,Vector3.FORWARD,0.0,true)
+	check(Vector2(player.velocity.x,player.velocity.z).length() < 2.0, "Exhaustion still limits fast swimming")
+	progress.set("stamina",100.0); player.global_position = original_pos
+	player.set("is_swimming",false); player.velocity = Vector3.ZERO
+	controls.call("_sync_mode")
 	touch(controls, 1, controls.size * Vector2(0.55, 0.45), true)
 	var old_yaw: float = player.rotation.y
 	drag(controls, 1, controls.size * Vector2(0.55, 0.45), Vector2(20, 10))

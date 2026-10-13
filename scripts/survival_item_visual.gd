@@ -1,4 +1,7 @@
 extends RefCounted
+static var _bowl_mesh: CylinderMesh
+static var _bowl_material: StandardMaterial3D
+static var _pan_meshes: Dictionary={}
 static func create(item: String) -> Node3D:
 	if preload("res://scripts/garden_items.gd").icon_cell(item).y>=0 and item!="Tomato" or not preload("res://scripts/garden_items.gd").box_crop(item).is_empty():return preload("res://scripts/garden_visual.gd").produce(item)
 	if item=="Repair Kit":return preload("res://scripts/electronics_visual.gd").repair_kit()
@@ -35,7 +38,10 @@ static func create(item: String) -> Node3D:
 	elif item.ends_with("Can"):
 		var can:=CylinderMesh.new();can.top_radius=.075;can.bottom_radius=.075;can.height=.19;can.radial_segments=16;mesh=can;material.albedo_color=Color(.50,.57,.59);material.metallic=.65
 	else:
-		var bowl:=CylinderMesh.new();bowl.top_radius=.12;bowl.bottom_radius=.08;bowl.height=.08;bowl.radial_segments=16;mesh=bowl;material.albedo_color=Color(.40,.25,.13)
+		if _bowl_mesh==null:
+			_bowl_mesh=CylinderMesh.new();_bowl_mesh.top_radius=.12;_bowl_mesh.bottom_radius=.08;_bowl_mesh.height=.08;_bowl_mesh.radial_segments=16
+			_bowl_material=StandardMaterial3D.new();_bowl_material.roughness=.7;_bowl_material.albedo_color=Color(.40,.25,.13)
+		mesh=_bowl_mesh;material=_bowl_material
 	var visual:=MeshInstance3D.new();visual.mesh=mesh;visual.material_override=material;root.add_child(visual)
 	if item=="Medkit":
 		var red:=StandardMaterial3D.new();red.albedo_color=Color(.72,.12,.12)
@@ -65,13 +71,19 @@ static func _tumbler(item: String) -> Node3D:
 static func create_pan() -> Node3D:
 	var root:=Node3D.new();root.name="CookingPan"
 	var steel:=preload("res://scripts/object_materials.gd").make(3,Color(.18,.20,.19),.53,.65)
-	var shell:=CylinderMesh.new();shell.top_radius=.27;shell.bottom_radius=.23;shell.height=.15;shell.radial_segments=24;shell.cap_top=false
+	if _pan_meshes.is_empty():
+		var shell_mesh:=CylinderMesh.new();shell_mesh.top_radius=.27;shell_mesh.bottom_radius=.23;shell_mesh.height=.15;shell_mesh.radial_segments=24;shell_mesh.cap_top=false
+		var bottom_mesh:=CylinderMesh.new();bottom_mesh.top_radius=.237;bottom_mesh.bottom_radius=.237;bottom_mesh.height=.012;bottom_mesh.radial_segments=24
+		var rim_mesh:=TorusMesh.new();rim_mesh.inner_radius=.255;rim_mesh.outer_radius=.277;rim_mesh.rings=24;rim_mesh.ring_segments=8
+		var handle_mesh:=TorusMesh.new();handle_mesh.inner_radius=.045;handle_mesh.outer_radius=.06;handle_mesh.rings=12;handle_mesh.ring_segments=6
+		_pan_meshes={"shell":shell_mesh,"bottom":bottom_mesh,"rim":rim_mesh,"handle":handle_mesh}
+	var shell: CylinderMesh=_pan_meshes.shell
 	var pan:=MeshInstance3D.new();pan.mesh=shell;pan.material_override=steel;root.add_child(pan)
-	var inner:=MeshInstance3D.new();var bottom:=CylinderMesh.new();bottom.top_radius=.237;bottom.bottom_radius=.237;bottom.height=.012;bottom.radial_segments=24
+	var inner:=MeshInstance3D.new();var bottom: CylinderMesh=_pan_meshes.bottom
 	inner.mesh=bottom;inner.position.y=-.055;inner.material_override=steel;root.add_child(inner)
-	var rim:=TorusMesh.new();rim.inner_radius=.255;rim.outer_radius=.277;rim.rings=24;rim.ring_segments=8
+	var rim: TorusMesh=_pan_meshes.rim
 	var lip:=MeshInstance3D.new();lip.mesh=rim;lip.position.y=.075;lip.material_override=steel;root.add_child(lip)
 	for side in [-1,1]:
-		var handle:=MeshInstance3D.new();var grip:=TorusMesh.new();grip.inner_radius=.045;grip.outer_radius=.06;grip.rings=12;grip.ring_segments=6
+		var handle:=MeshInstance3D.new();var grip: TorusMesh=_pan_meshes.handle
 		handle.mesh=grip;handle.position=Vector3(side*.28,.025,0);handle.rotation.z=PI/2;handle.material_override=steel;root.add_child(handle)
 	return root

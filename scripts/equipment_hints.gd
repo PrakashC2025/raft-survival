@@ -3,7 +3,7 @@ extends RefCounted
 const FOOD := preload("res://scripts/food_rules.gd")
 const TIPS := {
 	"Rope":"Aim at floating salvage. Hold and release to cast; it reels back automatically.",
-	"Torch":"Aim at a burning bonfire to light. Aim at a wall to mount.",
+	"Torch":"Aim at a burning bonfire or lit wall torch to light. Aim at a wall to mount.",
 	"Burning Torch":"Use to put out the flame. Aim at a wall to mount.",
 	"Solar Torch":"Use to switch the light. Direct sunlight charges its solar panel.",
 	"Binoculars":"Use to look farther. Use again to lower.",
@@ -13,7 +13,7 @@ const TIPS := {
 	"Shovel":"Aim at soil or sand to dig. Aim at a mature root crop to harvest.",
 	"Paddle":"Use while aboard the raft to paddle.",
 	"Anchor":"Use aboard the raft to lower or raise the anchor.",
-	"Fishing Rod":"Aim at open water and use to cast. Pull when a fish bites.",
+	"Fishing Rod":"Aim down at open water and use to cast. After reeling, tap the hand to unhook your fish.",
 	"Spear":"Aim at a fish or creature and use to hunt.",
 	"Bow":"Hold to draw, aim, then release to shoot.",
 	"Can":"Aim at reachable ocean water to fill. Boil before drinking.",

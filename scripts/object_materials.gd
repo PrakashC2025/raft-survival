@@ -15,6 +15,8 @@ static func make(kind: int, color: Color, roughness: float = 0.8, metallic: floa
 	material.set_shader_parameter("surface_kind", kind)
 	material.set_shader_parameter("surface_roughness", roughness)
 	material.set_shader_parameter("surface_metallic", metallic)
+	if kind == Kind.METAL:
+		preload("res://scripts/salvage_surfaces.gd").apply(material, false)
 	_materials[key] = material
 	return material
 
@@ -23,6 +25,8 @@ static func worn(kind: int, color: Color, roughness: float = 0.85, metallic: flo
 	if not _materials.has(key):
 		var material:=make(kind,color,roughness,metallic).duplicate() as ShaderMaterial
 		material.set_shader_parameter("surface_wear",0.9)
+		if kind == Kind.METAL:
+			preload("res://scripts/salvage_surfaces.gd").apply(material, true)
 		_materials[key]=material
 	return _materials[key]
 

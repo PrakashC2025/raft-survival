@@ -69,6 +69,19 @@ static func run(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) 
 	_line(c, center + Vector2(r * 0.25, r * 0.05), center + Vector2(r * 0.55, -r * 0.4), w * 1.2, col)
 
 
+# Swimmer taking a stroke above two small waves.
+static func swim(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) -> void:
+	_circle(c, center + Vector2(0.48, -0.27) * r, r * 0.17, col)
+	_line(c, center + Vector2(-0.52, 0.05) * r, center + Vector2(0.24, -0.1) * r, w * 1.4, col)
+	_line(c, center + Vector2(-0.12, -0.03) * r, center + Vector2(-0.28, -0.56) * r, w * 1.25, col)
+	_line(c, center + Vector2(-0.28, -0.56) * r, center + Vector2(0.22, -0.73) * r, w * 1.25, col)
+	for row in 2:
+		for segment in 8:
+			var x := -0.85 + float(segment) * 0.21
+			var next_x := x + 0.21
+			_line(c, center + Vector2(x, 0.30 + row * 0.26 + sin(x * 8.0) * 0.06) * r,
+				center + Vector2(next_x, 0.30 + row * 0.26 + sin(next_x * 8.0) * 0.06) * r, w * 0.55, col)
+
 # Human jumping with raised arms and bent knees.
 static func jump(c: CanvasItem, center: Vector2, r: float, w: float, col: Color) -> void:
 	_circle(c,center+Vector2(0,-0.58)*r,r*0.18,col)

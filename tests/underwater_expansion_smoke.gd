@@ -28,7 +28,7 @@ func stand(raft:Node3D) -> void:
 	player.is_swimming=false
 func _run() -> void:
 	if not OS.get_user_data_dir().contains("MobileTests"):quit(2);return
-	create_timer(150).timeout.connect(func():push_error("FAIL: underwater fixture timeout");quit(1))
+	create_timer(240).timeout.connect(func():push_error("FAIL: underwater fixture timeout");quit(1))
 	preview="--preview" in OS.get_cmdline_user_args();root.size=Vector2i(1280,720)
 	inv=root.get_node("Inventory");inv.call("new_game_reset",true);inv.infinite=false
 	var stats:=root.get_node("Stats");stats.enabled=false
@@ -36,12 +36,24 @@ func _run() -> void:
 	player=get_first_node_in_group("player") as CharacterBody3D
 	var sea:=current_scene.get_node("UnderwaterWorld")
 	var spring:=current_scene.get_node("SpringIsle")
-	for unused in 3600:
-		await frames(1)
-		if sea.prepared and spring.prepared and player.restoration_complete:break
-	check(sea.prepared and spring.prepared and player.restoration_complete,"Diving and spring island finish bounded startup")
-	if not sea.prepared or not spring.prepared:quit(1);return
+	var winter:=current_scene.get_node("WinterIsle")
+	var volcano:=current_scene.get_node("VolcanoIsle")
+	# Process-frame counts vary dramatically between Dummy and real renderers.
+	# Wait on physical frames with a wall-clock bound for asynchronous startup.
+	# This full-world headless fixture includes every imported island/model.
+	# Its time bound is a deadlock guard, not a phone loading benchmark.
+	var startup_deadline := Time.get_ticks_msec()+90000
+	while Time.get_ticks_msec()<startup_deadline:
+		await physics_frame
+		if sea.prepared and spring.prepared and winter.prepared and volcano.prepared and player.restoration_complete and player.get_node("SurvivalAction").hands_prepared and player.get_node("SurvivalServices").ui.cooking_prepared:break
+	if not sea.prepared:
+		print("SEA SETUP: ",sea.get_children().map(func(node:Node):return str(node.name)))
+	check(sea.prepared and spring.prepared and winter.prepared and volcano.prepared and player.restoration_complete,"Diving and all biome islands finish bounded startup (sea=%s spring=%s winter=%s volcano=%s player=%s)"%[sea.prepared,spring.prepared,winter.prepared,volcano.prepared,player.restoration_complete])
+	if not sea.prepared or not spring.prepared or not winter.prepared or not volcano.prepared:quit(1);return
 	player.set_process(false);player.set_physics_process(false)
+	# This fixture exercises aimed first-person gathering/diving even when a
+	# previous isolated suite persisted the owner's third-person preference.
+	player.cam_mode=0;player.call("_apply_camera_mode")
 	player.set_process_unhandled_input(false);Input.mouse_mode=Input.MOUSE_MODE_VISIBLE
 	var raft:=get_first_node_in_group("raft") as Node3D;raft.set_physics_process(false)
 	player.get_node("RopeSystem").set_physics_process(false);player.get_node("RainSystem").call("stop_rain")
@@ -50,7 +62,7 @@ func _run() -> void:
 	var tools:=player.get_node("SurvivalTools");tools.set_physics_process(false)
 	var hud:=player.get_node("CanvasLayer/SurvivalHUD")
 	if preview:player.get_node("CanvasLayer/MobileControls").force_show=true
-	check(hud.CRAFT_ORDER.slice(0,3)==["Torch","Bonfire","Diving Tank"],"Torch, bonfire and homemade air tank are on first craft page")
+	check("Torch" in hud.CRAFT_ORDER and "Diving Tank" in hud.CRAFT_ORDER and "Bonfire" not in hud.CRAFT_ORDER and inv.RECIPES.has("Bonfire"),"Torch and air tank stay in portable Craft; bonfire stays in Build")
 	check(inv.ITEM_RECIPES["Diving Tank"]=={"Plastic":8,"Rope":3,"Metal":2},"Air tank uses salvaged plastic, lashings and fittings")
 	check(progress.call("unlocked","Diving Tank"),"Diving equipment is available from the first level")
 	check(get_nodes_in_group("island").size()==7 and get_nodes_in_group("dive_site").size()==3,"Seven islands and three diving destinations exist")
@@ -171,7 +183,8 @@ func _run() -> void:
 	player.active_item="";player.cam_mode=0;player.call("_apply_camera_mode");player.camera.rotation=Vector3.ZERO;action.call("stop")
 	sea.call("_process",.1);var first_pose:Vector3=sea._hands.get_child(0).position;sea.call("_process",.4)
 	check(sea._hands.visible and first_pose.distance_to(sea._hands.get_child(0).position)>.03,"First-person swimming alternates real hand strokes")
-	check(player._survivor_animator.has_animation("Survival/Swim"),"Third-person swimmer has a dedicated looping stroke and flutter kick")
+	var swim_clip: String=player.call("_find_survivor_clip",player._survivor_animator,"Swim")
+	check(not swim_clip.is_empty() and player._survivor_animator.get_animation(swim_clip).loop_mode==Animation.LOOP_LINEAR,"Third-person swimmer has a dedicated looping recorded stroke")
 	var clock:=current_scene.get_node("Sky3D/TimeOfDay");clock.call("pause");clock.current_time=12;current_scene.get_node("OceanAtmosphere").call("_process",1)
 	clock.call("_update_celestial_coords")
 	clock.get_node("Timer").emit_signal("timeout");progress.oxygen=100;progress.air_tank_seconds=180
@@ -179,7 +192,7 @@ func _run() -> void:
 	player.global_position=Vector3(-100,-30,-144);player.camera.global_position=player.global_position+Vector3.UP*.9;player.camera.look_at(Vector3(-100,-30,-180));player.camera.get_node("HandPivot").visible=true
 	await shot("ruins")
 	player.global_position=Vector3(140,-31,105);player.camera.global_position=player.global_position+Vector3.UP*.9;player.camera.look_at(Vector3(140,-33,80));await shot("reef")
-	player.cam_mode=1;player.call("_apply_camera_mode");player._body_visual.rotation.x=-1.1;player._survivor_animator.play("Survival/Swim");player._survivor_animator.advance(.4)
+	player.cam_mode=1;player.call("_apply_camera_mode");player._body_visual.rotation.x=0.0 if player._survivor_motion!=null else -1.1;player._survivor_animator.play(swim_clip);player._survivor_animator.advance(.4)
 	sea.call("_process",.1);progress.call("_process",.01)
 	player.camera.global_position=player.global_position+Vector3(2,1.3,3);player.camera.look_at(player.global_position+Vector3(0,.3,0));await shot("swimmer")
 	player.cam_mode=0;player.call("_apply_camera_mode");player._body_visual.rotation.x=0;player.is_swimming=false

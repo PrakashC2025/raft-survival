@@ -28,7 +28,7 @@
 [ext_resource type="Script" uid="uid://cdfw5dgx18uri" path="res://scripts/island_beacon.gd" id="25_beacon"]
 [ext_resource type="Script" uid="uid://bak02doledtl7" path="res://scripts/island_marker.gd" id="26_marker"]
 [ext_resource type="Script" path="res://scripts/mobile_performance.gd" id="27_performance"]
-[ext_resource type="PackedScene" path="res://models/survivalist.glb" id="28_survivor"]
+[ext_resource type="PackedScene" path="res://models/mixamo_survivor.glb" id="28_survivor"]
 [ext_resource type="PackedScene" path="res://models/kenney_palm_detailed_short.glb" id="29_palm_short"]
 [ext_resource type="Script" path="res://scripts/ocean_ambience.gd" id="30_ocean_audio"]
 [ext_resource type="PackedScene" path="res://scenes/destination_island.tscn" id="31_destination"]
@@ -350,6 +350,13 @@ base_radius = 5.2
 peak_height = 8.8
 radial_segments = 32
 height_rings = 11
+
+[node name="OceanBirds" type="Node3D" parent="."]
+script = ExtResource("35_island_birds")
+bird_count = 2
+orbit_radius = 24.0
+flight_height = 13.0
+follow_raft = true
 
 [node name="IslandBirds" type="Node3D" parent="Island"]
 script = ExtResource("35_island_birds")

@@ -1,0 +1,32 @@
+{
+  "character_file": "Standing Jump.fbx",
+  "clips": [
+    {"name":"Idle","file":"Neutral Idle.fbx","loop":true},
+    {"name":"Walk","pack":"Male Locomotion Pack","file":"walking.fbx","loop":true},
+    {"name":"Run","pack":"Male Locomotion Pack","file":"standard run.fbx","loop":true},
+    {"name":"WalkLeft","pack":"Male Locomotion Pack","file":"left strafe walking.fbx","loop":true},
+    {"name":"WalkRight","pack":"Male Locomotion Pack","file":"right strafe walking.fbx","loop":true},
+    {"name":"RunLeft","pack":"Male Locomotion Pack","file":"left strafe.fbx","loop":true},
+    {"name":"RunRight","pack":"Male Locomotion Pack","file":"right strafe.fbx","loop":true},
+    {"name":"WalkBack","file":"Unarmed Walk Back.fbx","loop":true},
+    {"name":"Jump","file":"Standing Jump.fbx","start_seconds":0.57,"end_seconds":1.27},
+    {"name":"Fall","pack":"","file":"falling idle.fbx","loop":true},
+    {"name":"Land","file":"Standing Jump.fbx","start_seconds":1.27,"end_seconds":2.10,"crouch_limit":0.42},
+    {"name":"Swim","file":"Swimming.fbx","loop":true},
+    {"name":"TreadWater","file":"Treading Water.fbx","loop":true},
+    {"name":"TurnLeft","pack":"Male Locomotion Pack","file":"left turn 90.fbx"},
+    {"name":"TurnRight","pack":"Male Locomotion Pack","file":"right turn 90.fbx"},
+    {"name":"Plant","pack":"Farming Pack","file":"dig and plant seeds.fbx","work":true},
+    {"name":"Harvest","pack":"Farming Pack","file":"pull plant.fbx","work":true},
+    {"name":"Gather","pack":"Farming Pack","file":"pull plant (2).fbx","work":true},
+    {"name":"PlantTree","pack":"Farming Pack","file":"plant tree.fbx","work":true},
+    {"name":"PickLow","pack":"Farming Pack","file":"pick fruit.fbx","work":true},
+    {"name":"PickFruit","pack":"Farming Pack","file":"pick fruit (2).fbx","work":true},
+    {"name":"PickHigh","pack":"Farming Pack","file":"pick fruit (3).fbx","work":true},
+    {"name":"Water","pack":"Farming Pack","file":"watering.fbx","work":true},
+    {"name":"Work","pack":"Farming Pack","file":"kneeling idle.fbx","work":true,"loop":true},
+    {"name":"Hold","pack":"Farming Pack","file":"holding idle.fbx","loop":true},
+    {"name":"Carry","pack":"Farming Pack","file":"holding walk.fbx","loop":true},
+    {"name":"Drink","file":"Drinking.fbx"}
+  ]
+}

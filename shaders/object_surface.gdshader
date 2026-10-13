@@ -1,5 +1,6 @@
 shader_type spatial;
 render_mode diffuse_burley;
+#include "res://shaders/salvage_photo.gdshaderinc"
 
 // Original inexpensive surface detail, shared by small props and equipment.
 uniform vec4 base_color : source_color = vec4(0.5, 0.4, 0.3, 1.0);
@@ -22,8 +23,21 @@ float noise(vec3 p) {
                mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
                    mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
 }
-void vertex() { local_position = VERTEX; }
+void vertex() {
+    local_position = VERTEX;
+    photo_local_normal = NORMAL;
+}
 void fragment() {
+    if (photo_surface && surface_kind == 1) {
+        vec3 colour, arm, bump;
+        sample_salvage_photo(local_position, colour, arm, bump);
+        ALBEDO = colour * mix(vec3(1.0), base_color.rgb * 2.0, 0.22) * COLOR.rgb;
+        ROUGHNESS = clamp(arm.g, 0.38, 0.98);
+        METALLIC = arm.b;
+        AO = arm.r;
+        SPECULAR = 0.35;
+        NORMAL = normalize(mix(NORMAL, mat3(VIEW_MATRIX) * MODEL_NORMAL_MATRIX * bump, 0.35));
+    } else {
     vec3 p = local_position;
     float broad = noise(p * 12.0);
     float fine = noise(p * 95.0);
@@ -74,4 +88,5 @@ void fragment() {
     SPECULAR = 0.35;
     NORMAL_MAP = normalize(vec3(-dFdx(relief) * 0.25, -dFdy(relief) * 0.25, 1.0)) * 0.5 + 0.5;
     NORMAL_MAP_DEPTH = 0.3;
+    }
 }

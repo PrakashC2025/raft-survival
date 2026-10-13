@@ -16,6 +16,7 @@ var _cast_target := Vector3.ZERO
 var _cast_age := 0.0
 var _cast_start := Vector3.ZERO
 var _catch_visual: Node3D
+var _cast_clock := 0.0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -82,6 +83,7 @@ func _physics_process(delta: float) -> void:
 		else:
 			_fire()
 	_update_cast()
+	_cast_clock+=delta
 	for i in range(_arrows.size() - 1, -1, -1):
 			var arrow: Dictionary = _arrows[i]
 			var node := arrow["node"] as Node3D
@@ -157,10 +159,14 @@ func show_cast(target: Vector3) -> void:
 	_update_cast()
 
 func _update_cast() -> void:
+	var pending: bool = player.get("_fishing_catch")
+	if _bobber==null and pending and player.get("active_item")=="Fishing Rod":
+		show_cast(player.global_position)
+		return
 	if _bobber == null:
 		return
-	var casting: bool = player.get("active_item") == "Fishing Rod" and float(player.get("_fishing_time_remaining")) > 0.0
-	_bobber.visible = casting
+	var casting: bool = player.get("active_item") == "Fishing Rod" and (float(player.get("_fishing_time_remaining")) > 0.0 or pending) and not player.get("is_swimming") and not player.get("build_mode")
+	_bobber.visible = casting and not pending
 	_line.visible = casting
 	if not casting:
 		if is_instance_valid(_catch_visual):_catch_visual.visible=false
@@ -175,14 +181,16 @@ func _update_cast() -> void:
 	if flight<1:
 		at=_cast_start.lerp(at,flight)+Vector3.UP*sin(flight*PI)*1.2
 	var remaining := float(player.get("_fishing_time_remaining"))
-	if remaining<1.2:
-		at=at.lerp(from,1.0-remaining/1.2)
+	if remaining<1.2 or pending:
+		var hook := catch_position()+Vector3.UP*.18
+		at=at.lerp(hook,smoothstep(0.0,1.0,1.0-remaining/1.2)) if not pending else hook
 		if not is_instance_valid(_catch_visual):
-			_catch_visual=preload("res://models/coastal_fish.glb").instantiate() as Node3D
-			_catch_visual.scale=Vector3.ONE*0.30
+			_catch_visual=preload("res://scripts/survival_item_visual.gd").create("Fish")
 			get_tree().current_scene.add_child(_catch_visual)
-		_catch_visual.visible=true;_catch_visual.global_position=at+Vector3.DOWN*0.10
-		_catch_visual.rotation=Vector3(0,sin(_cast_age*12)*0.2,0.6)
+		var struggle := sin(_cast_clock*18.0)*pow(maxf(0.0,sin(_cast_clock*2.3)),2.0)
+		_catch_visual.visible=true
+		_catch_visual.global_position=at+Vector3.DOWN*.18+Vector3(struggle*.018,absf(struggle)*.028,0)
+		_catch_visual.rotation=Vector3(struggle*.25,sin(_cast_clock*9.0)*.12,PI/2+struggle*.18)
 	_bobber.global_position = at
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_LINE_STRIP)
@@ -190,6 +198,11 @@ func _update_cast() -> void:
 		var t := float(i) / 8.0
 		surface.add_vertex(from.lerp(at, t) + Vector3.DOWN * sin(t * PI) * 0.15)
 	_line.mesh = surface.commit()
+
+func catch_position() -> Vector3:
+	if int(player.get("cam_mode"))==0:
+		return (player.get("camera") as Camera3D).to_global(Vector3(-.05,-.22,-.58))
+	return player.to_global(Vector3(-.05,.34,-.50))
 
 func _exit_tree() -> void:
 	if is_instance_valid(_arrow_mesh):_arrow_mesh.free()

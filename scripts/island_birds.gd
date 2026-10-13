@@ -6,6 +6,8 @@ const PICKUP: PackedScene = preload("res://scenes/food_pickup.tscn")
 @export_range(1, 8, 1) var bird_count := 4
 @export var orbit_radius := 10.0
 @export var flight_height := 8.5
+@export var follow_raft := false
+var _raft: Node3D
 var _time := 0.0
 var _birds: Array[Dictionary] = []
 var _destinations: Array[Vector3] = []
@@ -13,6 +15,7 @@ var FADE_START_DISTANCE := 80.0
 var FADE_END_DISTANCE := 120.0
 
 func _ready() -> void:
+	_raft=get_tree().get_first_node_in_group("raft") as Node3D
 	for island in get_tree().get_nodes_in_group("island"):
 		if island is Node3D and (island as Node3D).global_position.distance_to(global_position) > 30:
 			_destinations.append((island as Node3D).global_position)
@@ -87,22 +90,9 @@ func _physics_process(delta: float) -> void:
 			continue
 		var phase := _time * float(data["speed"]) + float(data["phase"])
 		var pos := flight_position(data,_time)
-		# Track travel distance from origin for fade-out
-		var origin := global_position
-		if data.has("origin"):
-			origin = Vector3(data["origin"])
-		var travel := (pos - origin).length()
-		data["travel"] = travel
-		# Fade out when bird travels far from origin
-		if travel > FADE_START_DISTANCE:
-			var t := clampf((travel - FADE_START_DISTANCE) / (FADE_END_DISTANCE - FADE_START_DISTANCE), 0.0, 1.0)
-			if bird is Node and bird.is_inside_tree():
-				bird.set("modulate", Color(1.0, 1.0, 1.0, 1.0 - t))
-			if t >= 1.0:
-				bird.visible = false
-		else:
-			if bird is Node and bird.is_inside_tree():
-				bird.set("modulate", Color(1.0, 1.0, 1.0, 1.0))
+		# A 3D node has no modulate property. Distance culling belongs on meshes;
+		# flying birds must reappear when their route returns to the island.
+		bird.visible=true
 		bird.global_position = pos
 		var tangent := (flight_position(data,_time+0.25)-bird.global_position).normalized()
 		bird.rotation = Vector3(0.0, atan2(-tangent.x, -tangent.z), sin(phase * 2.0) * 0.10)
@@ -114,6 +104,10 @@ func _physics_process(delta: float) -> void:
 
 func flight_position(data: Dictionary, at_time: float) -> Vector3:
 	# Feed near shore, travel across water, then return; each bird has its own phase.
+	if follow_raft and is_instance_valid(_raft):
+		var sea_angle:=at_time*.14+float(data.phase)
+		var centre:=_raft.global_position
+		return centre+Vector3(cos(sea_angle)*float(data.radius),float(data.height)+sin(sea_angle*1.4)*1.2,sin(sea_angle)*float(data.radius))
 	var cycle := fposmod(at_time/180.0+float(data["phase"])/TAU,1.0)
 	var destination := _destinations[int(float(data["phase"])/TAU*bird_count)%_destinations.size()]
 	var origin := global_position

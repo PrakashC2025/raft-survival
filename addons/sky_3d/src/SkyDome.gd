@@ -119,7 +119,8 @@ func process_tick(delta: float) -> void:
 	# Panorama drift uses wind speed, so north/south winds cannot freeze the
 	# photograph by having a zero X component. Keep a stable flow direction.
 	var flow := _cloud_direction.x if absf(_cloud_direction.x) >= absf(_cloud_direction.y) else _cloud_direction.y
-	_panorama_cloud_position += Vector2(_cloud_speed * signf(flow) * delta, position_delta.y)
+	var panorama_speed:=maxf(absf(_cloud_speed),0.01)
+	_panorama_cloud_position += Vector2(panorama_speed * (-1.0 if flow<0 else 1.0) * delta, position_delta.y)
 	sky_material.set_shader_parameter("panorama_cloud_position", _panorama_cloud_position)
 	if cumulus_visible:
 		_cumulus_position += position_delta
@@ -904,14 +905,14 @@ enum { PHYSICS_PROCESS, PROCESS, MANUAL }
 
 
 func _check_cloud_processing() -> void:
-	var enable: bool = (cirrus_visible or cumulus_visible or panorama_clouds_enabled) and wind_speed != 0.0
+	var enable: bool = panorama_clouds_enabled or ((cirrus_visible or cumulus_visible) and wind_speed != 0.0)
 	_cloud_velocity = _cloud_direction * _cloud_speed
 	match process_method:
 		PHYSICS_PROCESS:
 			set_physics_process(enable)
-			set_process(!enable)
+			set_process(false)
 		PROCESS:
-			set_physics_process(!enable)
+			set_physics_process(false)
 			set_process(enable)
 		MANUAL, _:
 			set_physics_process(false)

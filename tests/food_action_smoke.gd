@@ -65,7 +65,7 @@ func _run() -> void:
 	inv.call("add","Clean Water Can",1);service.call("equip_owned","Clean Water Can")
 	check(service.call("use_item","Clean Water Can"),"Last clean water can starts drinking")
 	check(int(inv.call("total","Clean Water Can"))==0 and int(inv.call("total","Can"))==1,"Drinking returns exactly one empty can")
-	pose(.5);check(action.kind=="drink" and action._food_first.rotation.x<-.8,"Drinking tilts the can with its own motion")
+	pose(.5);check(action.kind=="drink" and action._food_first.rotation.x>.8,"Drinking tilts the rim toward the mouth")
 	await shot("drinking")
 	action.call("stop")
 	for item in ["Potato","Banana","Coconut","Onion","Carrot","Fish"]:

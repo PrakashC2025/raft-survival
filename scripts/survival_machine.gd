@@ -72,8 +72,8 @@ func _ready() -> void:
 		_light = OmniLight3D.new()
 		_light.position=Vector3(0,.04,-.20)
 		_light.light_color = Color(1, 0.83, 0.56)
-		_light.omni_range = 6
-		_light.omni_attenuation=2.0
+		_light.omni_range = 12
+		_light.omni_attenuation=1.25
 		_light.light_energy = 1.4
 		_light.shadow_enabled = false
 		_light.visible = false
