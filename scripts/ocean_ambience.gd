@@ -8,6 +8,7 @@ const FOLIAGE_STREAM: AudioStreamWAV = preload("res://audio/foliage_rustle.wav")
 
 var _wind: AudioStreamPlayer
 var _foliage: AudioStreamPlayer
+var _underwater: AudioStreamPlayer
 var _low_pass: AudioEffectLowPassFilter
 var _bus_name: StringName
 var _ocean: Node3D
@@ -36,6 +37,7 @@ func _ready() -> void:
 	bus = _bus_name
 	_wind = _make_layer("SeaWind", WIND_STREAM, -32.0)
 	_foliage = _make_layer("FoliageRustle", FOLIAGE_STREAM, -80.0)
+	_underwater = _make_layer("UnderwaterBubbles",preload("res://audio/contact/underwater_loop.wav"),-80.0)
 	_ocean = get_tree().get_first_node_in_group("ocean") as Node3D
 	_islands = get_tree().get_nodes_in_group("island")
 	var player := get_tree().get_first_node_in_group("player")
@@ -79,12 +81,15 @@ func _process(delta: float) -> void:
 	_under_mix = lerpf(_under_mix, smoothstep(0.08, 0.85, depth), smoothing)
 	var rain_amount := 0.0
 	if is_instance_valid(_rain):
-		rain_amount = clampf(float(_rain.get("_intensity")), 0.0, 1.0)
+		rain_amount = maxf(clampf(float(_rain.get("_intensity")), 0.0, 1.0),float(_rain.call("sky_storm_strength"))*.7)
 	var swell := sin(_elapsed * 0.48) * 0.7 + sin(_elapsed * 0.17 + 1.3) * 0.4
 	volume_db = lerpf(volume_db, -20.0 + _shore_mix * 5.0 + swell - _under_mix * 5.0, smoothing)
 	_wind.volume_db = lerpf(_wind.volume_db, -32.0 + rain_amount * 5.0 - _under_mix * 20.0, smoothing)
 	var leaf_target := linear_to_db(maxf(_shore_mix * (1.0 - _under_mix) * 0.08, 0.0001))
 	_foliage.volume_db = lerpf(_foliage.volume_db, leaf_target, smoothing)
+	# Fade amplitude so even shallow dives are audible; dB interpolation from
+	# -80 kept most of the transition effectively silent on small speakers.
+	_underwater.volume_db=linear_to_db(maxf(.25*_under_mix,.0001))
 	_low_pass.cutoff_hz = lerpf(18000.0, 850.0, _under_mix)
 
 
@@ -104,6 +109,8 @@ func stop_environment() -> void:
 		_wind.stop()
 	if is_instance_valid(_foliage):
 		_foliage.stop()
+	if is_instance_valid(_underwater):
+		_underwater.stop()
 	if is_instance_valid(_rain):
 		var rain_audio := _rain.get_node_or_null("RainAudio") as AudioStreamPlayer
 		if rain_audio != null:

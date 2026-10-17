@@ -41,9 +41,11 @@ func run() -> void:
 	Input.action_press("move_forward");await frames(15);before=player._footfall_count;await frames(30);Input.action_release("move_forward")
 	check(player._footfall_count==before and player._gait_speed<.65,"Pushing into an actual wall does not make footsteps or walking bob")
 	wall.queue_free();await frames(3)
+	var sprint_start:=player.global_position
 	Input.action_press("sprint");Input.action_press("move_forward");await frames(60)
 	Input.action_release("move_forward");Input.action_release("sprint")
-	check(player._footfall_count-before>walking,"Real sprint contacts arrive faster than walking")
+	var sprint_expected:=floori(player.global_position.distance_to(sprint_start)*2.0/player.SURVIVOR_RUN_STRIDE_M)
+	check(player._footfall_count-before>=2 and absi(player._footfall_count-before-sprint_expected)<=1,"Real sprint contacts follow the measured running stride")
 	await frames(20);player.set_physics_process(false)
 	before=player._footfall_count;player._advance_gait(.8,5.0,true,true)
 	check(player._footfall_count-before<=1,"A stalled frame cannot replay missed footsteps")
@@ -57,7 +59,7 @@ func run() -> void:
 		check(player._ground_surface()==expected,"Ground probe selects the real "+expected+" surface")
 	deck.remove_from_group("island")
 	for surface in ["wood","sand","snow","stone","grass","metal","casing"]:
-		var previous:AudioStream
+		var previous:AudioStream=null
 		var varied:=true
 		for unused in 12:
 			var sample:AudioStream=CONTACT.pick(surface)

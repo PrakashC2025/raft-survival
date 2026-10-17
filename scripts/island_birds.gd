@@ -7,6 +7,11 @@ const PICKUP: PackedScene = preload("res://scenes/food_pickup.tscn")
 @export var orbit_radius := 10.0
 @export var flight_height := 8.5
 @export var follow_raft := false
+@export var migrating := false
+const MIGRATION_PERIOD := 75.0
+const MIGRATION_PASS := 44.0
+var _migration_anchor := Vector3.ZERO
+var _migration_cycle := -1
 var _raft: Node3D
 var _time := 0.0
 var _birds: Array[Dictionary] = []
@@ -16,6 +21,7 @@ var FADE_END_DISTANCE := 120.0
 
 func _ready() -> void:
 	_raft=get_tree().get_first_node_in_group("raft") as Node3D
+	_migration_anchor=_raft.global_position if follow_raft and is_instance_valid(_raft) else global_position
 	for island in get_tree().get_nodes_in_group("island"):
 		if island is Node3D and (island as Node3D).global_position.distance_to(global_position) > 30:
 			_destinations.append((island as Node3D).global_position)
@@ -51,14 +57,20 @@ func _ready() -> void:
 			"origin": global_position, "travel": 0.0})
 
 func hit_bird(index: int) -> bool:
-	if index < 0 or index >= _birds.size() or _birds[index]["state"] != "flying":
+	if index < 0 or index >= _birds.size() or _birds[index]["state"] != "flying" or not (_birds[index].root as Node3D).visible:
 		return false
 	_birds[index]["state"] = "falling"
+	var actor:=get_tree().get_first_node_in_group("player")
+	if actor!=null:actor.play_world_sfx(preload("res://scripts/contact_audio.gd").pick_action("body_impact"),-8.0,_birds[index].root.global_position)
 	(_birds[index]["target"] as Area3D).set_deferred("collision_layer", 0)
 	return true
 
 func _physics_process(delta: float) -> void:
 	_time += delta
+	var cycle:=floori((_time+12.0)/MIGRATION_PERIOD)
+	if migrating and cycle!=_migration_cycle:
+		_migration_cycle=cycle
+		_migration_anchor=_raft.global_position if follow_raft and is_instance_valid(_raft) else global_position
 	for data in _birds:
 		var bird := data["root"] as Node3D
 		if data["state"] == "resting":
@@ -78,11 +90,11 @@ func _physics_process(delta: float) -> void:
 			bird.rotation.z += delta * 2.0
 			if not hit.is_empty() or after.y <= 0.1:
 				var at: Vector3 = hit["position"] if not hit.is_empty() else Vector3(after.x, 0.15, after.z)
-				var pickup := PICKUP.instantiate() as Node3D
-				pickup.set("item_name", "Raw Bird")
-				pickup.set("amount", 1)
-				get_tree().current_scene.add_child(pickup)
-				pickup.global_position = at + Vector3.UP * 0.15
+				var actor:=get_tree().get_first_node_in_group("player")
+				if actor!=null and actor.has_node("SurvivalServices"):
+					actor.get_node("SurvivalServices").drop_items([{"item":"Raw Bird","count":1}],at+Vector3.UP*.15,"Bird");actor._queue_save()
+				else:
+					var pickup := PICKUP.instantiate() as Node3D;pickup.set("item_name", "Raw Bird");pickup.set("amount", 1);get_tree().current_scene.add_child(pickup);pickup.global_position=at+Vector3.UP*.15
 				bird.visible = false
 				data["state"] = "resting"
 				data["cooldown"] = randf_range(100.0, 180.0)
@@ -92,17 +104,28 @@ func _physics_process(delta: float) -> void:
 		var pos := flight_position(data,_time)
 		# A 3D node has no modulate property. Distance culling belongs on meshes;
 		# flying birds must reappear when their route returns to the island.
-		bird.visible=true
+		bird.visible=not migrating or fposmod(_time+12.0,MIGRATION_PERIOD)<MIGRATION_PASS
+		(data.target as Area3D).collision_layer=2 if bird.visible else 0
 		bird.global_position = pos
 		var tangent := (flight_position(data,_time+0.25)-bird.global_position).normalized()
 		bird.rotation = Vector3(0.0, atan2(-tangent.x, -tangent.z), sin(phase * 2.0) * 0.10)
 		var flap := sin(_time * 6.4 + float(data["phase"])) * 0.42
+		if migrating and fposmod(_time+float(data.phase),5.0)>2.1:flap=.08
 		if data["left"] != null:
 			(data["left"] as Node3D).rotation.z = flap
 		if data["right"] != null:
 			(data["right"] as Node3D).rotation.z = -flap
 
 func flight_position(data: Dictionary, at_time: float) -> Vector3:
+	if migrating:
+		var flight_cycle:=floori((at_time+12.0)/MIGRATION_PERIOD)
+		var age:=fposmod(at_time+12.0,MIGRATION_PERIOD)
+		var heading:=Vector3(cos(.4+flight_cycle*1.13),0,sin(.4+flight_cycle*1.13))
+		var side:=Vector3(-heading.z,0,heading.x)
+		var index:=_birds.find(data)
+		var rank:=ceilf(float(index)/2.0)
+		var wing:=(-1.0 if index%2 else 1.0)*rank*1.6
+		return _migration_anchor+heading*(-140.0+280.0*minf(age/MIGRATION_PASS,1.0)-rank*1.4)+side*wing+Vector3.UP*(flight_height+sin(at_time*.6+float(data.phase))*.35)
 	# Feed near shore, travel across water, then return; each bird has its own phase.
 	if follow_raft and is_instance_valid(_raft):
 		var sea_angle:=at_time*.14+float(data.phase)
@@ -121,3 +144,7 @@ func flight_position(data: Dictionary, at_time: float) -> Vector3:
 	elif cycle >= 0.75:
 		center = destination.lerp(origin,smoothstep(0.75,1.0,cycle))
 	return Vector3(center.x+cos(angle)*radius,maxf(center.y,0)+float(data["height"])+sin(angle*2)*0.48,center.z+sin(angle)*radius)
+
+func bird_velocity(index: int) -> Vector3:
+	if index<0 or index>=_birds.size():return Vector3.ZERO
+	return (flight_position(_birds[index],_time+.05)-flight_position(_birds[index],_time))/.05

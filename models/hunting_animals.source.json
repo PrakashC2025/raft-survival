@@ -1,0 +1,36 @@
+[
+  {
+    "kind": "Crocodile",
+    "source": "3d models/free_wildlife/crocodile/crocodile.blend",
+    "source_sha256": "ad6f606d67259a65b5c253ab211e8e5616b7f420e48ca08b4650bb7f5caef021",
+    "file": "models/hunting_crocodile.glb",
+    "sha256": "e38877ebd93a4202b9997a79e375a93f340dd12a3d0ba87f73f3d1bc3e48229d",
+    "source_length_m": 9.403287410736084,
+    "length_m": 3.5,
+    "animations": [
+      "Idle",
+      "Walk",
+      "Attack"
+    ],
+    "geometry_license": "CC0-1.0",
+    "geometry_author": "br-n518",
+    "surface_credit": "Siamese crocodile skin by sarvesh777, CC-BY-4.0; ASSET_CREDITS.md"
+  },
+  {
+    "kind": "Boar",
+    "source": "3d models\\free_wildlife\\boar\\Boar.blend",
+    "scanned_head": "https://sketchfab.com/3d-models/wild-boar-textured-80e5db899a484938b88b9e16251bb5a0",
+    "body_author": "Danimal, Myname and Clint Bellanger",
+    "head_author": "aellis43",
+    "license": "CC-BY-SA-4.0 derivative; scanned head CC-BY-4.0",
+    "file": "models/hunting_boar.glb",
+    "sha256": "f808f1ddb7b36a511a07e50ce6e70a29ef846f0518d31b3975c3db81e34701cb",
+    "length_m": 1.85,
+    "animations": [
+      "Attack",
+      "Idle",
+      "Swim",
+      "Walk"
+    ]
+  }
+]

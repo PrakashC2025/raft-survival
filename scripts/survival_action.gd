@@ -42,10 +42,11 @@ var _food_first: Node3D
 var _food_third: Node3D
 var _pickup_first: Node3D
 var _pickup_third: Node3D
-var _sound: AudioStreamPlayer
+var _sound: AudioStreamPlayer3D
 var _cues_played := 0
 var _cue_times: Array[float] = []
 var _cue_sound := ""
+var _cue_sounds: Array[String] = []
 var _foley_count := 0
 var _anchor_raising := false
 var hands_prepared := false
@@ -57,15 +58,16 @@ var _garden_cut: Array[Node3D]=[]
 var _garden_seeds: Array[Node3D]=[]
 var _garden_right: Node3D
 const LABELS := {"cast":"CASTING LINE", "reel":"REELING IN", "chop":"CHOPPING TIMBER",
-	"prepare_seed":"CUTTING FOOD · SAVING SEEDS","unpack":"OPENING RARE SUPPLIES",
+	"board_boat":"BOARDING ROWBOAT","leave_boat":"STEPPING OUT","lift_carcass":"LIFTING ANIMAL","place_carcass":"SETTING ANIMAL DOWN","prepare_animal":"PREPARING MEAT","wrap_food":"WRAPPING IN FOIL",
+	"prepare_seed":"CUTTING FOOD · SAVING SEEDS","unpack":"OPENING RARE SUPPLIES","recover_cargo":"UNLASHING CARGO",
 	"harvest":"PULLING ROOTS", "pick":"PICKING FRUIT", "grab":"COLLECTED",
 	"scoop":"GATHERING EARTH", "plant":"PLANTING SEED", "water":"WATERING SOIL",
 	"build":"ASSEMBLING", "craft":"CRAFTED", "eat":"EATING", "drink":"DRINKING",
-	"bandage":"BANDAGING", "strike":"SPEAR THRUST", "bow":"RELEASING ARROW", "door":"OPENING", "install":"FITTING EQUIPMENT",
+	"bandage":"BANDAGING", "strike":"SPEAR THRUST", "throw_spear":"THROWING SPEAR", "bow":"RELEASING ARROW", "door":"OPENING", "install":"FITTING EQUIPMENT",
 	"hook":"LAUNCHING HOOK", "fire":"TENDING FIRE", "fill":"FILLING CAN", "take_fish":"UNHOOKING FISH",
 	"battery":"REPLACING BATTERY", "radio":"RADIO TRANSMISSION", "look":"RAISING BINOCULARS",
 	"brake":"TURBINE BRAKE",
-	"shake":"RESEATING LOOSE CONTACT", "repair":"REPAIRING EQUIPMENT", "assemble_electronics":"ASSEMBLING EQUIPMENT",
+	"shake":"RESEATING LOOSE CONTACT", "repair":"REPAIRING EQUIPMENT", "assemble_electronics":"ASSEMBLING EQUIPMENT", "door_close":"CLOSING",
 	"solar":"RAISING SOLAR PANEL", "switch":"POWER SWITCH", "cook":"PREPARING FOOD",
 	"mine":"MINING DEPOSIT", "dig":"DIGGING EARTH", "paddle":"ROWING", "anchor":"HANDLING ANCHOR","pump":"PUMPING AIR",
 	"ignite_fire":"STRIKING STONES", "snuff_fire":"PUTTING OUT FIRE", "torch_light":"LIGHTING TORCH", "torch_off":"SNUFFING TORCH", "torch_mount":"MOUNTING TORCH"}
@@ -84,7 +86,8 @@ func _ready() -> void:
 	player.get_node("CanvasLayer").add_child(_panel);_panel.hide()
 	get_viewport().size_changed.connect(_fit_feedback)
 	_warm_hands.call_deferred()
-	_sound=AudioStreamPlayer.new();_sound.name="ActionFoley";_sound.bus=&"Master";add_child(_sound)
+	_sound=AudioStreamPlayer3D.new();_sound.name="ActionFoley";_sound.bus=&"Master"
+	_sound.unit_size=3.0;_sound.max_distance=24.0;add_child(_sound)
 	# Install the modifier even when the launcher is not selected.
 	for candidate in player.get_node("Body").find_children("*","Skeleton3D",true,false):
 		var rig := candidate as Skeleton3D
@@ -167,27 +170,50 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 		_anchor_raising=raft!=null and raft.get("anchored")==true
 	_label.text=LABELS[action];_bar.value=0;_panel.show()
 	_clear_tools()
-	_cues_played=0;_cue_times.clear();_cue_sound=""
+	_cues_played=0;_cue_times.clear();_cue_sounds.clear();_cue_sound=""
 	match action:
-		"prepare_seed":_cue_times.assign([.30,.48,.72]);_cue_sound="cloth"
-		"unpack":_cue_times.assign([.25,.60]);_cue_sound="cloth"
+		"board_boat","leave_boat":_cue_times.assign([.18,.55,.82]);_cue_sounds.assign(["water","wood","cloth"])
+		"lift_carcass","place_carcass":_cue_times.assign([.26,.68]);_cue_sounds.assign(["cloth","body_impact"])
+		"prepare_animal":_cue_times.assign([.20,.40,.60,.80]);_cue_sound="cut_food"
+		"wrap_food":_cue_times.assign([.18,.38,.58,.78]);_cue_sound="unpack"
+		"prepare_seed":_cue_times.assign([.30,.48,.72]);_cue_sound="cut_food"
+		"unpack","recover_cargo":_cue_times.assign([.25,.60]);_cue_sound="unpack"
 		"eat":_cue_times.assign([0.36,0.63]);_cue_sound="bite"
 		"drink":_cue_times.assign([0.28]);_cue_sound="sip"
-		"take_fish":_cue_times.assign([.40]);_cue_sound="cloth"
+		"take_fish":_cue_times.assign([.36]);_cue_sound="cloth"
 		"cook":_cue_times.assign([0.30,0.58,0.78]);_cue_sound="stir"
 		"paddle":_cue_times.assign([0.44]);_cue_sound="water"
 		"dig":_cue_times.assign([0.57]);_cue_sound="earth"
+		"scoop":_cue_times.assign([.43,.72]);_cue_sounds.assign(["earth","cloth"])
 		"anchor":_cue_times.assign([0.57]);_cue_sound="anchor"
-		"strike":_cue_times.assign([0.57]);_cue_sound="water" if player.is_swimming else "cloth"
+		"strike":_cue_times.assign([0.32,0.57]);_cue_sounds.assign(["swing","water" if player.is_swimming else "wood"])
 		"pump":_cue_times.assign([.10,.23,.36,.49,.62,.75,.88]);_cue_sound="cloth"
 		"ignite_fire":_cue_times.assign([.30,.49,.68]);_cue_sound="stone_contact"
 		"torch_light","torch_off","torch_mount":_cue_times.assign([.70]);_cue_sound="cloth"
 		"snuff_fire":_cue_times.assign([.70]);_cue_sound="earth"
-		"brake":_cue_times.assign([.48]);_cue_sound="cloth"
-		"build":_cue_times.assign([.25,.75]);_cue_sound="hammer"
+		"brake":_cue_times.assign([.48]);_cue_sound="metal"
+		"build":
+			_cue_times.assign([.08,.23,.39,.55,.71,.87] if seconds>3 else [.25,.75]);_cue_sound="hammer"
 		"shake":_cue_times.assign([.1875,.3125,.4375,.5625,.6875]);_cue_sound="metal"
 		"repair","assemble_electronics":_cue_times.assign([.16,.36,.46,.58,.70,.82]);_cue_sound="repair_contact"
-		"grab","pick","plant","harvest","scoop","bandage","install":_cue_times.assign([0.40]);_cue_sound="cloth"
+		"plant","install":_cue_times.assign([0.40]);_cue_sound="cloth"
+		"pick","harvest","grab":_cue_times.assign([.38]);_cue_sound="cloth"
+		"craft":_cue_times.assign([.30,.70]);_cue_sounds.assign(["cloth","metal"])
+		"fill":_cue_times.assign([.30,.65]);_cue_sound="water"
+		"look","solar":_cue_times.assign([.35]);_cue_sound="cloth"
+		"fire":_cue_times.assign([.30,.65]);_cue_sound="cloth"
+		"bandage":_cue_times.assign([.30,.58]);_cue_sound="bandage"
+		"cast":_cue_times.assign([.30]);_cue_sound="swing"
+		"reel":_cue_times.assign([.34,.72]);_cue_sound="reel"
+		"door_close":_cue_times.assign([.06]);_cue_sound="door_close"
+		"door":_cue_times.assign([.06]);_cue_sound="door_open"
+		"switch":_cue_times.assign([.66]);_cue_sound="switch"
+		"battery":_cue_times.assign([.18,.42,.60,.84]);_cue_sounds.assign(["battery","cloth","battery","switch"])
+		"radio":_cue_times.assign([.32,.68]);_cue_sound="radio_send"
+		"bow","throw_spear":_cue_times.assign([.55]);_cue_sound="swing"
+		"water":_cue_times.assign([.57]);_cue_sound="water"
+	if action=="eat" and food_item.begins_with("Wrapped "):
+		_cue_times.assign([.14,.36,.63]);_cue_sounds.assign(["unpack","bite","bite"])
 	if action=="cook" and not _cook_pool.is_empty():
 		_tool=_cook_pool.tool;_view_tool=_cook_pool.view;_left_tool=_cook_pool.left
 		var dish:=food_item if not food_item.is_empty() else "Cooked Potato"
@@ -198,7 +224,21 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 			_cook_pool.dish=dish
 		_fit_feedback();return
 	if action in ["eat","drink","fill"]:
-		_make_consumption(food_item if not food_item.is_empty() else str(player.get("active_item")))
+		_make_consumption(food_item.trim_prefix("Wrapped ") if food_item.begins_with("Wrapped ") else (food_item if not food_item.is_empty() else str(player.get("active_item"))))
+		if food_item.begins_with("Wrapped "):
+			for food in [_food_first,_food_third]:
+				var wrapper:=FOOD.foil(food_item);wrapper.name="PeelingFoil";food.add_child(wrapper)
+	if action=="wrap_food":
+		_make_consumption("Wrapped "+food_item)
+		for parcel in [_food_first,_food_third]:
+			var meal:=FOOD.create(food_item);meal.name="MealInsideFoil";meal.scale=Vector3.ONE*.75;meal.position.y=.045;parcel.add_child(meal)
+	if action in ["board_boat","leave_boat","prepare_animal","place_carcass","recover_cargo"]:
+		_view_tool=Node3D.new();_view_tool.name="WorkingHands";player.get_node("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist").add_child(_view_tool)
+		for left in [false,true]:
+			var working_hand:=preload("res://scripts/dive_visual.gd").swim_hand(left);_view_tool.add_child(working_hand);working_hand.position=Vector3(-.24 if left else .16,-.13,-.24)
+	if action=="prepare_animal":
+		_tool=_field_knife();var view_knife:=_tool.duplicate() as Node3D;_view_tool.add_child(view_knife);view_knife.position=Vector3(.13,-.10,-.30);view_knife.rotation.x=-.6
+		player.add_child(_tool);GRIP.attach(_tool,player.get_node("Body"));_tool.get_node("AnimatedHandGrip").animated_tool=true
 	if action in ["chop","build","craft","scoop","cook","mine","dig","paddle","anchor","pump"]:
 		_tool=_make_tool(action)
 		player.add_child(_tool);GRIP.attach(_tool,player.get_node("Body"))
@@ -221,7 +261,7 @@ func play(action: String, seconds: float, at: Vector3, food_item: String="") -> 
 		var hand := preload("res://models/human_hand.glb").instantiate() as Node3D
 		MAT.apply_model(hand,MAT.Kind.SKIN);_view_tool.add_child(hand)
 		if action=="take_fish":hand.scale.x=-1.0
-		if action in ["harvest","build","craft","plant","cook","pump","strike"]:
+		if action in ["harvest","build","craft","plant","cook","pump","strike","scoop"]:
 			var left := hand.duplicate() as Node3D
 			left.scale.x=-1.0;left.position.x=-0.36;left.position.z=-0.08
 			if action=="cook":left.position=Vector3(-.18,-.23,.015);left.rotation.x=.30
@@ -253,9 +293,9 @@ func _fit_feedback() -> void:
 	if not is_instance_valid(_panel):return
 	var scale:=preload("res://scripts/ocean_ui.gd").scale_for(get_viewport())
 	var view:=get_viewport().get_visible_rect().size/scale
-	var width:=minf(390,view.x-32)
+	var width:=minf(280,view.x*.30)
 	_panel.scale=Vector2.ONE*scale;_panel.size=Vector2(width,44)
-	_panel.position=Vector2((view.x-width)*.5,view.y*.5+(112 if kind in ["repair","assemble_electronics"] else 76))*scale
+	_panel.position=Vector2(16,view.y*.48)*scale
 	_bar.custom_minimum_size.x=width
 
 func _make_garden_props(item: String) -> void:
@@ -395,10 +435,20 @@ func _advance_fire_feedback(t: float) -> void:
 				spark.scale=Vector3.ONE*(1-age/.12)
 
 func _pickup_visual(item: String) -> Node3D:
-	if item in ["Torch","Burning Torch"]:return preload("res://scripts/torch_visual.gd").new()
+	if item in ["Torch","Burning Torch"]:
+		var torch := preload("res://scripts/torch_visual.gd").new()
+		torch.set_burning(item == "Burning Torch")
+		return torch
 	if item in ["Wood","Rope","Plastic","Metal","Stone","Barrel","Soil","Sponge","WindGenerator","ElectricLamp"]:
 		var salvage:=preload("res://scripts/resource_visual.gd").create(item);salvage.scale=Vector3.ONE*.40;return salvage
 	return FOOD.create(item.trim_suffix(" Seed"))
+
+func _field_knife() -> Node3D:
+	var knife:=Node3D.new();knife.name="PreparationKnife"
+	var steel:=StandardMaterial3D.new();steel.albedo_color=Color(.65,.70,.72);steel.metallic=.8;steel.roughness=.28
+	var wood:=MAT.make(MAT.Kind.WOOD,Color(.24,.12,.06),.85)
+	ART.box(knife,Vector3(0,.10,0),Vector3(.028,.16,.006),steel);ART.box(knife,Vector3(0,-.035,0),Vector3(.035,.10,.025),wood)
+	return knife
 
 func _make_consumption(item: String) -> void:
 	# These props survive Inventory.changed clearing the last selected item.
@@ -420,7 +470,12 @@ func _make_consumption(item: String) -> void:
 
 func _advance_feedback() -> void:
 	var progress:=clampf(elapsed/maxf(duration,.01),0,1)
-	if kind=="take_fish" and progress>=.40 and not _fish_contact:
+	for food in [_food_first,_food_third]:
+		if is_instance_valid(food) and food.has_node("PeelingFoil"):food.get_node("PeelingFoil").visible=progress<.25
+		if is_instance_valid(food) and kind=="wrap_food":
+			food.get_child(0).scale.y=lerpf(.18,1.0,smoothstep(.25,.8,progress))
+			food.get_node("MealInsideFoil").visible=progress<.72
+	if kind=="take_fish" and progress>=.36 and not _fish_contact:
 		if not player.call("take_fishing_catch"):
 			player.call("_hud_toast","FISH STAYS ON THE LINE · FREE BAG SPACE AND TRY AGAIN")
 			stop();return
@@ -435,21 +490,31 @@ func _advance_feedback() -> void:
 		_garden_right.position=Vector3(-.24,.035-.11*contact,.05)*reach
 		_garden_right.rotation=Vector3(-.10*contact,0,-.08*reach)
 	if kind in FIRE_KINDS:_advance_fire_feedback(progress)
+	if kind=="scoop":
+		for prop in [_tool,_view_tool]:
+			if is_instance_valid(prop):
+				var sand:=prop.get_node_or_null("PalmSand") as Node3D
+				if sand!=null:sand.visible=progress>=.43 and progress<.94
 	if kind in ["repair","assemble_electronics"]:_advance_repair_feedback(progress)
 	for prop in [_pickup_first,_pickup_third]:
-		if is_instance_valid(prop):prop.visible=progress>=(.40 if kind=="take_fish" else .38) and progress<.94
+		if is_instance_valid(prop):prop.visible=progress>=(.34 if kind=="take_fish" else .38) and progress<.92
 		if is_instance_valid(prop) and kind=="take_fish":
-			var settle:=smoothstep(.44,.82,progress)
-			prop.rotation=Vector3(sin(elapsed*17)*.10*(1-settle),0,PI/2*(1-settle))
+			var settle:=smoothstep(.34,.66,progress)
+			prop.rotation=Vector3(sin(elapsed*19)*.12*(1-settle),0,PI/2*(1-settle))
 	var played_this_frame:=false
 	while _cues_played<_cue_times.size() and progress>=_cue_times[_cues_played]:
 		_cues_played+=1
 		# Avoid bursting stale sounds after a long frame or an app resume.
 		if not played_this_frame and (progress-_cue_times[_cues_played-1])*duration<.08:
-			var contact:=_cue_sound
+			var contact:=_cue_sounds[_cues_played-1] if _cue_sounds.size()>_cues_played-1 else _cue_sound
+			_sound.global_position=target if target!=Vector3.ZERO else player.global_position
 			if contact=="repair_contact":contact="casing" if _cues_played in [1,6] else "cloth" if _cues_played==2 else "metal"
 			if contact=="stone_contact":contact="stone"
-			_sound.stream=CONTACT.pick(contact) if CONTACT.BANK.has(contact) else FOLEY[contact]
+			if contact=="sip":_sound.stream=FOLEY.sip
+			elif CONTACT.ACTION.has(contact):_sound.stream=CONTACT.pick_action(contact)
+			elif CONTACT.BANK.has(contact):_sound.stream=CONTACT.pick(contact)
+			elif FOLEY.has(contact):_sound.stream=FOLEY[contact]
+			else:_sound.stream=CONTACT.pick("cloth")
 			_sound.volume_db=-18 if contact in ["cloth","metal","casing"] else -12
 			_sound.pitch_scale=randf_range(.98,1.02);_sound.play()
 			_foley_count+=1;played_this_frame=true
@@ -472,7 +537,7 @@ func stop() -> void:
 	_construction_idle = false
 	kind="";_panel.hide();_clear_tools()
 	if is_instance_valid(player.get("_hand_item")):player.get("_hand_item").visible=true
-	if is_instance_valid(player.get("_third_person_launcher")):player.get("_third_person_launcher").visible=int(player.get("cam_mode"))==1 and not player.call("movement_owns_hands")
+	if is_instance_valid(player.get("_third_person_launcher")):player.get("_third_person_launcher").visible=int(player.get("cam_mode"))>=1 and not player.call("movement_owns_hands")
 
 func _clear_tools() -> void:
 	_garden_whole.clear();_garden_cut.clear();_garden_seeds.clear()
@@ -492,7 +557,8 @@ func _clear_tools() -> void:
 func _process(delta: float) -> void:
 	if kind=="take_fish" and (str(player.get("active_item"))!="Fishing Rod" or player.get("is_swimming") or player.get("build_mode")):stop()
 	if kind=="take_fish" and not _fish_contact:target=player.get_node("SurvivalEquipment").call("catch_position")
-	var construction: bool = bool(player.get("build_mode")) or is_instance_valid(player.get("_editing"))
+	var boat_build:=player.get_node_or_null("BoatBuilding")
+	var construction: bool = bool(player.get("build_mode")) or is_instance_valid(player.get("_editing")) or (boat_build!=null and boat_build.building)
 	if (construction and kind not in ["","build","assemble_electronics"]) or (not construction and kind=="build"):stop()
 	if _construction_idle and not construction: stop()
 	if not kind.is_empty() and not _construction_idle:
@@ -507,6 +573,7 @@ func _process(delta: float) -> void:
 		_panel.hide()
 	_sync_held()
 	var first := int(player.get("cam_mode"))==0
+	if is_instance_valid(player.get("boat_vehicle")):player.call("_set_viewmodel_visible",first)
 	var free_hands: bool = player.call("movement_owns_hands")
 	if is_instance_valid(_tool):_tool.visible=not first and (kind!="torch_mount" or elapsed/duration<.70)
 	if is_instance_valid(_left_tool):_left_tool.visible=not first
@@ -515,10 +582,13 @@ func _process(delta: float) -> void:
 		var pose := sample_pose()
 		_view_tool.position=pose.view_pos;_view_tool.rotation=pose.view_rot
 	var hand := player.get("_hand_item") as Node3D
-	if is_instance_valid(hand):hand.visible=(not is_instance_valid(_view_tool) or kind=="take_fish") and not (free_hands and bool(player.get("is_swimming")))
-	if is_instance_valid(_held):_held.visible=not first and (not is_instance_valid(_tool) or kind=="take_fish") and not construction and not free_hands
+	if is_instance_valid(hand):hand.visible=(not is_instance_valid(_view_tool) or kind=="take_fish") and not (free_hands and (bool(player.get("is_swimming")) or is_instance_valid(player.get_node("HuntingCargo").held)))
+	if is_instance_valid(_held):_held.visible=not first and (not is_instance_valid(_tool) or kind=="take_fish") and not construction and not free_hands and kind not in ["board_boat","leave_boat","lift_carcass","place_carcass","prepare_animal","wrap_food","recover_cargo"]
+	if is_instance_valid(_held) and str(player.get("active_item"))=="Bow":
+		var nocked:=_held.find_child("NockedArrow",true,false) as Node3D
+		if nocked!=null:nocked.visible=Inventory.has("Arrow",1);nocked.position.z=-.38+.18*player.get_node("SurvivalEquipment").get_draw_fraction()
 	if is_instance_valid(player.get("_third_person_launcher")):
-		var action_hides_launcher := kind in FIRE_KINDS or kind in ["chop","build","craft","scoop","grab","pick","harvest","plant","eat","drink","cook","prepare_seed","unpack","mine","dig","paddle","anchor"]
+		var action_hides_launcher := kind in FIRE_KINDS or kind in ["chop","build","craft","scoop","grab","pick","harvest","plant","eat","drink","cook","prepare_seed","unpack","recover_cargo","mine","dig","paddle","anchor","board_boat","leave_boat","lift_carcass","place_carcass","prepare_animal","wrap_food"]
 		player.get("_third_person_launcher").visible=not first and not free_hands and not action_hides_launcher and str(player.get("active_item"))=="Rope"
 
 func _sync_held() -> void:
@@ -562,22 +632,31 @@ func sample_pose() -> Dictionary:
 	var view_pos := Vector3.ZERO
 	var view_rot := Vector3.ZERO
 	var torso := Vector3.ZERO
+	if kind.is_empty() and str(player.get("active_item"))=="Spear" and player.get_node("SurvivalEquipment").drawing:
+		var draw: float=player.get_node("SurvivalEquipment").get_draw_fraction()
+		return {"right":Vector3(.32,.28+.17*draw,-.38+.4*draw),"left":left,"weight":1.0,"torso":Vector3(0,-.1*draw,0),"view_pos":Vector3(.04,.12,.24)*draw,"view_rot":Vector3(-.18,0,.06)*draw}
+	if kind.is_empty() and str(player.get("active_item"))=="Bow":
+		var draw: float=player.get_node("SurvivalEquipment").get_draw_fraction()
+		var aim_basis: Basis=(player.get("camera") as Camera3D).global_basis.orthonormalized()
+		var bow_hand: Vector3=player.to_local(player.global_position+Vector3.UP*.24+aim_basis*Vector3(.28,.06,-.52))
+		var string_hand: Vector3=player.to_local(player.global_position+Vector3.UP*.24+aim_basis*Vector3(-.06,.08,-.49+.37*draw))
+		return {"right":bow_hand,"left":string_hand,"weight":1.0,"torso":Vector3.ZERO,"view_pos":Vector3(-.05,.02,.04)*draw,"view_rot":Vector3.ZERO}
 	if kind.is_empty() and str(player.get("active_item"))=="Fishing Rod" and player.get("_fishing_catch"):
 		# A raised tip supports the fish below it; the line cannot lift from below.
 		return {"right":Vector3(.27,.32,-.32),"left":Vector3(-.12,.18,-.33),"weight":1.0,"torso":Vector3.ZERO,"view_pos":Vector3(0,.08,0),"view_rot":Vector3(.60,0,0)}
 	match kind:
 		"take_fish":
-			var reach:=smoothstep(.04,.34,t)
-			var pull:=smoothstep(.44,.78,t)
+			var reach:=smoothstep(.02,.28,t)
+			var pull:=smoothstep(.34,.70,t)
 			var local_catch:=player.global_transform.affine_inverse()*target
 			right=Vector3(.27,.32,-.32)
-			left=Vector3(-.25,.12,-.30).lerp(local_catch,reach).lerp(Vector3(-.16,.20,-.32),pull)
-			view_rot=Vector3(.60,0,-.12*pull)
+			left=Vector3(-.25,.12,-.30).lerp(local_catch,reach).lerp(Vector3(-.13,.22,-.34),pull)
+			view_rot=Vector3(.52,0,-.24*pull)
 			view_pos=Vector3(-.34,-.10,.02)
 			if is_instance_valid(_view_tool):
 				var view_contact:=(_view_tool.get_parent() as Node3D).to_local(target)-Basis.from_euler(view_rot)*_pickup_first.position*.85
-				view_pos=view_pos.lerp(view_contact,reach).lerp(Vector3(-.24,-.14,.12),pull)
-		"prepare_seed","unpack":
+				view_pos=view_pos.lerp(view_contact,reach).lerp(Vector3(-.22,-.08,.10),pull)
+		"prepare_seed","unpack","recover_cargo":
 			var reach:=smoothstep(.04,.18,t)*(1.-smoothstep(.85,1.,t))
 			var cut:=maxf(0,sin(t*TAU*3.))*reach if t<.62 else 0.
 			right=Vector3(.18,.18,-.32).lerp(Vector3(-.02,.12,-.42),reach);right.y-=cut*.07
@@ -644,7 +723,17 @@ func sample_pose() -> Dictionary:
 			var reach:=sin(t*PI)
 			right=Vector3(.18,-.05,-.35-reach*.24);left=Vector3(-.28,-.16,-.08)
 			view_pos=Vector3(-.09*reach,-.07*reach,-.23*reach);view_rot.z=.12*reach
-		"scoop","plant":
+		"scoop":
+			var reach:=smoothstep(.04,.40,t)*(1.0-smoothstep(.62,.94,t))
+			var lift:=smoothstep(.45,.78,t)*(1.0-smoothstep(.86,1.0,t))
+			var contact:=player.to_local(target)+Vector3.UP*.06
+			var rest:=Vector3(.16,.13,-.32)
+			var near:=rest+(contact-rest).limit_length(.82)
+			right=rest.lerp(near,reach)+Vector3.UP*lift*.12
+			left=Vector3(-.18,-.12,-.40).lerp(Vector3(-.14,.04,-.34),lift)
+			view_pos=Vector3(-.06,-.24*reach+.12*lift,-.26*reach+.06*lift)
+			view_rot=Vector3(.45*reach-.35*lift,0,.20*lift);torso.x=.24*reach
+		"plant":
 			var dig := sin(t*PI)
 			right=Vector3(0.16,-0.14-dig*0.28,-0.43);left=Vector3(-0.18,-0.19,-0.33)
 			view_pos=Vector3(-0.05,-0.16*dig,-0.09*dig);view_rot.x=0.30*dig;torso.x=0.20*dig
@@ -658,9 +747,15 @@ func sample_pose() -> Dictionary:
 			left=Vector3(-0.18,0.07,-0.33)
 			view_rot.x=-0.55+release*0.72;view_pos.y=0.08*(1-release)
 		"reel":
-			var crank := t*TAU*3.0
+			var crank := t*TAU*1.5
 			right=Vector3(0.24,0.27,-0.42);left=Vector3(-0.08+cos(crank)*0.05,0.08+sin(crank)*0.05,-0.34)
 			view_rot.x=lerpf(-.12,.60,smoothstep(.20,.85,t))+sin(crank)*.025;view_pos.y=.035
+		"board_boat","leave_boat":
+			var brace:=sin(t*PI);right=Vector3(.38,-.12,-.45);left=Vector3(-.38,-.12,-.45);torso.x=.20*brace;view_pos=Vector3(0,-.12*brace,-.10*brace);view_rot.x=.25*brace
+		"prepare_animal":
+			var cut:=sin(t*TAU*4);right=Vector3(.24,-.1,-.5+cut*.08);left=Vector3(-.20,-.13,-.48);torso.x=.16;view_pos=Vector3(0,-.12,-.15+cut*.03);view_rot.x=.25+cut*.13
+		"lift_carcass","place_carcass","wrap_food":
+			var reach:=sin(t*PI);right=Vector3(.32,-.1,-.48);left=Vector3(-.32,-.1,-.48);torso.x=.12*reach;view_pos=Vector3(0,-.12*reach,-.12*reach);view_rot.z=sin(t*TAU*3)*.04
 		"eat":
 			var lift := smoothstep(.04,.30,t)*(1.0-smoothstep(.72,.96,t))
 			var bite := sin(smoothstep(.32,.69,t)*PI*4.0)*.012*lift
@@ -713,7 +808,7 @@ func sample_pose() -> Dictionary:
 		"bandage":
 			right=Vector3(-0.06,0,-0.27);left=Vector3(-0.20,0.12,-0.32)
 			view_rot.z=sin(t*TAU*2)*0.22;view_pos.x=-0.16
-		"strike","bow":
+		"strike","bow","throw_spear":
 			var thrust:=smoothstep(.22,.57,t)*(1-smoothstep(.62,.93,t))
 			right=Vector3(.28,.13,-.23-.44*thrust);left=Vector3(-.17,.16,-.42-.10*thrust)
 			view_pos=Vector3(-.05*thrust,.025*thrust,-.38*thrust);view_rot.x=.08-.12*thrust
@@ -739,6 +834,13 @@ func _make_tool(action: String) -> Node3D:
 		var blade:=ART.box(knife,Vector3(0,0,-.22),Vector3(.007,.045,.15),MAT.make(MAT.Kind.METAL,Color(.43,.46,.44),.62,.6));blade.rotation.x=-.10
 		return knife
 	var item:=str(player.get("active_item"))
+	if action=="scoop":
+		var palm:=Node3D.new();palm.name="CuppedSandHand"
+		var sand:=SphereMesh.new();sand.radius=.075;sand.height=.055;sand.radial_segments=12;sand.rings=6
+		var material:=ShaderMaterial.new();material.shader=preload("res://shaders/sand_surface.gdshader")
+		material.set_shader_parameter("sand_color",Color(.28,.19,.10) if target.y>1 else Color(.78,.62,.40))
+		var mound:=MeshInstance3D.new();mound.name="PalmSand";mound.mesh=sand;mound.material_override=material;mound.position=Vector3(0,-.005,-.19);mound.hide();palm.add_child(mound)
+		return palm
 	if action=="strike":
 		var spear:=Node3D.new();spear.name="HuntingSpear"
 		var hand:=player.get("_hand_item") as Node3D

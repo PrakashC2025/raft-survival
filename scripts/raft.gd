@@ -1,5 +1,6 @@
 extends AnimatableBody3D
 const OBJECT_MATERIALS := preload("res://scripts/object_materials.gd")
+const COURSE_SKIP := preload("res://scripts/course_skip.gd")
 
 @export var float_height: float = 0.045
 @export var follow_speed: float = 9.0
@@ -22,6 +23,7 @@ var _motion_wave_time := -INF
 var _motion_level := false
 var _pending_motion_delta := 0.0
 var upgrade_tier := 0
+var rowboat_built := false
 var _course_active := false
 var _course_target := Vector3.ZERO
 var _arrival_radius := 14.0
@@ -29,6 +31,7 @@ var anchored := false
 var _paddle_velocity := Vector3.ZERO
 var _anchor_rig: Node3D
 var _anchor_tween: Tween
+var _skip_settle_frames:=0
 
 
 func _ready() -> void:
@@ -67,13 +70,35 @@ func get_navigation_speed() -> float:
 			return 2.7  # canvas sail
 		2:
 			return 4.8  # small outboard motor
-	return 0.0
+	return 1.8 if rowboat_built else 0.0
+
+func set_rowboat_built(value: bool) -> void:
+	rowboat_built=value
+	# Legacy map propulsion remains compatible; the usable hull is separate.
+	var old:=get_node_or_null("RowboatVisual")
+	if old!=null:old.queue_free()
+
+func _build_rowboat_visual() -> void:
+	if get_node_or_null("RowboatVisual")!=null:return
+	var rig:=Node3D.new();rig.name="RowboatVisual";rig.position=Vector3(0,.42,.72);add_child(rig)
+	var wood:=OBJECT_MATERIALS.make(OBJECT_MATERIALS.Kind.WOOD,Color(.30,.16,.075),.94)
+	var hull_shape:=CapsuleMesh.new();hull_shape.radius=.58;hull_shape.height=2.3;hull_shape.radial_segments=12;hull_shape.rings=5
+	var hull:=MeshInstance3D.new();hull.name="RoundedBoatHull";hull.mesh=hull_shape;hull.material_override=wood;hull.rotation.x=PI/2;hull.position.y=-.05;rig.add_child(hull)
+	for i in 5:
+		var plank:=BoxMesh.new();plank.size=Vector3(2.1,.12,.18)
+		var mesh:=MeshInstance3D.new();mesh.mesh=plank;mesh.material_override=wood
+		mesh.position=Vector3(0,.05,-.56+float(i)*.28);rig.add_child(mesh)
+	for x in [-1.0,1.0]:
+		var side:=BoxMesh.new();side.size=Vector3(.14,.36,1.45)
+		var wall:=MeshInstance3D.new();wall.mesh=side;wall.material_override=wood;wall.position=Vector3(x,.20,0);rig.add_child(wall)
+	var seat:=BoxMesh.new();seat.size=Vector3(1.5,.12,.22)
+	var seat_mesh:=MeshInstance3D.new();seat_mesh.mesh=seat;seat_mesh.material_override=wood;seat_mesh.position=Vector3(0,.36,0);rig.add_child(seat_mesh)
 
 
 func set_course(target: Vector3,arrival: float=14.0) -> bool:
 	if anchored or get_navigation_speed() <= 0.0:
 		return false
-	_arrival_radius=clampf(arrival,14,80)
+	_arrival_radius=clampf(arrival,4,80)
 	_paddle_velocity=Vector3.ZERO
 	_course_target = Vector3(target.x, global_position.y, target.z)
 	_course_active = Vector2(_course_target.x - global_position.x,
@@ -83,6 +108,23 @@ func set_course(target: Vector3,arrival: float=14.0) -> bool:
 
 func clear_course() -> void:
 	_course_active = false
+
+func skip_course() -> bool:
+	if anchored or not can_skip_course():return false
+	var destination:=COURSE_SKIP.landing(self,_course_target,_arrival_radius)
+	if not destination.is_finite():return false
+	var actor:=get_tree().get_first_node_in_group("player") as CharacterBody3D
+	var movement:=destination-global_position
+	var was_synced:=sync_to_physics
+	sync_to_physics=false;global_position=destination;force_update_transform()
+	PhysicsServer3D.body_set_state(get_rid(),PhysicsServer3D.BODY_STATE_TRANSFORM,global_transform)
+	reset_physics_interpolation();sync_to_physics=was_synced;_skip_settle_frames=2
+	actor.global_position+=movement;actor.reset_physics_interpolation()
+	_motion_frame=-1;_sample_wave_time=-INF;_pending_motion_delta=0
+	return true
+
+func can_skip_course() -> bool:
+	return not anchored and COURSE_SKIP.can_skip(self,_arrival_radius)
 
 
 func has_active_course() -> bool:
@@ -113,6 +155,9 @@ func unregister_sample_point(marker: Node3D) -> void:
 
 func _physics_process(delta: float) -> void:
 	_pending_motion_delta+=delta
+	# Let the server publish the teleported transform before queuing another
+	# animated platform move; elapsed sailing time is retained for the next tick.
+	if _skip_settle_frames>0:_skip_settle_frames-=1;return
 	var oc := _get_ocean()
 	var frame := Engine.get_process_frames()
 	var wave_time := oc._time if oc != null else 0.0
@@ -339,29 +384,127 @@ func _build_motor_visual() -> void:
 	rig.name = "MotorUpgradeVisual"
 	rig.position = Vector3(0.0, 0.05, 1.02)
 	add_child(rig)
-	var metal := _mat(Color(0.18, 0.23, 0.27), 0.35, 0.72)
-	var accent := _mat(Color(0.78, 0.23, 0.12), 0.5)
+
+	# Realistic marine motor materials using the salvage motor atlas
+	var atlas_tex: Texture2D = null
+	if ResourceLoader.exists("res://textures/salvage/motor_machinery_atlas.jpg"):
+		atlas_tex = load("res://textures/salvage/motor_machinery_atlas.jpg")
+
+	var cowl_mat := StandardMaterial3D.new()
+	cowl_mat.albedo_color = Color(0.24, 0.35, 0.44)
+	cowl_mat.roughness = 0.38
+	cowl_mat.metallic = 0.75
+	if atlas_tex != null:
+		cowl_mat.albedo_texture = atlas_tex
+
+	var prop_mat := StandardMaterial3D.new()
+	prop_mat.albedo_color = Color(0.86, 0.90, 0.94)
+	prop_mat.roughness = 0.20
+	prop_mat.metallic = 0.92
+	if atlas_tex != null:
+		prop_mat.albedo_texture = atlas_tex
+
+	var iron_mat := StandardMaterial3D.new()
+	iron_mat.albedo_color = Color(0.22, 0.24, 0.26)
+	iron_mat.roughness = 0.65
+	iron_mat.metallic = 0.70
+	if atlas_tex != null:
+		iron_mat.albedo_texture = atlas_tex
+
+	var brass_mat := StandardMaterial3D.new()
+	brass_mat.albedo_color = Color(0.84, 0.72, 0.40)
+	brass_mat.roughness = 0.30
+	brass_mat.metallic = 0.85
+
+	var rubber_mat := StandardMaterial3D.new()
+	rubber_mat.albedo_color = Color(0.08, 0.08, 0.08)
+	rubber_mat.roughness = 0.88
+
+	# 1. Main streamlined engine cowling with recoil starter & air vents
 	var case_mesh := BoxMesh.new()
-	case_mesh.size = Vector3(0.48, 0.52, 0.43)
-	_add_mesh(rig, "EngineCase", case_mesh, metal, Vector3(0.0, 0.12, 0.0))
-	var cap_mesh := CylinderMesh.new()
-	cap_mesh.top_radius = 0.19
-	cap_mesh.bottom_radius = 0.19
-	cap_mesh.height = 0.12
-	cap_mesh.radial_segments = 10
-	_add_mesh(rig, "FuelCap", cap_mesh, accent, Vector3(0.0, 0.43, -0.02))
+	case_mesh.size = Vector3(0.44, 0.48, 0.40)
+	_add_mesh(rig, "EngineCase", case_mesh, cowl_mat, Vector3(0.0, 0.16, 0.0))
+
+	var head_mesh := CylinderMesh.new()
+	head_mesh.top_radius = 0.18
+	head_mesh.bottom_radius = 0.20
+	head_mesh.height = 0.10
+	head_mesh.radial_segments = 14
+	_add_mesh(rig, "FuelCap", head_mesh, cowl_mat, Vector3(0.0, 0.42, -0.02))
+
+	var starter_mesh := CylinderMesh.new()
+	starter_mesh.top_radius = 0.05
+	starter_mesh.bottom_radius = 0.05
+	starter_mesh.height = 0.035
+	_add_mesh(rig, "StarterPull", starter_mesh, iron_mat, Vector3(0.0, 0.48, -0.05))
+
+	for vent_i in range(3):
+		var vent := BoxMesh.new()
+		vent.size = Vector3(0.24, 0.015, 0.008)
+		_add_mesh(rig, "AirVent%d" % vent_i, vent, iron_mat, Vector3(0.0, 0.22 - vent_i * 0.035, -0.205))
+
+	# 2. Transom mounting bracket with brass clamp screws
+	var clamp_mesh := BoxMesh.new()
+	clamp_mesh.size = Vector3(0.34, 0.22, 0.18)
+	_add_mesh(rig, "TransomBracket", clamp_mesh, iron_mat, Vector3(0.0, 0.02, -0.16))
+	for screw_side in [-0.11, 0.11]:
+		var screw := CylinderMesh.new()
+		screw.top_radius = 0.018
+		screw.bottom_radius = 0.018
+		screw.height = 0.12
+		_add_mesh(rig, "ClampScrew", screw, brass_mat, Vector3(screw_side, 0.04, -0.24), Vector3(PI * 0.5, 0, 0))
+
+	# 3. Steering tiller arm with rubber twist throttle
+	var tiller := CylinderMesh.new()
+	tiller.top_radius = 0.016
+	tiller.bottom_radius = 0.016
+	tiller.height = 0.46
+	_add_mesh(rig, "TillerArm", tiller, prop_mat, Vector3(-0.16, 0.20, -0.26), Vector3(-0.25, 0.15, 0))
+	var grip := CylinderMesh.new()
+	grip.top_radius = 0.024
+	grip.bottom_radius = 0.024
+	grip.height = 0.14
+	_add_mesh(rig, "ThrottleGrip", grip, rubber_mat, Vector3(-0.19, 0.23, -0.46), Vector3(-0.25, 0.15, 0))
+
+	# 4. Streamlined midsection driveshaft housing
 	var shaft := CylinderMesh.new()
-	shaft.top_radius = 0.055
-	shaft.bottom_radius = 0.055
-	shaft.height = 0.7
-	shaft.radial_segments = 8
-	_add_mesh(rig, "Shaft", shaft, metal, Vector3(0.0, -0.37, 0.18))
+	shaft.top_radius = 0.065
+	shaft.bottom_radius = 0.052
+	shaft.height = 0.65
+	shaft.radial_segments = 12
+	_add_mesh(rig, "Shaft", shaft, iron_mat, Vector3(0.0, -0.32, 0.08))
+
+	# 5. Torpedo gearcase, anti-ventilation plate & protective skeg
+	var anti_plate := BoxMesh.new()
+	anti_plate.size = Vector3(0.30, 0.022, 0.36)
+	_add_mesh(rig, "CavitationPlate", anti_plate, iron_mat, Vector3(0.0, -0.58, 0.14))
+
+	var torpedo := CylinderMesh.new()
+	torpedo.top_radius = 0.062
+	torpedo.bottom_radius = 0.062
+	torpedo.height = 0.42
+	torpedo.radial_segments = 12
+	_add_mesh(rig, "TorpedoGearcase", torpedo, iron_mat, Vector3(0.0, -0.72, 0.14), Vector3(PI * 0.5, 0, 0))
+
+	var skeg := BoxMesh.new()
+	skeg.size = Vector3(0.022, 0.22, 0.28)
+	_add_mesh(rig, "SkegFin", skeg, iron_mat, Vector3(0.0, -0.83, 0.12))
+
+	# 6. Polished 3-blade stainless steel hydrofoil propeller
+	var prop_hub := CylinderMesh.new()
+	prop_hub.top_radius = 0.046
+	prop_hub.bottom_radius = 0.046
+	prop_hub.height = 0.09
+	_add_mesh(rig, "PropellerHub", prop_hub, prop_mat, Vector3(0.0, -0.72, 0.33), Vector3(PI * 0.5, 0, 0))
+
+	# Retain named PropellerA and PropellerB meshes for backwards compatibility
 	var prop := BoxMesh.new()
-	prop.size = Vector3(0.52, 0.06, 0.11)
-	_add_mesh(rig, "PropellerA", prop, metal, Vector3(0.0, -0.74, 0.18))
+	prop.size = Vector3(0.50, 0.045, 0.09)
+	_add_mesh(rig, "PropellerA", prop, prop_mat, Vector3(0.0, -0.72, 0.33), Vector3(0, 0, 0.35))
 	var prop_cross := BoxMesh.new()
-	prop_cross.size = Vector3(0.11, 0.06, 0.52)
-	_add_mesh(rig, "PropellerB", prop_cross, metal, Vector3(0.0, -0.74, 0.18))
+	prop_cross.size = Vector3(0.09, 0.045, 0.50)
+	_add_mesh(rig, "PropellerB", prop_cross, prop_mat, Vector3(0.0, -0.72, 0.33), Vector3(0, 0, -0.35))
+
 
 
 func _add_mesh(parent: Node3D, node_name: String, mesh: Mesh, material: Material,

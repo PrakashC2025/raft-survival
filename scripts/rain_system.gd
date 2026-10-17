@@ -22,13 +22,16 @@ class_name RainSystem
 @export var max_duration_minutes: float = 5.0
 
 # --- Falling rain visuals ---
-@export var particle_amount: int = 700
-@export var rain_area_size: Vector3 = Vector3(48.0, 16.0, 48.0)
-@export var fall_speed: float = 14.0
-@export var fade_time: float = 4.0
-## Horizontal drift while falling (x = east/west, y = north/south). Small
-## values (0.2-0.6) read as believable wind-blown rain; 0,0 = dead vertical.
-@export var wind_direction: Vector2 = Vector2(0.4, 0.15)
+@export var particle_amount: int = 1800
+@export var rain_area_size: Vector3 = Vector3(22.0, 14.0, 22.0)
+# Near the surface, drag already balances gravity: falling speed is terminal.
+# NASA GPM: ordinary rain is below the largest-drop limit of about 10 m/s.
+@export var fall_speed: float = 8.5
+@export var fade_time: float = 12.0
+@export var cloud_build_seconds: float = 45.0
+@export var cloud_clear_seconds: float = 65.0
+## Horizontal wind in metres/second (east/west, north/south).
+@export var wind_direction: Vector2 = Vector2(2.5, 0.9)
 @export var toggle_fog_during_rain: bool = true
 
 # --- Indoor cover ("rain must never fall inside a roof/wall/stairs") ---
@@ -77,7 +80,7 @@ var _camera_submerged := false
 @export var water_splash_enabled: bool = true
 
 # --- Audio (optional — assign your own .ogg/.wav in the Inspector) ---
-@export var rain_sound: AudioStream = preload("res://audio/rain_ambience.wav")
+@export var rain_sound: AudioStream = preload("res://audio/contact/rain_loop.wav")
 @export_range(-40.0, 0.0) var rain_volume_db := -12.0
 @export var thunder_sounds: Array[AudioStream] = []
 @export var enable_lightning: bool = true
@@ -118,6 +121,13 @@ var _is_raining: bool = false
 var _intensity: float = 0.0
 var _target_intensity: float = 0.0
 var _rain_remaining: float = 0.0
+var _cloud_cover := 0.0
+var _front_remaining := 0.0
+var _pending_duration := 0.0
+var _weather_time := 0.0
+var _cloud_offset := Vector2.ZERO
+var _sea_response := 0.0
+var _wind_tick := 0.0
 
 var _orig_fog_density: float = -1.0
 var _orig_ambient_energy: float = -1.0
@@ -129,7 +139,7 @@ func _ready() -> void:
 	# Rain is an occasional weather event, so keep its particle and ray-query
 	# budget conservative on mobile without removing the effect.
 	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
-		particle_amount = mini(particle_amount, 420)
+		particle_amount = mini(particle_amount, 1000 if GameSettings.quality != 1 else 650)
 		splash_pool_size = mini(splash_pool_size, 8)
 		splash_particle_count = mini(splash_particle_count, 5)
 		splashes_per_second = minf(splashes_per_second, 10.0)
@@ -142,6 +152,10 @@ func _ready() -> void:
 	_build_splash_pool()
 	_build_audio()
 	_build_overlay()
+	var wet_visual := preload("res://scripts/rain_exposure.gd").new()
+	wet_visual.name = "WetSurvivorRain"
+	wet_visual.actor = _player
+	add_child(wet_visual)
 
 	_schedule_timer = Timer.new()
 	_schedule_timer.one_shot = true
@@ -153,14 +167,59 @@ func _ready() -> void:
 
 func save_weather_state() -> Dictionary:
 	return {"raining": _is_raining, "remaining": _rain_remaining,
-		"next_check": _schedule_timer.time_left if _schedule_timer != null else 240.0}
+		"next_check": _schedule_timer.time_left if _schedule_timer != null else 240.0,
+		"cloud_cover": _cloud_cover, "front_remaining": _front_remaining,
+		"pending_duration": _pending_duration, "intensity": _intensity,
+		"cloud_x": _cloud_offset.x, "cloud_z": _cloud_offset.y}
+
+func _weather_number(state: Dictionary, key: String, fallback: float, lower: float, upper: float) -> float:
+	var value: Variant = state.get(key,fallback)
+	if not (value is float or value is int) or not is_finite(float(value)):return fallback
+	return clampf(float(value),lower,upper)
 
 func restore_weather_state(state: Dictionary) -> void:
-	var remaining := clampf(float(state.get("remaining", 0.0)), 0.0, 600.0)
-	if bool(state.get("raining", false)) and remaining > 0.0:
-		start_rain(remaining)
-	if _schedule_timer != null:
-		_schedule_timer.start(clampf(float(state.get("next_check", 240.0)), 1.0, 900.0))
+	stop_rain()
+	var remaining := _weather_number(state,"remaining",0.0,0.0,600.0)
+	if state.get("raining",false)==true and remaining>0.0:start_rain(remaining)
+	_cloud_cover = _weather_number(state,"cloud_cover",1.0 if _is_raining else 0.0,0.0,1.0)
+	_intensity = _weather_number(state,"intensity",1.0 if _is_raining else 0.0,0.0,1.0)
+	_front_remaining = _weather_number(state,"front_remaining",0.0,0.0,120.0)
+	_pending_duration = _weather_number(state,"pending_duration",0.0,0.0,600.0)
+	if _is_raining or _pending_duration<=0.0:_front_remaining=0.0;_pending_duration=0.0
+	_cloud_offset = Vector2(_weather_number(state,"cloud_x",0.0,-10000.0,10000.0),_weather_number(state,"cloud_z",0.0,-10000.0,10000.0))
+	if _schedule_timer != null:_schedule_timer.start(_weather_number(state,"next_check",240.0,1.0,900.0))
+
+func approach_rain(duration_seconds: float) -> void:
+	if _is_raining or _pending_duration>0.0:return
+	_cache_environment_originals()
+	_pending_duration = clampf(duration_seconds,1.0,600.0)
+	_front_remaining = maxf(cloud_build_seconds,1.0)
+
+func sky_storm_strength() -> float:
+	return smoothstep(0.0,1.0,_cloud_cover)
+
+func wind_velocity() -> Vector2:
+	var gust := 1.0+sin(_weather_time*.14)*.12+sin(_weather_time*.047)*.08
+	return wind_direction * lerpf(.55,1.0,sky_storm_strength()) * gust
+
+func _update_weather(delta: float) -> void:
+	_weather_time += delta
+	if _pending_duration>0.0:
+		_front_remaining = maxf(0.0,_front_remaining-delta)
+		if _front_remaining<=0.0:start_rain(_pending_duration)
+	var storm := _is_raining or _pending_duration>0.0
+	var seconds := cloud_build_seconds if storm else cloud_clear_seconds
+	_cloud_cover = move_toward(_cloud_cover,1.0 if storm else 0.0,delta/maxf(seconds,1.0))
+	_cloud_offset += wind_velocity()*delta/6000.0
+	_sea_response = move_toward(_sea_response,sky_storm_strength(),delta/30.0)
+	_wind_tick += delta
+	if _wind_tick>=.25 and _rain_process_mat!=null:
+		_wind_tick=0.0
+		var wind := wind_velocity()
+		var velocity := Vector3(wind.x,-fall_speed,wind.y)
+		_rain_process_mat.direction=velocity.normalized()
+		_rain_process_mat.initial_velocity_min=velocity.length()*.78
+		_rain_process_mat.initial_velocity_max=velocity.length()*1.05
 
 
 func _find_refs() -> void:
@@ -196,17 +255,21 @@ func _build_particles() -> void:
 	# emitter (this node) follows the camera — rain never slides with view
 	# rotation and the cover ring below stays anchored in the world.
 	_particles.local_coords = false
+	_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_particles.visibility_aabb = AABB(-rain_area_size, rain_area_size * 2.0)
+	_particles.position.y = rain_area_size.y * 0.5
 
 	var mat := ParticleProcessMaterial.new()
-	var fall_dir := Vector3(wind_direction.x, -3.0, wind_direction.y).normalized()
+	var fall_dir := Vector3(wind_direction.x, -fall_speed, wind_direction.y).normalized()
 	mat.direction = fall_dir
 	mat.spread = 4.0
-	mat.gravity = Vector3(0, -4.0, 0)
-	mat.initial_velocity_min = fall_speed * 0.9
-	mat.initial_velocity_max = fall_speed * 1.1
+	mat.gravity = Vector3.ZERO
+	mat.initial_velocity_min = fall_speed * 0.78
+	mat.initial_velocity_max = fall_speed * 1.05
 	mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	mat.emission_box_extents = rain_area_size * 0.5
+	# Rain enters from above. Filling the whole volume also spawns drops below
+	# water and wastes most of the budget before a drop reaches the view.
+	mat.emission_box_extents = Vector3(rain_area_size.x * 0.5, 0.2, rain_area_size.z * 0.5)
 	mat.scale_min = 0.85
 	mat.scale_max = 1.3
 	# THE KEY LINE for a real "streak" look: orient each quad's long axis
@@ -216,7 +279,7 @@ func _build_particles() -> void:
 	_rain_process_mat = mat
 
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.018, clampf(fall_speed * 0.045, 0.35, 0.9))
+	quad.size = Vector2(0.008, clampf(fall_speed * 0.020, 0.12, 0.24))
 	_rain_mat = ShaderMaterial.new()
 	_rain_mat.shader = preload("res://shaders/rain_sheltered.gdshader")
 	quad.material = _rain_mat
@@ -255,6 +318,7 @@ func _build_splash_pool() -> void:
 		# World-space: once fired, these must NOT follow RainSystem's own
 		# per-frame repositioning onto the camera.
 		p.local_coords = false
+		p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		p.draw_pass_1 = quad
 
 		var pm := ParticleProcessMaterial.new()
@@ -305,6 +369,9 @@ func _build_overlay() -> void:
 
 	_overlay = ColorRect.new()
 	_overlay.color = Color(0.55, 0.65, 0.75, 0.0)
+	var wet_lens := ShaderMaterial.new()
+	wet_lens.shader = preload("res://shaders/rain_lens.gdshader")
+	_overlay.material = wet_lens
 	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	layer.call_deferred("add_child", _overlay)
@@ -325,9 +392,9 @@ func _queue_next_check() -> void:
 
 
 func _on_schedule_timeout() -> void:
-	if not _is_raining and randf() <= rain_chance:
+	if not _is_raining and _pending_duration<=0.0 and randf() <= rain_chance:
 		var duration := randf_range(min_duration_minutes, max_duration_minutes) * 60.0
-		start_rain(duration)
+		approach_rain(duration)
 	_queue_next_check()
 
 
@@ -335,6 +402,8 @@ func _on_schedule_timeout() -> void:
 # PUBLIC CONTROL
 # ============================================================
 func start_rain(duration_seconds: float) -> void:
+	_pending_duration=0.0
+	_front_remaining=0.0
 	_find_refs()
 	if _is_raining:
 		_rain_remaining = maxf(_rain_remaining, duration_seconds)
@@ -371,6 +440,8 @@ func _disable_mobile_fog() -> void:
 
 
 func stop_rain() -> void:
+	_pending_duration=0.0
+	_front_remaining=0.0
 	_is_raining = false
 	_rain_remaining = 0.0
 	_target_intensity = 0.0
@@ -392,6 +463,7 @@ func _cache_environment_originals() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_weather(delta)
 	_follow_player()
 	_update_cover_state(delta)
 	if is_instance_valid(_mask_raft):
@@ -535,16 +607,14 @@ func _apply_cover_mode() -> void:
 		_particles.amount = ring_particle_amount
 		_particles.position = Vector3(0.0, RING_SPAWN_ABOVE_CAMERA, 0.0)
 	else:
-		# Outdoors: full box around the camera, with the top capped just below
-		# any nearby roof underside (_box_top == full height when no building
-		# is close). Offsetting the node keeps the box's bottom at -8 m while
-		# the top sits at _box_top, so rain under open sky is unchanged.
+		# Outdoors: a thin incoming layer, capped below nearby roof undersides.
+		# Every particle traverses the visible air rather than starting under water.
 		_rain_process_mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
 		_rain_process_mat.emission_box_extents = Vector3(
 			rain_area_size.x * 0.5,
-			(_box_top + rain_area_size.y * 0.5) * 0.5,
+			0.2,
 			rain_area_size.z * 0.5)
-		_particles.position = Vector3(0.0, (_box_top - rain_area_size.y * 0.5) * 0.5, 0.0)
+		_particles.position = Vector3(0.0, _box_top, 0.0)
 		_particles.amount = particle_amount
 
 # ============================================================
@@ -584,8 +654,16 @@ func _update_intensity(delta: float) -> void:
 	else:
 		_intensity = move_toward(_intensity, _target_intensity, delta / fade_time)
 
+	var daylight := 1.0
+	if _sky!=null:
+		var sun_transform: Transform3D=_sky.get("_sun_transform")
+		daylight=smoothstep(-.12,.15,sun_transform.origin.y)
+	var rain_light := lerpf(.14,.92,daylight)
+	if _splash_mat!=null:_splash_mat.set_shader_parameter("rain_light",rain_light)
 	if _rain_mat != null:
+		_rain_mat.set_shader_parameter("rain_light",rain_light)
 		_rain_mat.set_shader_parameter("intensity",_intensity)
+		_particles.amount_ratio=clampf(_intensity,0.03,1.0)
 
 	if rain_sound != null:
 		var shelter_db := -8.0 if _covered else 0.0
@@ -595,13 +673,17 @@ func _update_intensity(delta: float) -> void:
 		_disable_mobile_fog()
 	elif _sky != null and _orig_fog_density >= 0.0:
 		_sky.set("fog_density", lerpf(_orig_fog_density, _orig_fog_density + 0.01, _intensity))
-	if _env != null and _orig_ambient_energy >= 0.0:
+	# OceanAtmosphere owns sky lighting when present, using this same intensity.
+	var atmosphere := get_tree().current_scene.get_node_or_null("OceanAtmosphere")
+	if atmosphere == null and _env != null and _orig_ambient_energy >= 0.0:
 		_env.ambient_light_energy = lerpf(_orig_ambient_energy, _orig_ambient_energy * 0.7, _intensity)
 	if _ocean != null and _orig_wave_height >= 0.0:
-		_ocean.set("wave_height", lerpf(_orig_wave_height, _orig_wave_height * 1.35, _intensity))
+		_ocean.set("wave_height", lerpf(_orig_wave_height, _orig_wave_height * 1.18, _sea_response))
 
 	if _overlay != null:
-		_overlay.color.a = clampf(_intensity * 0.08, 0.0, 0.08)
+		_overlay.color.a = 1.0
+		_overlay.material.set_shader_parameter("exposure", _intensity if not _covered and not _camera_submerged else 0.0)
+		_overlay.material.set_shader_parameter("light_level",rain_light)
 
 	if _flash != null and _flash.color.a > 0.0:
 		_flash.color.a = maxf(_flash.color.a - delta * 2.0, 0.0)

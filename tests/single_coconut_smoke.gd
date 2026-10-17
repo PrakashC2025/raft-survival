@@ -76,8 +76,13 @@ func _run() -> void:
 		controls.force_show = true; layer.add_child(controls); controls.set_process(false)
 		controls._swimming = true
 		for button in controls._all_buttons: button.hide()
-		controls._btn_run.show(); controls.queue_redraw()
+		controls._btn_run.show(); controls._btn_jump.show(); controls._btn_dive.show()
+		controls._btn_build.show(); controls._btn_help.show(); controls._btn_cam.show()
+		controls.queue_redraw()
 		await frames(); await RenderingServer.frame_post_draw
 		check(root.get_texture().get_image().save_png("C:/GodotProjects/raft-survival/build/fast-swim-control.png")==OK,"Rendered fast swim control")
+		controls._swimming=false;controls._btn_dive.hide();controls.queue_redraw()
+		await frames();await RenderingServer.frame_post_draw
+		check(root.get_texture().get_image().save_png("C:/GodotProjects/raft-survival/build/run-control.png")==OK,"Rendered right-side run control")
 	stage.queue_free(); await frames()
 	print("SINGLE COCONUT SMOKE: %d checks, %d failures" % [checks,failures]); quit(1 if failures else 0)

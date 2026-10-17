@@ -70,10 +70,36 @@ func _prepare() -> void:
 		var marker:=Node3D.new();marker.name=site.id;marker.position=Vector3(site.at.x,0,site.at.y);marker.add_to_group("dive_site");marker.set_meta("map_label",site.label);marker.set_meta("biome","underwater");marker.set_meta("arrival_radius",18.0);add_child(marker)
 		await _site(site)
 		if not is_inside_tree():return
+	await _extra_marine_life()
+	if not is_inside_tree():return
 	prepared=true;_player=get_tree().get_first_node_in_group("player") as Node3D
 	if _player!=null:
+		var open_school:=preload("res://scripts/underwater_shoal.gd").new()
+		open_school.name="OpenOceanFish";open_school.follow_diver=true
+		open_school.position=_player.global_position+Vector3(0,-4,-10)
+		open_school._centre=Vector3.ZERO;open_school._target=Vector3.ZERO
+		add_child(open_school)
 		_hands=Node3D.new();_hands.name="SwimmingHands";_player.camera.add_child(_hands)
 		_hands.add_child(preload("res://scripts/dive_visual.gd").swim_hand(true));_hands.add_child(preload("res://scripts/dive_visual.gd").swim_hand(false));_hands.hide()
+
+func _extra_marine_life() -> void:
+	# Keep the original thirty IDs/order intact; append twenty bounded actors.
+	var habitats:=[{"id":"NearRaft","at":Vector2(10,-22),"count":8}]
+	for site in SITES:habitats.append({"id":str(site.id)+"Extra","at":site.at,"count":4})
+	for habitat in habitats:
+		for index in int(habitat.count):
+			var creature:=CREATURE.new()
+			creature.species=["Grouper","Octopus","Fish","Turtle"][index%4]
+			creature.creature_id=str(habitat.id)+":"+str(index)
+			var centre: Vector2=habitat.at
+			var point:=centre+Vector2(cos(index*2.4)*8,sin(index*2.4)*8)
+			var depth:=surface_height(point)
+			creature.position=Vector3(point.x,depth+(.35 if creature.species=="Octopus" else 5.0),point.y)
+			creature.home=creature.position;creature.school_centre=creature.position
+			add_child(creature)
+			if _saved.get(creature.creature_id) is Dictionary:creature.restore_state(_saved[creature.creature_id])
+			await get_tree().process_frame
+			if not is_inside_tree():return
 
 func _site(site: Dictionary) -> void:
 	var centre:Vector2=site.at
@@ -147,7 +173,9 @@ func _process(delta: float) -> void:
 	_swim_time+=delta
 	var hud:=_player.get_node_or_null("CanvasLayer/SurvivalHUD")
 	var swimming:bool=_player.is_swimming and _player.cam_mode==0 and _player.get_node("SurvivalAction").kind.is_empty() and not _player.build_mode and Stats.health>0 and not GameSettings.is_open and not (hud!=null and hud.call("gameplay_input_blocked"))
-	_hands.visible=swimming
+	var cargo:=_player.get_node_or_null("HuntingCargo")
+	var carrying: bool=cargo!=null and is_instance_valid(cargo.held)
+	_hands.visible=swimming and not carrying
 	if swimming:
 		for index in 2:
 			var hand:=_hands.get_child(index) as Node3D;var phase:=_swim_time*3.8+index*PI

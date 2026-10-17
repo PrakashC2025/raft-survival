@@ -109,7 +109,6 @@ func use() -> void:
 		if _radio_cooldown>0:return
 		_radio_cooldown=5.0
 		_reply=2.4
-		_sound("radio_send")
 		player.call("play_action","radio",0.9)
 		player.call("_hud_toast","CH 16 · TRANSMITTING LOCATION SIGNAL")
 		player.call("_queue_save")
@@ -120,7 +119,6 @@ func toggle_power() -> void:
 	if not installed[item] or float(charge[item])<=0.0:
 		player.call("_hud_toast","INSERT A CHARGED BATTERY" if item=="ElectricLamp" else "INSERT A CHARGED BATTERY OR RAISE THE PANEL TO SUNLIGHT");return
 	enabled[item]=not enabled[item]
-	_sound("switch")
 	player.call("play_action","switch",0.35)
 	player.call("_queue_save")
 
@@ -139,7 +137,6 @@ func toggle_cover() -> void:
 	if _blocked() or battery_animation>0 or str(player.active_item) not in POWERED:return
 	cover_open=not cover_open
 	if cover_open:enabled[str(player.active_item)]=false
-	_sound("switch")
 	player.call("play_action","battery",0.65)
 
 func raise_solar() -> void:
@@ -165,7 +162,6 @@ func battery_action(operation: String) -> bool:
 	_battery_item=item
 	battery_operation=operation
 	battery_animation=1.8
-	_sound("battery")
 	player.call("play_action","battery",1.8)
 	player.call("_queue_save")
 	return true
@@ -220,7 +216,9 @@ func _process(delta: float) -> void:
 				var distance_to:=player.global_position.distance_to(island.global_position)
 				if distance_to<distance_value:nearest=island;distance_value=distance_to
 			var location:=str(nearest.get("map_label")) if nearest!=null else "open ocean"
-			player.call("_hud_toast","CH 16 · SIGNAL RECEIVED: "+location.to_upper()+" · %d M"%int(distance_value))
+			var salvage:=player.get_node_or_null("OceanSalvage")
+			var cargo_report:=str(salvage.radio_report()) if salvage!=null else ""
+			player.call("_hud_toast","CH 16 · SIGNAL RECEIVED: "+(cargo_report if not cargo_report.is_empty() else location.to_upper()+" · %d M"%int(distance_value)),4.5)
 	_ui_tick+=delta
 	var update_text:=_ui_tick>=.1
 	if update_text:_ui_tick=0.0

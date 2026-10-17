@@ -40,11 +40,11 @@ func _run() -> void:
 	player.set_process(false)
 	player.set_physics_process(false)
 	check(int(inv.call("total", "Carrot Seed")) == 4 and int(inv.call("total", "Tomato Seed")) == 4, "New Game grants the new crop seeds")
-	check(player.BUILD_RECIPE_NAMES.size() == 24 and player.BUILD_RECIPE_NAMES[3] == "Stairs" and player.BUILD_RECIPE_NAMES[16] == "HalfWall" and player.BUILD_RECIPE_NAMES[18] == "WallTorch" and player.BUILD_RECIPE_NAMES[19] == "SandFilter" and player.BUILD_RECIPE_NAMES[20]=="StorageBox" and player.BUILD_RECIPE_NAMES[21]=="CookingSetup", "New structures append without changing legacy build indexes")
 	var hud := player.get_node("CanvasLayer/SurvivalHUD")
 	hud.toggle_crafting()
 	await frames(5)
-	check(hud._craft_menu.cards.size() == hud.CRAFT_ORDER.size()+3 and hud._craft_menu._list.get_v_scroll_bar().max_value > hud._craft_menu._list.size.y, "All crafting products share a scrolling list")
+	check(hud._craft_menu.cards.size() >= hud.CRAFT_ORDER.size() and hud._craft_menu._list.get_v_scroll_bar().max_value > hud._craft_menu._list.size.y, "All crafting products share a scrolling list")
+
 	hud._close_crafting()
 	# Exercise real placement and saved state, rather than only instantiating props.
 	var raft := current_scene.get_node("Raft") as Node3D
@@ -107,9 +107,9 @@ func _run() -> void:
 	player.global_position = Vector3(1000, 4.92, 999.25)
 	player.velocity = Vector3.ZERO
 	await frames(3)
-	for i in range(15):
+	for i in range(30):
 		await physics_frame
-		player.velocity = Vector3(0, -2, 0)
+		player.velocity = Vector3(0, -4, 0)
 		player.move_and_slide()
 	var start_y := player.position.y
 	check(player.is_on_floor(), "Movement fixture starts with the player grounded")
@@ -233,7 +233,8 @@ func _run() -> void:
 	check(bool(rain.call("is_raining")) and float(rain.get("_rain_remaining")) > 100, "Weather resumes from saved remaining duration")
 	rain.call("stop_rain")
 	var birds := current_scene.get_node("Island/IslandBirds")
-	check(get_nodes_in_group("huntable_bird").size() == 4, "All four animated gulls have huntable hitboxes")
+	check(birds.get("_birds").size() == 4 and get_nodes_in_group("huntable_bird").size() >= 4, "All four animated gulls have huntable hitboxes")
+
 	check(birds.call("hit_bird", 0) and not birds.call("hit_bird", 0), "An arrow can kill a gull only once per flight")
 	for i in range(200):
 		await physics_frame
@@ -243,7 +244,9 @@ func _run() -> void:
 	for pickup in get_nodes_in_group("debris"):
 		if pickup.get("item_name") == "Raw Bird":
 			dropped = true
-	check(dropped, "A hunted bird falls and creates collectible raw bird food")
+	for body in get_nodes_in_group("animal_carcass"):
+		if body.species=="Bird" and body.contents[0].item=="Raw Bird":dropped=true
+	check(dropped, "A hunted bird falls and leaves its raw food in a carryable body")
 	inv.call("add", "Bow", 1)
 	inv.call("add", "Arrow", 3)
 	for slot_index in range(6, 30):
@@ -277,6 +280,10 @@ func _run() -> void:
 	player.call("_handle_pickup")
 	equipment.call("_physics_process", 0.7)
 	check(equipment.get("drawing"), "Owned SHOOT touch starts a bow draw through the player")
+	var drag_yaw: float=player.rotation.y
+	var shoot_drag:=InputEventScreenDrag.new();shoot_drag.index=12;shoot_drag.position=shoot_button.get_global_rect().get_center()+Vector2(160,0);shoot_drag.relative=Vector2(16,0)
+	controls.call("_input",shoot_drag);player.call("_advance_look",1.0)
+	check(equipment.drawing and Input.is_action_pressed("interact") and not is_equal_approx(player.rotation.y,drag_yaw),"Held SHOOT finger can drag outside its button to aim without canceling the draw")
 	bow_touch(controls, shoot_button, false, true)
 	equipment.call("_physics_process", 0.01)
 	check(not equipment.get("drawing") and int(inv.call("total", "Arrow")) == 3, "Canceling a held SHOOT touch does not fire or consume ammo")

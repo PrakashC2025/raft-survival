@@ -1,8 +1,9 @@
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_never;
 uniform float intensity = 0.0;
-uniform vec3 drop_color : source_color = vec3(0.27,0.52,0.76);
-uniform float drop_opacity = 0.42;
+uniform float rain_light = 1.0;
+uniform vec3 drop_color : source_color = vec3(0.68,0.76,0.82);
+uniform float drop_opacity = 0.56;
 uniform bool align_to_velocity = true;
 uniform mat4 world_to_raft;
 uniform int cover_count = 0;
@@ -33,6 +34,7 @@ void fragment() {
 		if (p.y<level.x && p.y>level.y && all(lessThan(abs(local),b.zw))) discard;
 	}
 	float soft_edge = smoothstep(0.0,0.18,UV.x)*smoothstep(0.0,0.18,1.0-UV.x);
-	ALBEDO=drop_color;
-	ALPHA=intensity*drop_opacity*soft_edge;
+	ALBEDO=drop_color*rain_light;
+	float tip = smoothstep(0.0,0.22,UV.y)*smoothstep(0.0,0.12,1.0-UV.y);
+	ALPHA=intensity*drop_opacity*soft_edge*tip;
 }

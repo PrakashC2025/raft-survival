@@ -36,7 +36,7 @@ const HARVEST_SOUND: AudioStream = preload("res://audio/contact/cloth.wav")
 const ITEM_PICKUP_SCENE: PackedScene = preload("res://scenes/food_pickup.tscn")
 # Height fraction reached at the END of each stage (indexed by Stage.SEED..MATURE)
 const STAGE_FRAC := [0.16, 0.30, 0.62, 1.0]
-const COCONUT_FRAC := [0.04, 0.14, 0.44, 1.0]
+const COCONUT_FRAC := [0.16, 0.30, 0.62, 1.0]
 
 @export var plant_id: String = ""
 
@@ -948,7 +948,7 @@ func _pick_fruit(fruit) -> void:
 		Inventory.add(yield_item, amount)
 		var player := _get_player()
 		if player != null and player.has_method("play_world_sfx"):
-			player.call("play_world_sfx", HARVEST_SOUND, -9.0)
+			player.call("play_world_sfx", HARVEST_SOUND, -12.0,global_position)
 	_spawn_chips(_def.get("fruit_color", Color(0.8, 0.6, 0.2)), 3, 0.25)
 
 
@@ -1014,7 +1014,7 @@ func _do_chop_hit() -> void:
 	var player := _get_player()
 	_health -= 2 if player!=null and player.get("active_item")=="Axe" and Inventory.has("Axe",1) else 1
 	if player != null and player.has_method("play_world_sfx"):
-		player.call("play_world_sfx", CHOP_SOUND, -9.0)
+		player.call("play_world_sfx", CHOP_SOUND, -9.0,global_position)
 	var trunk_col: Color = _def.get("trunk_color", Color(0.5, 0.36, 0.2))
 	_spawn_chips(trunk_col.lightened(0.15), 4, 0.3)
 	# Small trunk reaction so the hit visibly registers (no camera shake).

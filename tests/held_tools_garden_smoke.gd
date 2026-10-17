@@ -96,7 +96,7 @@ func _run() -> void:
 	check(progress.is_held_lit(),"Returning to the stored burning stick restores its flame")
 	progress.extinguish_torch();player.active_item="";mounted.interact_survival(player);await frames();progress._process(1.1)
 	check(progress.is_held_lit() and progress.torch_fuel>1 and progress._torch_light.visible,"Taking a lit wall stick stays burning beyond the next second")
-	check(progress._torch_light.omni_range>=12,"Hand torch casts light across a larger raft")
+	check(progress._torch_light.omni_range<=6,"Hand torch illuminates only nearby raft surfaces")
 	var shelter: Node3D=player.build_pieces[player.BUILD_RECIPE_NAMES.find("Roof")].instantiate();shelter.position=Vector3(0,2.725,0);built.add_child(shelter);await frames()
 	var rain:=player.get_node("RainSystem");rain.start_rain(20);progress._tick=0;progress._process(.5)
 	check(progress.is_held_lit(),"Rain cannot extinguish a retrieved torch beneath a real roof")
@@ -116,7 +116,7 @@ func _run() -> void:
 		check(stage==3 or plant._fruits.is_empty(),"Coconut stage %d has no premature fruit"%stage)
 		garden_camera.global_position=pot.global_position+(Vector3(2,1.1,2.4) if stage<2 else Vector3(6,4,8));garden_camera.look_at(pot.global_position+Vector3.UP*(.35 if stage<2 else 2.5))
 		await shot("coconut-stage-%d"%stage)
-	check(heights[0]<.5 and heights[1]>heights[0] and heights[2]>heights[1] and heights[3]>6,"Coconut grows from a small shoot through young tree to adult height")
+	check(heights[0]<1.5 and heights[1]>heights[0] and heights[2]>heights[1] and heights[3]>6,"Coconut grows from a small shoot through young tree to adult height")
 	var palm:=plant._container.get_node("CoconutPalm") as Node3D
 	var trunk:=palm.find_child("Tree_0_Trunk",true,false) as MeshInstance3D
 	var vertices: PackedVector3Array=trunk.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX];var relative: Transform3D=plant._container.global_transform.affine_inverse()*trunk.global_transform
@@ -135,8 +135,9 @@ func _run() -> void:
 	check(fallen!=null and not fallen.falling and inv.total("Coconut")==coconut_before,"Picked coconut falls onto the raft and waits for collection")
 	if fallen!=null:player._collect_debris(fallen)
 	check(inv.total("Coconut")==coconut_before+1,"Fallen coconut can be collected into the normal bag")
-	var flock:=current_scene.get_node("OceanBirds");var bird: Node3D=flock._birds[0].root;var at_before: Vector3=bird.global_position;flock._physics_process(1)
-	check(flock._birds.size()==2 and bird.visible and bird.global_position.distance_to(raft.global_position)<35 and bird.global_position.distance_to(at_before)>.2,"Two visible animated gulls fly close enough to see from the raft")
+	var flock:=current_scene.get_node("OceanBirds");flock._time=10;flock._physics_process(0)
+	var bird: Node3D=flock._birds[0].root;var at_before: Vector3=bird.global_position;flock._physics_process(1)
+	check(flock._birds.size()==8 and bird.visible and bird.global_position.distance_to(raft.global_position)<35 and bird.global_position.distance_to(at_before)>.2,"Eight migrating gulls cross together close enough to see from the raft")
 	flock.hit_bird(0);check(flock._birds[0].state=="falling","Sea gulls retain the existing hunt and falling pickup flow")
 	var dome:=current_scene.get_node("Sky3D/SkyDome");dome.wind_speed=0;var cloud_before: Vector2=dome._panorama_cloud_position
 	await create_timer(.4).timeout

@@ -16,6 +16,9 @@ var _cooking_active := false
 var _steam: Node3D
 var _meal_item := ""
 var _slice_material: ShaderMaterial
+var _sizzle_kind := ""
+static var _boil_audio: AudioStreamWAV
+static var _cook_audio: AudioStreamWAV
 func _ready() -> void:
 	_label=Label3D.new();_label.position.y=1.1;_label.font_size=24;_label.pixel_size=.003;_label.billboard=BaseMaterial3D.BILLBOARD_ENABLED;_label.visibility_range_end=8;add_child(_label)
 	_can=preload("res://scripts/survival_item_visual.gd").create("Can")
@@ -66,8 +69,17 @@ func _make_cooking_visual() -> void:
 	for index in 5:
 		var bubble:=MeshInstance3D.new();bubble.mesh=bubble_mesh;bubble.material_override=_food_material;bubble.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF;_meal.add_child(bubble);_bubbles.append(bubble)
 	_sizzle=AudioStreamPlayer3D.new();_sizzle.name="CookingSizzle";_sizzle.max_distance=12;_sizzle.unit_size=2;_sizzle.volume_db=-20
-	var stream:=preload("res://audio/action_sizzle.wav").duplicate() as AudioStreamWAV
-	stream.loop_mode=AudioStreamWAV.LOOP_FORWARD;stream.loop_end=66150;_sizzle.stream=stream;add_child(_sizzle)
+	_sizzle.stream=_loop_audio("cook");_sizzle_kind="cook";add_child(_sizzle)
+
+static func _loop_audio(kind: String) -> AudioStreamWAV:
+	var stream:=_boil_audio if kind=="boil" else _cook_audio
+	if stream==null:
+		var source: AudioStreamWAV=preload("res://audio/contact/boil_loop.wav") if kind=="boil" else preload("res://audio/contact/cook_loop.wav")
+		stream=source.duplicate() as AudioStreamWAV
+		stream.loop_mode=AudioStreamWAV.LOOP_FORWARD;stream.loop_begin=0;stream.loop_end=floori(float(stream.data.size())/2.0)
+		if kind=="boil":_boil_audio=stream
+		else:_cook_audio=stream
+	return stream
 
 func _sync_cooking(cooking: bool) -> void:
 	if _pan==null:
@@ -81,6 +93,8 @@ func _sync_cooking(cooking: bool) -> void:
 		var slices:=contents.get_node_or_null("SlicedIngredients") as MeshInstance3D
 		_slice_material=slices.material_override if slices!=null else null
 		_food_material.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA if job.kind=="boil" else BaseMaterial3D.TRANSPARENCY_DISABLED
+	if cooking and _sizzle_kind!=str(job.kind):
+		_sizzle.stop();_sizzle.stream=_loop_audio(str(job.kind));_sizzle_kind=str(job.kind)
 	_pan.visible=cooking and get_parent().get_node_or_null("CookingPan")==null
 	_meal.visible=cooking
 	_cooking_active=cooking and get_parent().get("burning")==true and float(get_parent().get("fuel"))>0

@@ -1,0 +1,61 @@
+[
+  {
+    "title": "Victorian Row Boat",
+    "author": "Ashley Aslett",
+    "source_url": "https://sketchfab.com/3d-models/victorian-row-boat-3e9093b6f0ce474da4d8cfea7e01f420",
+    "license": "CC-BY-4.0",
+    "changes": "Metre scale, waterline fit, staged construction groups, removed loose chest, paired pivoted source oars, 2K PBR maps retained.",
+    "source": "3d models\\free_wildlife\\sketchfab\\victorian_row_boat.glb",
+    "source_sha256": "9c74925e43a9947c6e9b14790d2e3a8017612813302a14244d723b5a20aff0c1",
+    "file": "models/hunting_rowboat.glb",
+    "sha256": "a3776c6457648c93399e456aca3f0cf5608d8473f064a98e006c620ddba6f659",
+    "triangles": 7086,
+    "bounds": [
+      [
+        -1.4900000095367432,
+        -1.940125584602356,
+        -0.38712844252586365
+      ],
+      [
+        1.4900000095367432,
+        1.940125584602356,
+        1.0361555814743042
+      ]
+    ],
+    "clips": []
+  },
+  {
+    "title": "Wooden Workbench - FREE",
+    "author": "volvor",
+    "source_url": "https://sketchfab.com/3d-models/wooden-workbench-free-30c3115341f342718e8245ea0b941348",
+    "license": "CC-BY-4.0",
+    "changes": "Fits original workshop footprint and socket, original separate vise/tools/boxes retained, textures resized to 2K.",
+    "source": "3d models\\free_wildlife\\sketchfab\\wooden_workbench_-_free.glb",
+    "source_sha256": "32506b48793f9063e7ec448f64b7c6c49bc0990b6e49b2eb5cc9544abbed7bef",
+    "file": "models/hunting_workbench.glb",
+    "sha256": "d39cc8d7643526495af407be993ed095e1fe2f6f36661ee0583f8f207e92a384",
+    "triangles": 4388,
+    "bounds": [
+      [
+        -1.0156915187835693,
+        -0.5328244566917419,
+        -0.45171818137168884
+      ],
+      [
+        0.9029889702796936,
+        0.5494239926338196,
+        0.4884296655654907
+      ]
+    ],
+    "clips": []
+  },
+  {
+    "title": "Crocodile (Siamese crocodile) skin detail",
+    "author": "sarvesh777 (sarvesh903)",
+    "source_url": "https://sketchfab.com/3d-models/crocodile-siamese-crocodile-10704d6d49c449d8b4ab69e924f1b9d3",
+    "license": "CC-BY-4.0",
+    "file": "models/hunting_crocodile_Image_7.png",
+    "sha256": "a05b6194088124fb81653e47d6ed95e9ac9291811abf6caef074ab46cc1660c3",
+    "changes": "2K skin surface projected over the separately credited CC0 animated crocodile; source display mesh is inactive."
+  }
+]

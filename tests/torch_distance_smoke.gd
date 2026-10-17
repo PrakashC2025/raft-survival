@@ -64,27 +64,38 @@ func _run() -> void:
 		print("TORCH DISTANCE PIXELS: old ",previous,"; improved ",current," at 72m")
 		check(current > previous and current > 0,"The flame itself has more visible bright pixels at 72 metres with room lighting disabled")
 		camera.position.z = 150
-		check(flame_pixels(await capture("very-far")) >= 4,"The flame stays clearly bright at 150 metres with room lighting disabled")
+		check(flame_pixels(await capture("very-far")) >= 1,"A small flame remains visible at 150 metres with room lighting disabled")
 		camera.position.z = 400
-		check(flame_pixels(await capture("across-sea")) >= 12,"A lit torch keeps a bright flame across 400 metres with its room light disabled")
+		var distant_pixels := flame_pixels(await capture("across-sea"))
+		check(distant_pixels >= 1 and distant_pixels <= 30,"A lit torch stays a small visible fire across 400 metres without a large glow")
 		camera.position = Vector3(400,1.36,0); camera.look_at(Vector3(0,1.34,0))
-		check(flame_pixels(await capture("side-far")) >= 12,"Viewing the same flame from its side cannot make it disappear")
+		check(flame_pixels(await capture("side-far")) >= 1,"Viewing the same flame from its side cannot make it disappear")
 		camera.position = Vector3(0,1.36,150); camera.look_at(Vector3(0,1.34,0))
 		var blocker := preload("res://scripts/machine_visual.gd").box(stage,Vector3(0,1,2),Vector3(4,3,.18),wood)
 		check(flame_pixels(await capture("behind-wall")) == 0,"A solid wall still hides the distant flame")
 		blocker.queue_free(); await frames()
-		# Render a real surface outside the previous 12m light radius.
+		# A visible distant flame must not flood distant surfaces with light.
 		var material := StandardMaterial3D.new(); material.albedo_color = Color(.72,.72,.72); material.roughness = 1
-		var distant_surface := preload("res://scripts/machine_visual.gd").box(stage,Vector3(0,1.36,30),Vector3(3,3,.1),material)
-		camera.position = Vector3(0,1.36,25); camera.look_at(Vector3(0,1.36,30))
+		var distant_surface := preload("res://scripts/machine_visual.gd").box(stage,Vector3(0,1.36,2),Vector3(3,3,.1),material)
+		camera.position = Vector3(0,1.36,1); camera.look_at(Vector3(0,1.36,2))
 		world.environment.ambient_light_energy = 0
 		torch.set_meta("light_allowed",true); torch._update_flame()
-		torch._light.omni_range = 12
-		var old_light := (await capture("old-light-reach")).get_pixel(640,360)
-		torch._light.omni_range = torch._visual.LIGHT_RANGE
-		var new_light := (await capture("extended-light-reach")).get_pixel(640,360)
-		print("TORCH LIGHT AT 30m: old ",old_light,"; increased ",new_light)
-		check(new_light.r > old_light.r + .03,"Torch illumination reaches a real surface 30 metres away")
+		torch._light.hide()
+		var unlit_near := (await capture("near-surface-off")).get_pixel(640,360)
+		torch._update_flame()
+		var lit_near := (await capture("near-surface-lit")).get_pixel(640,360)
+		check(lit_near.r > unlit_near.r + .03 and lit_near.r < .85,"A nearby surface receives warm light without washing out")
+		distant_surface.position.z = 30
+		camera.position = Vector3(0,1.36,25); camera.look_at(Vector3(0,1.36,30))
+		var lit_far := (await capture("far-surface-lit")).get_pixel(640,360)
+		torch._light.hide()
+		var unlit_far := (await capture("far-surface-off")).get_pixel(640,360)
+		check(lit_far.is_equal_approx(unlit_far),"A torch cannot illuminate a surface 30 metres away")
+		distant_surface.hide()
+		preload("res://scripts/machine_visual.gd").box(stage,Vector3(0,.65,8),Vector3(14,.12,24),material)
+		world.environment.ambient_light_energy = .025
+		camera.position = Vector3(6,7,12); camera.look_at(Vector3(0,.9,4))
+		torch._update_flame(); await capture("local-light-pool")
 		distant_surface.queue_free(); await frames()
 		world.environment.ambient_light_energy = .65
 		camera.position = Vector3(0,1.36,150); camera.look_at(Vector3(0,1.34,0))

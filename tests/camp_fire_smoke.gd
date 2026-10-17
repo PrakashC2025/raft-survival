@@ -107,6 +107,8 @@ func _run() -> void:
 	fire.fuel=0;actions.start("ignite_fire",fire);complete()
 	check(fire.burning and fire.fuel==90 and int(inv.call("total","Wood"))==wood-1,"An empty fireplace spends exactly one Wood only at successful contact")
 	hold("Torch");player.aim_valid=false;player.aim_collider=null
+	var held_torch:=player._hand_item.get_child(player._hand_item.get_child_count()-1) as Node3D
+	check(not held_torch.flames.visible,"A newly equipped unlit stick starts without a flame")
 	check(not player.can_interact_now() and player.interaction_caption().is_empty(),"An unlit hand torch has no light button when looking away")
 	var hint_hud:=player.get_node("CanvasLayer/SurvivalHUD")
 	check(str(hint_hud._toast).contains("Aim at a burning bonfire") and absf(hint_hud._toast_until-Time.get_ticks_msec()/1000.0-4)<.15,"Equipping a torch shows its usage snackbar for four seconds")
@@ -130,11 +132,36 @@ func _run() -> void:
 	if preview:pose.elapsed=pose.duration*.5;pose.call("_process",0.0);await shot("light-torch");pose.elapsed=0
 	complete();progress.call("_process",0.0)
 	check(inv.call("has","Burning Torch",1) and progress.is_held_lit(),"Torch lights at contact and equips the burning version")
+	await frames();progress.call("_process",0.0)
+	held_torch=player._hand_item.get_child(player._hand_item.get_child_count()-1) as Node3D
+	check(held_torch.flames.visible and progress._third_torch.flames.visible and progress._torch_light.visible,"Both held views and the real light follow the lit state after deferred item replacement")
+	# Replacements can receive generated names while their old siblings await free.
+	held_torch.name="RenamedHeldTorch"
+	progress.torch_fuel=0;progress.call("sync_torch_effects")
+	check(not held_torch.flames.visible and not progress._torch_light.visible,"A renamed live torch still loses its flame when its fuel is depleted")
+	progress.extinguish_torch()
+	service.equip_owned("Torch")
+	check(actions.start("torch_light",fire),"An extinguished stick can relight after its visual was renamed")
+	complete();await frames();progress.call("_process",0.0)
+	var pickup_torch:=pose.call("_pickup_visual","Torch") as Node3D
+	var pickup_burning:=pose.call("_pickup_visual","Burning Torch") as Node3D
+	current_scene.add_child(pickup_torch);current_scene.add_child(pickup_burning)
+	check(not pickup_torch.flames.visible and pickup_burning.flames.visible,"Pickup props preserve the actual unlit or burning item state")
+	pickup_torch.queue_free();pickup_burning.queue_free()
 	var deadline: float=progress.torch_end_time;check(deadline>0,"Torch retains dawn expiry")
 	player.aim_valid=false;progress.use_torch();check(progress.is_held_lit() and pose.kind=="torch_off","OFF first brings both hands around the torch")
 	check(pose._fire_left.get_node_or_null("SnuffingCloth")!=null and pose._left_tool!=null,"Both camera views snuff with a cloth cap instead of touching a flame bare-handed")
 	if preview:pose.elapsed=pose.duration*.6;pose.call("_process",0.0);await shot("snuff-torch");pose.elapsed=0
 	complete();check(not progress.is_held_lit() and inv.call("has","Torch",1),"Snuff contact returns a reusable unlit torch")
+	check(not progress._torch_light.visible and not progress._third_torch.flames.visible,"Snuff contact immediately removes light and third-person fire")
+	await frames();progress.call("_process",0.0)
+	held_torch=player._hand_item.get_child(player._hand_item.get_child_count()-1) as Node3D
+	check(not held_torch.flames.visible,"The replacement first-person stick stays unlit after its old named sibling is freed")
+	if preview:await shot("torch-off-first")
+	player.cam_mode=1;player.call("_apply_camera_mode");progress.call("_process",0.0)
+	check(progress._third_torch.visible and not progress._third_torch.flames.visible,"Switching to third person cannot restore extinguished fire")
+	if preview:await shot("torch-off-third")
+	player.cam_mode=0;player.call("_apply_camera_mode")
 	var wall:=fixture("Wall",Vector3(1,1.4,0));aim(wall);player.aim_point=wall.to_global(Vector3(0,0,.15));player.aim_normal=wall.global_basis.z
 	check(player.call("_resolve_wall_torch").valid and player.interaction_caption()=="PLACE TORCH","Unlit torch has a valid wall mount preview/action")
 	var count: int=inv.call("total","Torch");progress.use_torch();check(actions.busy() and inv.call("total","Torch")==count,"Mount reach delays inventory removal")

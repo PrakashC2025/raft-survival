@@ -4,6 +4,8 @@
 shader_type sky;
 render_mode use_debanding;
 uniform bool fast_radiance_enabled = false;
+uniform float storm_amount : hint_range(0.0,1.0) = 0.0;
+uniform vec2 storm_cloud_offset = vec2(0.0);
 
 group_uniforms general;
 uniform bool sky_visible = true;
@@ -434,7 +436,9 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	col.rgb += vec3(0.016, 0.024, 0.055) * night_lift;
 
 	if (daylight_panorama_blend > 0.001) {
-		vec2 day_uv = vec2(fract(0.5 + atan(world_pos.z, world_pos.x) * INV_TAU + evening_rotation + panorama_cloud_position.x * 0.045), acos(clamp(world_pos.y, -1.0, 1.0)) * INV_PI);
+		// Advect the upper cloud field while pinning the horizon/colour gradient.
+		float cloud_drift = panorama_cloud_position.x * .012 * smoothstep(.045,.20,world_pos.y);
+		vec2 day_uv = vec2(fract(0.5 + atan(world_pos.z, world_pos.x) * INV_TAU + evening_rotation + cloud_drift), acos(clamp(world_pos.y, -1.0, 1.0)) * INV_PI);
 		vec3 day_photo = texture(afternoon_panorama, day_uv).rgb;
 		if (morning_panorama_blend > 0.001) {
 			day_photo = mix(day_photo, texture(morning_panorama, day_uv).rgb, morning_panorama_blend);
@@ -644,6 +648,22 @@ void render_grid(vec3 dir, vec3 pole_dir, float rotation_angle, vec4 line_color,
 	color += line_color.rgb * line_color.a * grid;
 }
 
+vec3 rain_cloud_sky(vec3 direction, vec3 clear_color) {
+	if (storm_amount < 0.001) return clear_color;
+	vec2 cloud_uv = direction.xz / (abs(direction.y) + 0.35) * 0.20;
+	cloud_uv += storm_cloud_offset;
+	// Use the smooth cloud texture, not high-frequency star scintillation.
+	float billow = texture(cirrus_texture, cloud_uv * 0.65).r * 0.76;
+	billow += texture(cirrus_texture, cloud_uv * 1.7 + vec2(0.17,0.43)).r * 0.24;
+	float daylight = 1.0-clamp(night_moon_visibility,0.0,1.0);
+	vec3 cloud = mix(vec3(0.012,0.019,0.029),vec3(0.19,0.22,0.25),daylight);
+	cloud *= 0.56 + smoothstep(0.18,0.82,billow) * 0.85;
+	cloud *= mix(1.14,0.74,smoothstep(0.0,0.9,direction.y));
+	float bank = smoothstep(0.18,0.78,storm_amount + (billow-0.5)*0.42);
+	float veil = clamp(storm_amount*0.24+bank*0.76,0.0,1.0);
+	return mix(clear_color,cloud,veil);
+}
+
 void sky() {
 	if (AT_CUBEMAP_PASS && fast_radiance_enabled) {
 		// Ambient/reflection maps need broad sky light, not stars, moon textures
@@ -656,7 +676,7 @@ void sky() {
 		vec3 light = mix(night,day,daylight);
 		float dusk = (1.0-smoothstep(0.0,0.32,abs(LIGHT0_DIRECTION.y))) * (1.0-elevation);
 		light = mix(light,atm_horizon_light_tint.rgb * 0.45,dusk * 0.35);
-		COLOR = mix(light,ground_color.rgb * light * 0.5,smoothstep(0.0,0.12,-EYEDIR.y));
+		COLOR = rain_cloud_sky(EYEDIR,mix(light,ground_color.rgb * light * 0.5,smoothstep(0.0,0.12,-EYEDIR.y)));
 	} else {
 	float current_time = TIME;
 	vec3 col = vec3(0.0); // Set up the initial sky color which will be added to later to produce the final result.
@@ -674,7 +694,7 @@ void sky() {
 				acos(clamp(world_pos.y, -1.0, 1.0)) * INV_PI);
 			// SkyDome's unwrapped cloud offset avoids a visible jump when its
 			// wrapped cirrus UVs or shader TIME restart.
-			evening_uv.x += panorama_cloud_position.x * 0.045;
+			evening_uv.x += panorama_cloud_position.x * .012 * smoothstep(.045,.20,world_pos.y);
 			evening_uv.x = fract(evening_uv.x);
 			vec3 golden_sky = texture(evening_panorama, evening_uv).rgb;
 			float seam_distance = min(evening_uv.x, 1.0 - evening_uv.x);
@@ -705,6 +725,6 @@ void sky() {
 		}
 	}
 
-	COLOR = col.rgb;
+	COLOR = rain_cloud_sky(EYEDIR,col.rgb);
 	}
 }

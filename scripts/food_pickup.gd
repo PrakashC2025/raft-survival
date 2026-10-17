@@ -50,7 +50,7 @@ func _ready() -> void:
 	amount = maxi(1, amount)
 	_visual = _make_visual()
 	if _visual != null:
-		OBJECT_MATERIALS.apply_model(_visual, OBJECT_MATERIALS.kind_for_item(item_name))
+		if item_name!="Cooking Foil" and not item_name.begins_with("Wrapped "):OBJECT_MATERIALS.apply_model(_visual, OBJECT_MATERIALS.kind_for_item(item_name))
 		add_child(_visual)
 		_base_y = _visual.position.y
 	_update_amount_label()
@@ -106,6 +106,7 @@ func get_pickup_id() -> String:
 
 
 func _make_visual() -> Node3D:
+	if item_name=="Cooking Foil" or item_name.begins_with("Wrapped "):return preload("res://scripts/survival_item_visual.gd").foil(item_name)
 	if item_name in ["Potato","Baked Potato","Tomato","Banana"]:
 		var produce := preload("res://scripts/produce_visual.gd").create(item_name)
 		produce.scale=Vector3.ONE*1.7

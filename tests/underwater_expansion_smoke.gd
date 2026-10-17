@@ -96,8 +96,8 @@ func _run() -> void:
 	check(sea.find_children("BrokenWalls","MeshInstance3D",true,false).size()==18,"Ruins merge wall rendering into one mesh per building")
 	check(sea.find_children("SeaGrass*","MultiMeshInstance3D",false,false).size()==3,"Sea plants use three shared instanced batches")
 	var creatures:=get_nodes_in_group("dive_creature")
-	check(creatures.size()==30,"Fish, crabs, turtles and rays have a fixed huntable population")
-	check(get_nodes_in_group("underwater_shoal").size()==3 and get_nodes_in_group("underwater_shoal")[0].COUNT==24,"Three moving schools contain 72 instanced background fish")
+	check(creatures.size()==50,"Fifty bounded huntable fish, crabs, turtles, rays, groupers and octopuses include nearby waters")
+	check(get_nodes_in_group("underwater_shoal").size()==4 and get_nodes_in_group("underwater_shoal")[0].COUNT==24,"Four moving schools include 24 nearby open-ocean fish as well as the dive sites")
 	check(sea._kelp_material.get_shader_parameter("leaf_texture") is Texture2D,"Sea fronds have a shared botanical vein texture")
 	for creature in creatures:creature.set_physics_process(false)
 	player.global_position=Vector3(145,float(sea.call("surface_height",Vector2(145,85)))+.3,85);player.is_swimming=true
@@ -120,17 +120,17 @@ func _run() -> void:
 	await shot("spear")
 	if preview:player.camera.top_level=false;player.camera.transform=Transform3D.IDENTITY
 	tools.call("advance",.2);check(fish.health==20 and inv.call("total","Fish")==fish_before,"Hunt waits for the contact pose")
-	tools.call("advance",.4);check(fish.respawn==600 and inv.call("total","Fish")==fish_before+1,"Successful spear hit collects a fish and starts its regrowth timer")
+	tools.call("advance",.4);check(fish.respawn==600 and inv.call("total","Fish")==fish_before and player.get_node("SurvivalServices")._drops.back().contents[0].item=="Fish","Successful spear hit leaves a carryable fish body with its reward intact")
 	tools.call("advance",.4);action.call("stop")
 	player.global_position=crab.global_position+Vector3(0,-.5,1.8);aim(crab,crab.global_position);tools.cooldown=0
 	var crab_before:int=inv.call("total","Raw Crab");tools.call("use");tools.call("advance",.6)
-	check(crab.respawn==600 and inv.call("total","Raw Crab")==crab_before+1,"Seabed crabs can be hunted and collected for cooking")
+	check(crab.respawn==600 and inv.call("total","Raw Crab")==crab_before and player.get_node("SurvivalServices")._drops.back().species=="Crab","Seabed crabs leave whole bodies for carrying and preparation")
 	tools.call("advance",.4);action.call("stop")
 	var slots:Array=inv.slots.duplicate(true)
-	for index in inv.SLOT_COUNT:inv.slots[index]={"item":"Wood","amount":999}
+	for index in inv.SLOT_COUNT:inv.slots[index]={"item":"Wood","count":inv.MAX_STACK}
 	inv.call("_recompute");var healthy:=creatures[1]
 	healthy.call("take_damage",38,player)
-	check(healthy.health>0 and healthy.respawn==0,"Full bag preserves a hunted creature")
+	check(healthy.health==0 and healthy.respawn>0 and not player.get_node("SurvivalServices")._drops.back().empty(),"A full bag preserves hunted rewards in a carryable body")
 	player.global_position=Vector3(145,float(sea.call("surface_height",Vector2(145,85)))+.3,85);aim(floor_node,Vector3(hit.position));floor_node._cooldown=0;floor_node.call("interact_survival",player)
 	check(inv.call("total","Sand")==0,"Full bag gathering cannot lose or invent a sand reward")
 	inv.slots=slots;inv.call("_recompute")
@@ -164,13 +164,13 @@ func _run() -> void:
 	check(progress._air_refill==0 and progress.air_tank_seconds==30,"Pausing cancels unfinished pumping")
 	var sharks:=get_nodes_in_group("shark");check(sharks.size()==2,"Only two sharks patrol the remote raft perimeter")
 	var remote:=true
-	for shark in sharks:remote=remote and shark.global_position.distance_to(raft.global_position)>85;shark.set_physics_process(false)
+	for shark in sharks:remote=remote and shark.global_position.distance_to(raft.global_position)>38;shark.set_physics_process(false)
 	check(remote,"Sharks start well away from the raft")
 	var shark:=sharks[0] as Node3D;player.is_swimming=true;shark._encounter=9
 	var safe:=true
-	for level in range(1,6):progress.level=level;safe=safe and not shark.call("can_attack",player)
-	check(safe,"Sharks never attack during levels one through five")
-	progress.level=6;check(shark.call("can_attack",player),"Late-game sharks can attack only during a rare encounter")
+	for level in range(1,6):progress.level=level;safe=safe and shark.call("can_attack",player)
+	check(safe,"Warned shark encounters can threaten swimmers at every survival level")
+	progress.level=6;check(shark.call("can_attack",player),"Late-game swimmers also remain eligible during an encounter")
 	shark._encounter=0;check(not shark.call("can_attack",player),"Falling in water does not itself trigger an attack")
 	var spawner:=shark.get_parent();spawner._cooldown=0
 	check(spawner.call("allow_encounter",shark) and not spawner.call("allow_encounter",sharks[1]),"Sharks share a cooldown so encounters cannot stack")

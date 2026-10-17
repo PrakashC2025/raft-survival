@@ -29,7 +29,7 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	_position_reticle()
 	var player := get_tree().get_first_node_in_group("player")
-	if player != null and player.get("active_item") == "Bow":
+	if player != null and player.get("active_item") in ["Bow","Spear"]:
 		queue_redraw()
 
 func set_state(value: int) -> void:
@@ -53,7 +53,7 @@ func _draw() -> void:
 	var radius: float = max(r - line_width * 0.5, 0.5)
 	draw_arc(Vector2(r, r), radius, 0.0, TAU, 32, col, line_width, true)
 	var player := get_tree().get_first_node_in_group("player")
-	if player != null and player.get("active_item") == "Bow":
+	if player != null and player.get("active_item") in ["Bow","Spear"]:
 		var center := Vector2(r, r)
 		var equipment := player.get_node_or_null("SurvivalEquipment")
 		for direction in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT]:
@@ -64,6 +64,8 @@ func _draw() -> void:
 			if fraction > 0.0:
 				draw_arc(center, r + 5.0, -PI * 0.5, -PI * 0.5 + TAU * fraction, 32, Color(0.93, 0.77, 0.43), 2.0, true)
 		var font := ThemeDB.fallback_font
-		var caption := "ARROWS  %d  •  HOLD SHOOT, RELEASE TO FIRE" % Inventory.total("Arrow")
-		var width := font.get_string_size(caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-		draw_string(font, center + Vector2(-width * 0.5, r + 29.0), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, col)
+		# Detailed controls appear on selection/HELP; aiming keeps only ammunition near the edge.
+		var caption := "ARROWS  %d" % Inventory.total("Arrow")
+		if player.active_item=="Spear":caption="SPEARS  %d"%Inventory.total("Spear")
+		var view:=get_viewport_rect().size
+		draw_string(font,Vector2(16,view.y*.60)-position,caption,HORIZONTAL_ALIGNMENT_LEFT,-1,13,col)

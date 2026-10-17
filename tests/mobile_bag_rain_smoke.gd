@@ -175,6 +175,47 @@ func recipe_swipe_probe() -> void:
 	await shot("recipe-scroll")
 	service.call("close_menu"); kitchen.queue_free(); await frames()
 
+func compact_hud_probe(controls: Control) -> void:
+	for resolution in [Vector2i(1280,720),Vector2i(1600,720),Vector2i(1280,960)]:
+		root.size=resolution;await frames(3)
+		hud.call("_compute_layout");controls.call("_apply_viewport_size");controls.call("_sync_mode")
+		var bottom: Array=hud._hotbar_rects.duplicate();bottom.append(hud._bag_rect)
+		check(hud._hotbar_rects.size()==6 and bottom.all(func(rect):return is_equal_approx(rect.position.y,hud._bag_rect.position.y)),"Bottom row has only six inventory slots and BAG at %s"%resolution)
+		var clear:=true
+		for rect: Rect2 in [hud._hud_map_rect,hud._hud_craft_rect,hud._rope_slot_rect]:
+			clear=clear and Rect2(Vector2.ZERO,hud.size).encloses(rect) and rect.position.x>hud.size.x*.5 and rect.end.y<hud._bag_rect.position.y
+			for slot: Rect2 in bottom:
+				if rect.intersects(slot):clear=false
+			for button in controls._all_buttons:
+				if button.visible and rect.intersects(button.get_global_rect()):clear=false
+		check(clear,"Separate shortcuts remain on screen and clear of inventory/actions at %s"%resolution)
+		check(not controls._btn_recall.get_global_rect().intersects(hud._rope_slot_rect) and not controls._btn_recall.get_global_rect().intersects(hud._hud_craft_rect),"Active rope RETURN has a clear touch area below the corner shortcuts at %s"%resolution)
+		var clear_status:=true
+		for center: Vector2 in hud._status_centers:
+			var gauge:=Rect2(center-Vector2.ONE*hud._clock_r,Vector2(hud._clock_r*2,hud._clock_r*3.4))
+			if gauge.intersects(controls._btn_cam.get_global_rect()):clear_status=false
+		check(clear_status,"VIEW stays clear of status gauges and percentage captions at %s"%resolution)
+		var centre:=Rect2(hud.size*Vector2(.32,.20),hud.size*Vector2(.43,.54))
+		var centre_clear:=true
+		for button in controls._all_buttons:
+			if button.visible and centre.intersects(button.get_global_rect()):centre_clear=false
+		for rect: Rect2 in [hud._hud_map_rect,hud._hud_craft_rect,hud._rope_slot_rect]:centre_clear=centre_clear and not centre.intersects(rect)
+		check(centre_clear,"Main viewing and aiming area stays clear of all gameplay buttons at %s"%resolution)
+	root.size=Vector2i(1280,720);await frames(3)
+	hud.call("_compute_layout");controls.call("_apply_viewport_size");controls.call("_sync_mode")
+	await shot("compact-hud")
+	pointer(hud._hud_map_rect.get_center(),61)
+	check(hud._map_open and controls._look_id==-1,"Separate MAP opens once without starting camera look")
+	pointer(hud._map_close_rect.get_center(),62)
+	pointer(hud._hud_craft_rect.get_center(),63)
+	check(hud._craft_open and paused and controls._look_id==-1,"Separate CRAFT opens once and releases gameplay input")
+	hud.call("_close_crafting")
+	var inventory:=root.get_node("Inventory")
+	var contents: Array=inventory.slots.duplicate(true)
+	player.rope_gun_selected=false;player.active_item="";player.call("_update_hand_item")
+	pointer(hud._rope_slot_rect.get_center(),64)
+	check(player.rope_gun_selected and player.active_item=="Rope" and inventory.slots==contents,"Separate ROPE equips permanent equipment without changing inventory")
+
 func _run() -> void:
 	if not OS.get_user_data_dir().contains("MobileTests"): quit(2); return
 	preview = "--preview" in OS.get_cmdline_user_args()
@@ -192,6 +233,7 @@ func _run() -> void:
 	var controls := player.get_node("CanvasLayer/MobileControls")
 	controls.force_show = true; controls.call("_update_visibility"); controls.call("_sync_mode")
 	hud.visible = true; hud.call("_compute_layout")
+	await compact_hud_probe(controls)
 	pointer(hud._bag_rect.get_center())
 	check(hud._bag_open, "One Android finger tap plus its emulated mouse opens and retains the bag")
 	check(hud._bag_slot_rects.size() == 30 and hud._craft_button_rect.has_area(), "Items and crafting hit targets exist immediately on the first tap")
@@ -233,6 +275,11 @@ func _run() -> void:
 	pointer(hud._close_rect.get_center(), 26)
 	check(not hud._bag_open and not paused, "Close touch leaves the bag closed without reopening")
 	await recipe_swipe_probe()
+	if "--hud-layout-only" in OS.get_cmdline_user_args():
+		current_scene.get_node("OceanAmbience").call("stop_environment")
+		current_scene.queue_free();await frames(25)
+		print("MOBILE HUD SMOKE: %d checks, %d failures"%[checks,failures])
+		quit(1 if failures else 0);return
 	stats.call("load_state", {"health":80,"hunger":80,"thirst":80})
 	player.velocity = Vector3.ZERO; player.is_swimming = false
 	stats.call("_process", 60.0)

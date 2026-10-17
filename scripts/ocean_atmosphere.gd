@@ -5,6 +5,8 @@ var _sky: WorldEnvironment
 var _clock: Node
 var _fireflies: Array[GPUParticles3D] = []
 var _sample := 0.0
+var _dry_sun_energy := 1.0
+var _dry_moon_energy := 0.3
 static var _occluders: Dictionary = {}
 const EVENING_PANORAMA: Texture2D = preload("res://textures/sky/golden_evening_v1.png")
 const NIGHT_CLOUDS: Texture2D = preload("res://textures/sky/moonlit_clouds_v1.png")
@@ -45,6 +47,8 @@ func _daily_sky(hour: float) -> void:
 func _ready() -> void:
 	_sky = get_parent().get_node("Sky3D")
 	_clock = _sky.get_node("TimeOfDay")
+	_dry_sun_energy = float(_sky.get("sun_energy"))
+	_dry_moon_energy = float(_sky.get("moon_energy"))
 	# Keep the existing astronomical sun/calendar, but give every dark night a
 	# visible moon. A real lunar orbit can put it below the horizon/new moon.
 	_clock.set("compute_moon_coords", false)
@@ -183,7 +187,13 @@ func _process(delta: float) -> void:
 	var sun: Vector3 = (dome.get("_sun_transform") as Transform3D).origin
 	var material: ShaderMaterial = dome.get("sky_material")
 	material.set_shader_parameter("evening_blend", evening_strength(_clock.call("get_render_time"), sun.y))
-	material.set_shader_parameter("evening_rotation", -atan2(sun.z, sun.x) / TAU)
+	var rain := get_tree().get_first_node_in_group("rain_system")
+	var storm: float = rain.call("sky_storm_strength") if rain != null else 0.0
+	material.set_shader_parameter("storm_amount",storm)
+	if rain!=null:material.set_shader_parameter("storm_cloud_offset",rain.get("_cloud_offset"))
+	# Keep the panorama's horizon and colour gradient fixed in world space.
+	# The shader advects cloud detail separately; sunlight uses the live clock.
+	material.set_shader_parameter("evening_rotation", 0.0)
 	material.set_shader_parameter("daylight_panorama_blend", smoothstep(-0.22, 0.02, sun.y))
 	material.set_shader_parameter("morning_panorama_blend", 1.0 - smoothstep(0.18, 0.65, sun.y) if _clock.call("get_render_time") < 12.0 else 0.0)
 	_sample += delta
@@ -208,12 +218,14 @@ func _process(delta: float) -> void:
 	env.fog_light_color = Color("192b44") if night else (Color("a88672") if dawn or dusk else Color("91b9ca"))
 	# Match the celestial light continuously, including restored calendar dates.
 	# Hour thresholds caused a visible brightness jump before sunrise/sunset.
-	env.ambient_light_energy = lerpf(0.52,0.62,daylight)
+	env.ambient_light_energy = lerpf(0.52,0.62,daylight) * lerpf(1.0,0.64,storm)
+	_sky.set("sun_energy",_dry_sun_energy * lerpf(1.0,0.22,storm))
+	_sky.set("moon_energy",_dry_moon_energy * lerpf(1.0,0.55,storm))
 	var fill := _sky.get_node_or_null("FillLight") as DirectionalLight3D
 	if fill != null:
 		# Broad sky bounce: diffuse only, so sunlight still owns water/wood glints.
 		# Shadowless moon/sky bounce keeps salvage readable from every direction.
-		fill.light_energy = lerpf(0.35,0.32,daylight)
+		fill.light_energy = lerpf(0.35,0.32,daylight) * lerpf(1.0,0.72,storm)
 	var camera := get_viewport().get_camera_3d()
 	for flies in _fireflies:
 		var nearby := camera != null and flies.global_position.distance_squared_to(camera.global_position) < 55*55

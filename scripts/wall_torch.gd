@@ -4,6 +4,7 @@ var fuel := 0.0
 var burning := false
 var end_time := 0.0
 const CYCLE := preload("res://scripts/torch_cycle.gd")
+const VISUAL := preload("res://scripts/torch_visual.gd")
 var _visual: Node3D
 var _light: OmniLight3D
 var _tick := 0.0
@@ -11,7 +12,7 @@ var _preview := false
 
 func _ready() -> void:
 	_preview = get_parent() != null and get_parent().name == "BuildPreviewRoot"
-	_visual = preload("res://scripts/torch_visual.gd").new()
+	_visual = VISUAL.new()
 	add_child(_visual)
 	var bracket := MeshInstance3D.new()
 	var beam := BoxMesh.new()
@@ -53,7 +54,9 @@ func _process(delta: float) -> void:
 
 func _update_flame() -> void:
 	if _visual != null: _visual.call("set_burning",burning and fuel > 0.0 and not _preview)
-	if _light != null: _light.visible = burning and fuel > 0.0 and not _preview and get_meta("light_allowed",true)
+	if _light != null:
+		_light.visible = burning and fuel > 0.0 and not _preview and get_meta("light_allowed",true)
+		_light.light_energy = VISUAL.light_energy_at(Time.get_ticks_msec() / 1000.0)
 
 func interact_survival(player: Node) -> void:
 	if _preview: return

@@ -97,4 +97,5 @@ func _commit() -> bool:
 			if not player.call("mount_held_torch",pending.get("mount",{})):
 				player.call("_hud_toast","MOUNTING SPACE BLOCKED · TORCH KEPT IN HAND")
 				return false
+	progress.sync_torch_effects()
 	return true

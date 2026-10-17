@@ -131,12 +131,13 @@ func _run() -> void:
 	check(stats.health==55 and stats.hunger==55 and stats.thirst==40,"Soup applies configured +45 hunger, +30 thirst and +15 health")
 	for dish in RULES.RECIPES:
 		check(RULES.effects(dish)[0]>=17 and RULES.effects(dish)[1]>0 and RULES.effects(dish)[2]>0,dish+" has stronger cooked nutrition, water and healing")
+	player.get_node("SurvivalAction").stop()
 	hold("Banana");stats.call("load_state",{"health":60,"hunger":20,"thirst":20});service.use_item("Banana")
 	check(stats.hunger==28 and stats.health==59,"Banana can be eaten raw with configured nutrition and small damage")
 	check(RULES.effects("Fish")[2]<RULES.effects("Potato")[2],"Raw fish carries more health damage than raw vegetables")
 	check(service.ui._popups.size()==4,"Stat change popups reuse a fixed pool")
 	var box:=station("storage_box",Vector3(0,0,-1));service.open_storage(box)
-	check(service.ui._slots.size()==54,"Storage shows all thirty player slots and twenty-four box slots")
+	check(service.ui._slots.size()==inv.SLOT_COUNT+box.capacity,"Storage shows all player slots and the box's actual capacity")
 	var potato_slot: int=-1
 	for index in inv.SLOT_COUNT:
 		if inv.call("slot_item",index)=="Potato":potato_slot=index;break
@@ -155,11 +156,13 @@ func _run() -> void:
 	service.transfer(false,inv.slots.find({"item":"Potato","count":19}),true,0)
 	if "--preview" in OS.get_cmdline_user_args():await screenshot("storage-box-preview")
 	service.close_menu();var contents_before: Array=box.contents.duplicate(true)
-	var lost_before: Array=inv.slots.duplicate(true);service.on_death()
-	check(inv.call("is_empty") and box.contents==contents_before,"Death empties backpack and hotbar while storage stays safe")
-	var lost: Node3D=service._drops.back()
-	check(lost.contents==lost_before and lost.global_position.distance_to(player.global_position)<2,"Death bag keeps all thirty slots at the death location")
-	check(service.save_state().drops.size()==1,"Death bag contents and position are included in the save")
+	var station_position:=player.global_position
+	var kept_before: Array=inv.slots.duplicate(true);var drops_before: int=service._drops.size();service.on_death()
+	check(inv.slots==kept_before and box.contents==contents_before,"Death keeps backpack, hotbar and stored supplies unchanged")
+	check(player.global_position.distance_to(get_first_node_in_group("raft").global_position)<2,"Death recovery returns the player to the home raft")
+	check(service._drops.size()==drops_before,"Recovery does not duplicate inventory into a new death bag")
+	# Resume the remaining station fixture beside its existing camp equipment.
+	player.global_position=station_position
 	stats.call("reset");put("Wood",10);put("Rope",10);check(inv.call("craft_item","Torch"),"Unlit Torch is craftable in the normal recipe table")
 	hold("Torch");player.aim_valid=false;progress.use_torch()
 	check(progress.torch_fuel==0 and not progress._torch_light.visible,"Unlit torch cannot light without aiming at a fire")
@@ -202,7 +205,7 @@ func _run() -> void:
 	check(service._drops.size()==drop_count,"Completed overflow cooking cannot duplicate its dropped meal")
 	check(player.call("_write_save","quick"),"New systems save through the authenticated atomic save format")
 	var saved: Dictionary=SAVE.read(inv.QUICK_SAVE_PATH)
-	check(saved.version==1 and saved.survival_services.drops.size()==drop_count,"Versioned save contains death and cooking overflow bags")
+	check(saved.version==1 and saved.survival_services.drops.size()==drop_count,"Versioned save preserves existing loot and cooking overflow bags")
 	for invalid in [{"version":99,"slots":[]},{"slots":[],"built":{}},{"slots":[],"electronics":{"charge":[]}},{"slots":[],"survival_services":{"drops":[{"p":[{},0,0],"contents":[]}]}},{"slots":[],"island_groves":{"Island":{"Banana0":[]}}},{"slots":[],"built":[{"t":"StorageBox","survival":{"contents":[{"item":"Medkit","count":{}}]}}]}]:
 		var file:=FileAccess.open("user://damaged-check.json",FileAccess.WRITE);file.store_string(JSON.stringify(invalid));file.close()
 		check(SAVE.read_one("user://damaged-check.json").is_empty(),"Malformed nested or unsupported-version save is rejected before restoration")

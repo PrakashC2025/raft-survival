@@ -1,13 +1,13 @@
 extends Node3D
 
 @export_range(0, 8, 1) var shark_count := 2
-@export var patrol_radius := 110.0
+@export var patrol_radius := 52.0
 var _cooldown := 0.0
 var _tick := 0.0
 
 func allow_encounter(_shark: Node) -> bool:
 	if _cooldown > 0: return false
-	_cooldown = 180.0
+	_cooldown = randf_range(110.0,170.0)
 	return true
 
 func _process(delta: float) -> void:

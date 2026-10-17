@@ -52,7 +52,8 @@ var testing_soil_revision := 0
 const RECIPES := {
 	"SeedDryingTray":{"Wood":3,"Rope":1},
 	"WallTorch": {"Wood": 2, "Rope": 1},
-	"StorageBox": {"Wood":6,"Rope":2,"Metal":1},
+	"StorageBox": {"Wood":8,"Screw":4},
+	"BoatWorkshop":{"Wood":8,"Rope":2},
 	"CookingSetup": {"Wood":8,"Stone":4,"Metal":2},
 	"HalfWall": {"Wood": 4, "Rope": 1},
 	"CargoCrate": {"Wood": 6, "Rope": 2, "Metal": 1},
@@ -80,6 +81,7 @@ const RECIPES := {
 ## Portable survival and raft equipment. These recipes produce an inventory
 ## item; building recipes above are paid when their structure is placed.
 const ITEM_RECIPES := {
+	"Cooking Foil":{"Metal":1},
 	"Axe": {"Wood":3,"Metal":2,"Rope":1},
 	"Pickaxe": {"Wood":3,"Metal":3,"Rope":1},
 	"Shovel": {"Wood":2,"Metal":2,"Rope":1},
@@ -90,6 +92,7 @@ const ITEM_RECIPES := {
 	"Spear": {"Wood": 3, "Stone": 2, "Rope": 1},
 	"Sail Kit": {"Wood": 8, "Rope": 4, "Plastic": 2},
 	"Motor Kit": {"Wood": 10, "Rope": 2, "Plastic": 5, "Metal": 4},
+	"Rowboat Kit": {"Wood":12,"Rope":6,"Screw":4},
 	"Life Vest": {"Plastic": 5, "Rope": 2},
 	"Bow": {"Wood": 5, "Rope": 3},
 	"Arrow": {"Wood": 1, "Stone": 1},

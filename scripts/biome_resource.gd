@@ -1,4 +1,5 @@
 extends StaticBody3D
+const CONTACT_AUDIO:=preload("res://scripts/contact_audio.gd")
 ## Finite deposits and regrowing winter trees with stable saved IDs.
 var required_tool := "Pickaxe"
 var health := 4
@@ -41,7 +42,7 @@ func tool_hit(actor: Node3D,item: String) -> bool:
 	if health<=damage and not Inventory.try_exchange({},rewards):return false
 	_cooldown=float(Time.get_ticks_msec()+500)
 	health=maxi(0,health-damage)
-	actor.call("play_world_sfx",preload("res://audio/chop.ogg") if item=="Axe" else preload("res://audio/footstep_gravel.ogg"),-9.0)
+	actor.call("play_world_sfx",preload("res://audio/chop.ogg") if item=="Axe" else CONTACT_AUDIO.pick("metal"),-9.0,global_position)
 	if health==0:
 		if item=="Axe":regrow_wait=360;growth=0
 		for reward in rewards:Inventory.notify_pickup(reward,int(rewards[reward]))

@@ -62,10 +62,11 @@ func _run() -> void:
 	player.get_node("RopeSystem").set_physics_process(false)
 	var hud:=player.get_node("CanvasLayer/SurvivalHUD");hud.toggle_crafting();await frames(6)
 	var menu: Control=hud._craft_menu
-	check(menu.cards.size()==inv.ITEM_RECIPES.size(),"Craft contains every bag recipe")
-	var placed_absent:=true
-	for item in inv.RECIPES:placed_absent=placed_absent and not menu.cards.has(item)
-	check(placed_absent,"Placed structures including roof, walls, pots and stations stay out of Craft")
+	check(inv.ITEM_RECIPES.keys().all(func(item):return menu.cards.has(item)) and player.BUILD_RECIPE_NAMES.all(func(item):return menu.cards.has(item)),"Craft contains every bag recipe and supported camp project")
+	var supported_only:=true
+	for item in inv.RECIPES:
+		if menu.cards.has(item) and not player.BUILD_RECIPE_NAMES.has(item):supported_only=false
+	check(supported_only,"Camp recipes expose only supported placements, excluding legacy structures")
 	check(player.BUILD_RECIPE_NAMES.has("Wall") and player.BUILD_RECIPE_NAMES.has("Roof"),"Walls and roofs remain available in Build")
 	var card: Button=menu.cards.Torch
 	var origin:=card.get_global_rect().get_center();var before: int=menu._list.scroll_vertical
@@ -82,7 +83,7 @@ func _run() -> void:
 	var detail: Node=menu._contents.get_child(0);var quantity_label: Label=menu._quantity_label
 	menu.quantity=5;menu._refresh_detail();inv.changed.emit();await frames(3)
 	check(is_instance_valid(detail) and menu._contents.get_child(0)==detail and menu._quantity_label==quantity_label,"Quantity/inventory updates retain existing detail controls")
-	check(quantity_label.text.contains("5") and menu._build.text=="Build ×5","Stable details show the selected batch and totals")
+	check(quantity_label.text.contains("5") and menu._build.text=="Make ×5","Stable details show the selected batch and totals")
 	check(menu._build.get_global_rect().end.y<root.get_visible_rect().size.y,"Craft actions remain visible")
 	await shot("craft")
 	menu._cancel.pressed.emit();await frames(3)

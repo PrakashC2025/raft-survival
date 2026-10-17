@@ -30,8 +30,10 @@ static func _valid_tree(value: Variant,depth: int=0) -> bool:
 			if key in OBJECT_FIELDS and not child is Dictionary:return false
 			if key in ARRAY_FIELDS and not child is Array:return false
 			if key=="kind" and not (child is String or _number(child)):return false
+			if key in ["carried","floating"] and not child is bool:return false
 			if key=="charge" and not (_number(child) or (child is Dictionary and value.get("installed") is Dictionary)):return false
-			if key in ["p","at","x"]:
+			if key=="local_p" and not child is Array:return false
+			if key in ["p","at","x","local_p"]:
 				for coordinate in child:
 					if not _number(coordinate):return false
 			if key in ["cost","events"]:
@@ -42,13 +44,32 @@ static func _valid_tree(value: Variant,depth: int=0) -> bool:
 
 static func _valid_save(data: Dictionary) -> bool:
 	if not _valid_tree(data) or not data.get("slots") is Array:return false
+	if not _valid_salvage(data.get("ocean_salvage",{})):return false
 	var air:Variant=data.get("progression",{}).get("air_tank_seconds",0)
 	if not _number(air) or float(air)<0 or float(air)>180:return false
 	if not data.get("underwater_creatures",{}) is Dictionary:return false
 	for creature in data.get("underwater_creatures",{}).values():
 		if not creature is Dictionary:return false
 		if not _number(creature.get("health",0)) or not _number(creature.get("respawn",0)):return false
-		if float(creature.get("health",0))<0 or float(creature.get("health",0))>30 or float(creature.get("respawn",0))<0 or float(creature.get("respawn",0))>600:return false
+		if float(creature.get("health",0))<0 or float(creature.get("health",0))>40 or float(creature.get("respawn",0))<0 or float(creature.get("respawn",0))>600:return false
+	if not data.get("thrown_spears",[]) is Array or data.get("thrown_spears",[]).size()>24:return false
+	if not data.get("rowboat",{}) is Dictionary:return false
+	var boat: Dictionary=data.get("rowboat",{})
+	if boat.has("ready") and not boat.ready is bool:return false
+	if boat.has("aboard") and not boat.aboard is bool:return false
+	if boat.has("yaw") and not _number(boat.yaw):return false
+	if boat.has("p"):
+		if not boat.p is Array or boat.p.size()!=3:return false
+		for coordinate in boat.p:
+			if not _number(coordinate) or absf(float(coordinate))>200000:return false
+	if boat.has("traveller_p"):
+		if not boat.traveller_p is Array or boat.traveller_p.size()!=3:return false
+		for coordinate in boat.traveller_p:
+			if not _number(coordinate) or absf(float(coordinate))>200000:return false
+	for spear in data.get("thrown_spears",[]):
+		if not spear is Dictionary or not spear.get("p") is Array or spear.p.size()!=3 or not _number(spear.get("yaw",0)):return false
+		for coordinate in spear.p:
+			if not _number(coordinate) or absf(float(coordinate))>200000:return false
 	if not data.get("underwater_resources",{}) is Dictionary:return false
 	for taken in data.get("underwater_resources",{}).values():
 		if not taken is bool:return false
@@ -79,6 +100,27 @@ static func _valid_save(data: Dictionary) -> bool:
 		if not electronics.get(field,{}) is Dictionary:return false
 	for amount in electronics.get("charge",{}).values():
 		if not _number(amount):return false
+	return true
+
+static func _valid_salvage(value: Variant) -> bool:
+	if not value is Dictionary:return false
+	for field in ["next_arrival","serial","recovered","last_note"]:
+		if not value.has(field):continue
+		if not _number(value[field]):return false
+		var minimum := -1.0 if field=="last_note" else 0.0
+		var maximum := 480.0 if field=="next_arrival" else (3.0 if field=="last_note" else 1000000.0)
+		if float(value[field])<minimum or float(value[field])>maximum:return false
+		if field!="next_arrival" and float(value[field])!=floorf(float(value[field])):return false
+	if not value.get("catalog",[]) is Array or value.get("catalog",[]).size()>4:return false
+	for kind in value.get("catalog",[]):
+		if not _number(kind) or float(kind)<0 or float(kind)>3 or float(kind)!=floorf(float(kind)):return false
+	var cache: Variant = value.get("cache",{})
+	if not cache is Dictionary:return false
+	if cache.is_empty():return true
+	if not _number(cache.get("kind")) or float(cache.kind)<0 or float(cache.kind)>3 or float(cache.kind)!=floorf(float(cache.kind)):return false
+	if not cache.get("p") is Array or cache.p.size()!=3 or not _number(cache.get("yaw",0)):return false
+	for coordinate in cache.p:
+		if not _number(coordinate) or absf(float(coordinate))>200000:return false
 	return true
 
 static func _authentication_key(key: PackedByteArray) -> PackedByteArray:

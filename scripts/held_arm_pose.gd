@@ -12,7 +12,38 @@ var _cached := false
 func _process_modification() -> void:
 	var rig := get_skeleton()
 	if rig == null or player == null or upper < 0 or lower < 0 or wrist < 0: return
-	if int(player.get("cam_mode")) != 1: return
+	if int(player.get("cam_mode")) < 1: return
+	var boat:=player.get("boat_vehicle") as CharacterBody3D
+	if is_instance_valid(boat):
+		for side in ["R","L"]:
+			var thigh:=rig.find_bone("UpperLeg."+side);var calf:=rig.find_bone("LowerLeg."+side)
+			var foot:=rig.find_bone("Foot."+side)
+			var foot_target:=boat.to_global(Vector3(.17 if side=="R" else -.17,.05,-.17))
+			if not boat.transition_kind.is_empty() and foot>=0:
+				var rest: Vector3=(rig.global_transform*rig.get_bone_global_pose(foot)).origin
+				var sit:=smoothstep(.15,.90,float(boat.transition_progress))
+				foot_target=foot_target.lerp(rest,sit) if boat.transition_kind=="leave" else rest.lerp(foot_target,sit)
+			_solve(rig,thigh,calf,foot,foot_target,1,boat.global_basis*Vector3(0,.25,-1))
+		if not boat.transition_kind.is_empty():
+			_solve(rig,upper,lower,wrist,boat.to_global(Vector3(.60,.35,.48)),1)
+			_solve(rig,rig.find_bone("UpperArm.L"),rig.find_bone("LowerArm.L"),rig.find_bone("Wrist.L"),boat.to_global(Vector3(-.60,.35,.48)),-1)
+			return
+		if not player.call("boat_consumption_active"):
+			var visual:=boat.get("_visual") as Node3D
+			var right_oar:=visual.get_node("Oars/OarRight") as Node3D;var left_oar:=visual.get_node("Oars/OarLeft") as Node3D
+			_solve(rig,upper,lower,wrist,right_oar.to_global(Vector3(-.36,.04,0)),1)
+			_solve(rig,rig.find_bone("UpperArm.L"),rig.find_bone("LowerArm.L"),rig.find_bone("Wrist.L"),left_oar.to_global(Vector3(.36,.04,0)),-1)
+			for side in ["R","L"]:
+				for finger in ["Index","Middle","Ring","Pinky"]:
+					for joint in [1,2,3,4]:
+						var bone:=rig.find_bone("%s%d.%s"%[finger,joint,side])
+						if bone>=0:_curl_finger(rig,bone,.8)
+			return
+	var cargo:=player.get_node_or_null("HuntingCargo")
+	if cargo!=null and is_instance_valid(cargo.held):
+		_solve(rig,upper,lower,wrist,player.to_global(Vector3(.38,.10,-.65)),1)
+		_solve(rig,rig.find_bone("UpperArm.L"),rig.find_bone("LowerArm.L"),rig.find_bone("Wrist.L"),player.to_global(Vector3(-.38,.10,-.65)),-1)
+		return
 	if player.call("movement_owns_hands"): return
 	var action := player.get_node_or_null("SurvivalAction")
 	var pose: Dictionary = action.call("sample_pose") if action!=null else {}
@@ -30,7 +61,7 @@ func _process_modification() -> void:
 			if thumb>=0:_thumb_bones.append(thumb)
 	var curl := 0.8 if holding else 0.0
 	if acting and str(action.get("kind")) in ["eat","drink","cook"]:curl=.8
-	if acting and str(action.get("kind")) in ["grab","pick","harvest","plant"]:
+	if acting and str(action.get("kind")) in ["grab","pick","harvest","plant","scoop"]:
 		var progress:=float(action.get("elapsed"))/float(action.get("duration"))
 		curl=.85*smoothstep(.28,.42,progress)*(1.0-smoothstep(.92,1.0,progress))
 	if acting and _spine>=0:
@@ -75,7 +106,7 @@ func _curl_finger(rig: Skeleton3D,bone: int,curl: float) -> void:
 	finger_pose.basis=finger_pose.basis*Basis(Vector3.RIGHT,angle)
 	rig.set_bone_global_pose(bone,finger_pose)
 
-func _solve(rig: Skeleton3D,up: int,low: int,end: int,target: Vector3,side: float) -> void:
+func _solve(rig: Skeleton3D,up: int,low: int,end: int,target: Vector3,side: float,bend_hint: Vector3=Vector3.ZERO) -> void:
 	if up<0 or low<0 or end<0:return
 	var xf := rig.global_transform
 	var shoulder := (xf*rig.get_bone_global_pose(up)).origin
@@ -88,7 +119,7 @@ func _solve(rig: Skeleton3D,up: int,low: int,end: int,target: Vector3,side: floa
 	var reach := clampf(shoulder.distance_to(target),absf(a-b)+0.003,a+b-0.003)
 	target = shoulder+direction*reach
 	var along := (a*a+reach*reach-b*b)/(2.0*reach)
-	var bend := player.global_basis*Vector3(0.4*side,-1,0)
+	var bend := bend_hint if bend_hint.length_squared()>.01 else player.global_basis*Vector3(0.4*side,-1,0)
 	bend = (bend-direction*bend.dot(direction)).normalized()
 	var desired_elbow := shoulder+direction*along+bend*sqrt(maxf(0.0,a*a-along*along))
 	_rotate_segment(rig,up,elbow-shoulder,desired_elbow-shoulder)

@@ -67,14 +67,56 @@ static func component(kind: String) -> Node3D:
 				beam(root,Vector3(cos(angle)*.10,0,sin(angle)*.10),Vector3(cos(next)*.10,0,sin(next)*.10),.014,rubber)
 			beam(root,Vector3(.10,0,0),Vector3(.16,0,.04),.01,copper)
 		"Motor":
-			var body:=cylinder(root,Vector3.ZERO,.074,.18,metal);body.rotation.z=PI/2.0
-			var shaft:=cylinder(root,Vector3(.115,0,0),.012,.07,metal);shaft.rotation.z=PI/2.0
-			box(root,Vector3(-.10,0,0),Vector3(.03,.12,.12),rubber)
-			for offset in [-.045,0.0,.045]:box(root,Vector3(offset,.075,0),Vector3(.02,.004,.075),rubber)
+			var atlas_tex: Texture2D = load("res://textures/salvage/motor_machinery_atlas.jpg") if ResourceLoader.exists("res://textures/salvage/motor_machinery_atlas.jpg") else null
+			var iron_mat := StandardMaterial3D.new()
+			iron_mat.albedo_color = Color(0.28, 0.30, 0.32)
+			iron_mat.roughness = 0.55
+			iron_mat.metallic = 0.78
+			if atlas_tex != null: iron_mat.albedo_texture = atlas_tex
+			var copper_mat := StandardMaterial3D.new()
+			copper_mat.albedo_color = Color(0.72, 0.38, 0.15)
+			copper_mat.roughness = 0.35
+			copper_mat.metallic = 0.82
+			if atlas_tex != null: copper_mat.albedo_texture = atlas_tex
+
+			var body := cylinder(root, Vector3.ZERO, .076, .19, iron_mat)
+			body.rotation.z = PI / 2.0
+			# Cooling fins along motor stator
+			for fin_i in range(5):
+				var fin := cylinder(root, Vector3(-0.06 + fin_i * 0.03, 0, 0), 0.086, 0.008, iron_mat)
+				fin.rotation.z = PI / 2.0
+			# Drive shaft with keyway
+			var shaft := cylinder(root, Vector3(.12, 0, 0), .014, .08, metal)
+			shaft.rotation.z = PI / 2.0
+			# Rear terminal box with visible copper coil winding
+			box(root, Vector3(-.10, 0, 0), Vector3(.036, .13, .13), rubber)
+			var coil := cylinder(root, Vector3(-.085, 0.04, 0), 0.024, 0.03, copper_mat)
+			coil.rotation.z = PI / 2.0
+			for offset in [-.045, 0.0, .045]:
+				box(root, Vector3(offset, .078, 0), Vector3(.022, .005, .08), rubber)
 		"Battery":
-			box(root,Vector3.ZERO,Vector3(.12,.18,.10),rubber)
-			for side in [-1.0,1.0]:cylinder(root,Vector3(side*.035,.102,0),.013,.025,metal)
+			var atlas_tex: Texture2D = load("res://textures/salvage/motor_machinery_atlas.jpg") if ResourceLoader.exists("res://textures/salvage/motor_machinery_atlas.jpg") else null
+			var case_mat := StandardMaterial3D.new()
+			case_mat.albedo_color = Color(0.12, 0.14, 0.14)
+			case_mat.roughness = 0.85
+			if atlas_tex != null: case_mat.albedo_texture = atlas_tex
+			var brass_mat := StandardMaterial3D.new()
+			brass_mat.albedo_color = Color(0.85, 0.72, 0.38)
+			brass_mat.roughness = 0.32
+			brass_mat.metallic = 0.85
+
+			# Rugged ribbed battery casing
+			box(root, Vector3.ZERO, Vector3(.125, .185, .105), case_mat)
+			# Top reinforcement lid
+			box(root, Vector3(0, .095, 0), Vector3(.13, .015, .11), rubber)
+			# Positive and negative terminal posts
+			cylinder(root, Vector3(-.036, .115, 0), .014, .028, brass_mat)
+			cylinder(root, Vector3(.036, .115, 0), .014, .028, metal)
+			# Red and black insulator rings
+			cylinder(root, Vector3(-.036, .102, 0), .018, .008, SURFACE.worn(SURFACE.Kind.PLASTIC, Color(0.75, 0.12, 0.10), 0.6))
+			cylinder(root, Vector3(.036, .102, 0), .018, .008, rubber)
 	return root
+
 
 static func create(kind: String) -> Node3D:
 	var root := Node3D.new()
@@ -123,7 +165,17 @@ static func create(kind: String) -> Node3D:
 				beam(root,Vector3(x,1.6,0.06),Vector3(x,0.13,0.06),0.012,red if index==0 else dark)
 				beam(root,Vector3(x,0.13,0.06),Vector3(0.09+index*0.14,0.055,0.03),0.012,red if index==0 else dark)
 			var head:=Node3D.new();head.name="WindHead";head.position=Vector3(0,1.7,0);root.add_child(head)
-			var motor:=cylinder(head,Vector3(0,0,0.055),0.09,0.25,steel);motor.rotation.x=PI/2.0;motor.name="GeneratorMotor"
+			var atlas_tex: Texture2D = load("res://textures/salvage/motor_machinery_atlas.jpg") if ResourceLoader.exists("res://textures/salvage/motor_machinery_atlas.jpg") else null
+			var gen_mat := StandardMaterial3D.new()
+			gen_mat.albedo_color = Color(0.28, 0.32, 0.34)
+			gen_mat.roughness = 0.50
+			gen_mat.metallic = 0.75
+			if atlas_tex != null: gen_mat.albedo_texture = atlas_tex
+			var motor:=cylinder(head,Vector3(0,0,0.055),0.092,0.25,gen_mat);motor.rotation.x=PI/2.0;motor.name="GeneratorMotor"
+			# Cooling ribbing around the generator
+			for fin_i in range(4):
+				var gfin := cylinder(head, Vector3(0, 0, -0.02 + fin_i * 0.045), 0.102, 0.008, gen_mat)
+				gfin.rotation.x = PI / 2.0
 			var patch:=box(head,Vector3(.075,.023,.045),Vector3(.022,.085,.18),SURFACE.worn(SURFACE.Kind.METAL,Color(.30,.13,.045),.96,.12))
 			patch.rotation.z=.18
 			beam(head,Vector3(-.04,-.07,.07),Vector3(-.13,-.16,.17),.014,dark)
@@ -131,6 +183,7 @@ static func create(kind: String) -> Node3D:
 				box(head,Vector3(-0.06+index*0.04,0.092,0.06),Vector3(0.013,0.008,0.18),dark)
 			beam(head,Vector3(0,0,0.17),Vector3(0,0,0.7),0.035,steel)
 			timber_box(head,Vector3(0,0.05,0.64),Vector3(0.022,0.30,0.29))
+
 			var rotor := Node3D.new()
 			rotor.name = "Rotor"
 			rotor.position = Vector3(0,0,-0.17)

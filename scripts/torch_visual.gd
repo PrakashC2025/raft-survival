@@ -3,10 +3,11 @@ const SURFACES := preload("res://scripts/object_materials.gd")
 const FLAME := preload("res://shaders/campfire.gdshader")
 const PARTS := preload("res://scripts/machine_visual.gd")
 const TIMBER := preload("res://scripts/construction_visual.gd")
-const LIGHT_RANGE := 100.0
-const LIGHT_ENERGY := 3.0
-const LIGHT_ATTENUATION := 0.5
+const LIGHT_RANGE := 6.0
+const LIGHT_ENERGY := 1.1
+const LIGHT_ATTENUATION := 1.6
 var flames: Node3D
+var _burning := false
 func _ready() -> void:
 	var stick := MeshInstance3D.new()
 	stick.mesh = TIMBER.rounded_timber(Vector3(.043,.58,.043))
@@ -35,6 +36,7 @@ func _ready() -> void:
 		PARTS.cylinder(self,Vector3(0,.20+index*.013,0),.032,.008,fibre)
 	flames = Node3D.new()
 	flames.name = "TorchFlames"
+	flames.visible = _burning
 	add_child(flames)
 	for index in 1:
 		var mat := ShaderMaterial.new();mat.shader=FLAME
@@ -50,7 +52,11 @@ func _ready() -> void:
 		visual.rotation.y = index*PI/3.0
 		visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		# Shader expansion must still be rendered at the edge of the camera view.
-		visual.extra_cull_margin = 16.0
+		visual.extra_cull_margin = 4.0
 		flames.add_child(visual)
 func set_burning(lit: bool) -> void:
+	_burning = lit
 	if flames != null: flames.visible = lit
+
+static func light_energy_at(seconds: float) -> float:
+	return LIGHT_ENERGY * (1.0 + .045 * sin(seconds * 13.0) + .025 * sin(seconds * 21.0 + 1.7))

@@ -13,6 +13,6 @@ void fragment(){
 	float distance_fade=1.0-exp(-distance(CAMERA_POSITION_WORLD,sea_point)*.025);
 	float depth=max(0.0,-sea_point.y);
 	vec3 haze=mix(vec3(.055,.24,.27),vec3(.012,.055,.095),smoothstep(8.0,65.0,depth));
-	ALBEDO=mix(skin*COLOR.rgb,haze,distance_fade*.88);
-	ROUGHNESS=.46;METALLIC=.12;EMISSION=haze*distance_fade*.1;
+	ALBEDO=mix(skin*COLOR.rgb,haze,distance_fade*.65);
+	ROUGHNESS=.46;METALLIC=.12;EMISSION=skin*COLOR.rgb*.10+haze*distance_fade*.08;
 }

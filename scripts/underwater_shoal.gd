@@ -2,6 +2,7 @@ extends Node3D
 ## Fixed instanced fish pool: 10 Hz school steering, smooth nearby transforms.
 const TERRAIN:=preload("res://scripts/underwater_terrain.gd")
 const COUNT:=24
+@export var follow_diver:=false
 var _parts:Array[MultiMeshInstance3D]=[]
 var _base:Array[Transform3D]=[]
 var _player:Node3D
@@ -35,6 +36,13 @@ func _ready() -> void:
 	_draw_fish()
 func _process(delta:float) -> void:
 	_time+=delta;_tick+=delta
+	if follow_diver and is_instance_valid(_player):
+		var camera:=_player.get("camera") as Camera3D
+		var forward: Vector3=-camera.global_basis.z if camera!=null else Vector3.FORWARD
+		forward.y=0;forward=forward.normalized()
+		var nearby:=_player.global_position+forward*10.0
+		nearby.y=clampf(_player.global_position.y-1.5,TERRAIN.surface_height(Vector2(nearby.x,nearby.z))+3.0,-2.5)
+		global_position=global_position.move_toward(nearby,delta*1.4)
 	visible=is_instance_valid(_player) and _player.global_position.distance_squared_to(global_position)<12100
 	if not visible:return
 	if _tick>=.1:
@@ -45,14 +53,15 @@ func _process(delta:float) -> void:
 		_flee=actor.distance_squared_to(_centre)<64
 		if _flee:wanted+=(_centre-actor).normalized()*5.0
 		var world_point:=global_position+wanted
-		wanted.y=clampf(wanted.y,TERRAIN.surface_height(Vector2(world_point.x,world_point.z))+1.4-global_position.y,TERRAIN.MARINE_CEILING-1.5-global_position.y)
+		var ceiling:= -1.5 if follow_diver else TERRAIN.MARINE_CEILING-1.5
+		wanted.y=clampf(wanted.y,TERRAIN.surface_height(Vector2(world_point.x,world_point.z))+1.4-global_position.y,ceiling-global_position.y)
 		var direction:=(_target.direction_to(wanted))
 		if direction.length_squared()>.1:
 			var query:=PhysicsRayQueryParameters3D.create(global_position+_centre,global_position+_centre+direction*4.5,1)
 			var hit:=get_world_3d().direct_space_state.intersect_ray(query)
 			if not hit.is_empty():wanted=_centre+Vector3(hit.normal).slide(Vector3.UP)*3.0+Vector3.UP*.8
 			_desired=(_centre.direction_to(wanted))
-		wanted.y=minf(wanted.y,TERRAIN.MARINE_CEILING-1.5-global_position.y)
+		wanted.y=minf(wanted.y,ceiling-global_position.y)
 		_target=wanted
 	_centre=_centre.move_toward(_target,delta*(2.0 if _flee else 1.1))
 	_forward=_forward.lerp(_desired,1.0-exp(-delta*1.8)).normalized()

@@ -85,7 +85,7 @@ func _ready() -> void:
 
 func _update_back_tank() -> void:
 	if not is_instance_valid(_back_tank): return
-	_back_tank.visible=diving_tank and player.cam_mode==1
+	_back_tank.visible=diving_tank and player.cam_mode>=1
 	if not _back_tank.visible or not is_instance_valid(_tank_rig) or _tank_chest<0: return
 	var chest := _tank_rig.global_transform*_tank_rig.get_bone_global_pose(_tank_chest)
 	var orientation := chest.basis.orthonormalized()
@@ -138,7 +138,8 @@ func objective() -> String:
 			"electric_water": description = "Collect powered water"
 			"signal": description = "Transmit powered SOS"
 		return "%s · %d/%d" % [description, have, int(needs[event])]
-	return str(CHAPTERS[level - 1][1])
+	var salvage:=player.get_node_or_null("OceanSalvage")
+	return str(salvage.objective()) if level==CHAPTERS.size() and salvage!=null else str(CHAPTERS[level - 1][1])
 
 func _process(delta: float) -> void:
 	var scene:=get_tree().current_scene
@@ -159,15 +160,9 @@ func _process(delta: float) -> void:
 		if remaining<=0:extinguish_torch()
 		elif torch_fuel>0 or Inventory.has("Burning Torch",1):torch_fuel=remaining
 	if str(player.get("active_item"))=="Burning Torch" and torch_fuel<=0:extinguish_torch()
+	sync_torch_effects()
 	var lit := is_held_lit() and Stats.health > 0
-	if lit and not _crackle.playing: _crackle.play()
-	elif not lit and _crackle.playing: _crackle.stop()
-	_torch_light.visible = lit and not construction
 	var fire_pose: bool=player.get_node("SurvivalAction").kind in ["ignite_fire","snuff_fire","torch_light","torch_off","torch_mount"]
-	_third_torch.visible = equipped and int(player.get("cam_mode")) == 1 and not construction and not fire_pose
-	_third_torch.call("set_burning",lit)
-	var held := player.get_node_or_null("CamPivot/SpringArm3D/Camera3D/HandPivot/Fist/HandItem/Torch")
-	if held != null: held.call("set_burning",lit)
 	_preview_tick+=delta
 	if _preview_tick>=.1:
 		_preview_tick=0.0;_update_mount_preview(equipped and not construction and not fire_pose)
@@ -190,7 +185,7 @@ func _process(delta: float) -> void:
 		extinguish_torch()
 		player.call("_hud_toast","TORCH WET · RELIGHT AT A SHELTERED CAMPFIRE")
 	stamina = clampf(stamina + (-5.0 if swimming and moving > 1.8 else (-3.0 if moving > 4.0 else 7.0)) * step, 0, 100)
-	wetness = clampf(wetness + (12.0 if swimming else (3.0 if exposed else (-3.0 if lit else -0.8))) * step, 0, 100)
+	wetness = clampf(wetness + (12.0 if swimming else (3.0*clampf(float(rain.get("_intensity")),0.0,1.0) if exposed else (-3.0 if lit else -0.8))) * step, 0, 100)
 	var camera := player.get_node("CamPivot/SpringArm3D/Camera3D") as Camera3D
 	var ocean := scene.get_node_or_null("Ocean")
 	var underwater := ocean != null and camera.global_position.y < float(ocean.call("get_height", camera.global_position)) - 0.30
@@ -238,6 +233,39 @@ func restore_state(data: Dictionary) -> void:
 func is_held_lit() -> bool:
 	return torch_fuel>0 and (str(player.active_item)=="Burning Torch" or (legacy_torch and str(player.active_item)=="Torch"))
 
+func sync_torch_effects() -> void:
+	var lit := is_held_lit() and Stats.health > 0
+	var construction: bool = bool(player.get("build_mode")) or is_instance_valid(player.get("_editing"))
+	var action := player.get_node_or_null("SurvivalAction")
+	var fire_pose: bool = action != null and action.kind in ["ignite_fire","snuff_fire","torch_light","torch_off","torch_mount"]
+	var first: bool = int(player.get("cam_mode")) == 0
+	var source: Node3D = null
+	if is_instance_valid(_third_torch):
+		_third_torch.visible = str(player.active_item) in ["Torch","Burning Torch"] and not first and not construction and not fire_pose
+		_third_torch.call("set_burning",lit)
+		if not first: source = _third_torch
+	# Item swaps defer freeing the old Torch. Godot may rename its replacement,
+	# so update the live model by script instead of looking up a fixed node name.
+	var hand := player.get("_hand_item") as Node3D
+	if is_instance_valid(hand):
+		for held in hand.get_children():
+			if held.get_script() == TORCH_VISUAL and not held.is_queued_for_deletion():
+				held.call("set_burning",lit)
+				if first: source = held
+	if action != null:
+		for prop in [action.get("_torch_first"),action.get("_torch_third")]:
+			if is_instance_valid(prop): prop.call("set_burning",lit)
+		var action_torch := action.get("_torch_first" if first else "_torch_third") as Node3D
+		if fire_pose and is_instance_valid(action_torch): source = action_torch
+	if is_instance_valid(_torch_light):
+		_torch_light.visible = lit and not construction
+		_torch_light.light_energy = TORCH_VISUAL.light_energy_at(Time.get_ticks_msec() / 1000.0)
+		if is_instance_valid(source): _torch_light.global_position = source.to_global(Vector3(0,.46,0))
+	if is_instance_valid(_crackle):
+		if is_instance_valid(_torch_light): _crackle.global_position = _torch_light.global_position
+		if lit and not _crackle.playing: _crackle.play()
+		elif not lit and _crackle.playing: _crackle.stop()
+
 func held_torch_caption() -> String:
 	var selected:=str(player.active_item)
 	if selected not in ["Torch","Burning Torch"] or not Inventory.has(selected,1):return ""
@@ -280,6 +308,7 @@ func extinguish_torch() -> void:
 		for entry in box.contents:
 			if entry.get("item","")=="Burning Torch":entry.item="Torch";changed=true
 		if changed:box.contents_changed.emit()
+	sync_torch_effects()
 
 func _update_mount_preview(lit: bool) -> void:
 	_mount_preview.hide()

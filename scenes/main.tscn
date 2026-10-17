@@ -353,10 +353,11 @@ height_rings = 11
 
 [node name="OceanBirds" type="Node3D" parent="."]
 script = ExtResource("35_island_birds")
-bird_count = 2
+bird_count = 8
 orbit_radius = 24.0
 flight_height = 13.0
 follow_raft = true
+migrating = true
 
 [node name="IslandBirds" type="Node3D" parent="Island"]
 script = ExtResource("35_island_birds")
@@ -441,7 +442,7 @@ pickup_seed = 88402
 [node name="SharkSpawner" type="Node3D" parent="."]
 script = ExtResource("32_sharks")
 shark_count = 2
-patrol_radius = 110.0
+patrol_radius = 52.0
 
 [node name="Sky3D" type="WorldEnvironment" parent="." unique_id=9361917]
 environment = SubResource("Environment_kq58d")

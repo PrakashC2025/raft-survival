@@ -1,9 +1,10 @@
 param(
     [string]$GodotPath = 'C:\Program Files\Godot\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64_console.exe',
-    [ValidateSet('fishing_drinking_smoke.gd','swim_jump_smoke.gd','free_assets_smoke.gd','mixamo_character_smoke.gd','jump_smoke.gd','render_stability_smoke.gd','single_coconut_smoke.gd','torch_distance_smoke.gd','craft_ocean_hitch_smoke.gd','held_tools_garden_smoke.gd','ocean_surface_preview.gd','underwater_reference_smoke.gd','garden_cycle_smoke.gd','salvage_power_net_smoke.gd','ocean_menu_preview.gd','equipment_repair_smoke.gd','portable_electronics_smoke.gd','current_wind_build_smoke.gd','meals_night_supplies_smoke.gd','camp_fire_smoke.gd','survival_services_smoke.gd','loading_performance_smoke.gd','edit_tree_smoke.gd','stairs_sky_smoke.gd','food_action_smoke.gd','cinematic_native_preview.gd','realism_polish_smoke.gd','tumbler_smoke.gd','survival_tools_biomes_smoke.gd','night_sky_smoke.gd','underwater_expansion_smoke.gd','mobile_bag_rain_smoke.gd')][string]$TestScript = 'survival_services_smoke.gd',
-    [ValidateRange(60,300)][int]$TimeoutSeconds = 120,
+    [ValidateSet('ocean_salvage_smoke.gd','weather_render_smoke.gd','storm_predator_smoke.gd','trip_skip_smoke.gd','item_clarity_smoke.gd','hunting_cargo_smoke.gd','boat_recovery_audio_smoke.gd','hunting_boat_smoke.gd','survival_repairs_smoke.gd','fishing_drinking_smoke.gd','swim_jump_smoke.gd','free_assets_smoke.gd','mixamo_character_smoke.gd','jump_smoke.gd','render_stability_smoke.gd','single_coconut_smoke.gd','torch_distance_smoke.gd','craft_ocean_hitch_smoke.gd','held_tools_garden_smoke.gd','ocean_surface_preview.gd','underwater_reference_smoke.gd','garden_cycle_smoke.gd','salvage_power_net_smoke.gd','ocean_menu_preview.gd','equipment_repair_smoke.gd','portable_electronics_smoke.gd','current_wind_build_smoke.gd','meals_night_supplies_smoke.gd','camp_fire_smoke.gd','survival_services_smoke.gd','loading_performance_smoke.gd','edit_tree_smoke.gd','stairs_sky_smoke.gd','food_action_smoke.gd','cinematic_native_preview.gd','realism_polish_smoke.gd','tumbler_smoke.gd','survival_tools_biomes_smoke.gd','night_sky_smoke.gd','underwater_expansion_smoke.gd','mobile_bag_rain_smoke.gd')][string]$TestScript = 'survival_services_smoke.gd',
+    [ValidateRange(60,600)][int]$TimeoutSeconds = 120,
     [switch]$SilentAudio,
     [switch]$SurfaceClearance,
+    [switch]$HudLayoutOnly,
     [ValidateSet('mobile','gl_compatibility')][string]$Renderer = 'mobile'
 )
 $ErrorActionPreference = 'Stop'
@@ -14,6 +15,15 @@ $stage = [regex]::Match(($setupOutput -join "`n"), 'Test project: (.+)').Groups[
 if (-not $stage) { throw 'Preview isolation setup did not return a project.' }
 $logPrefix = if ($TestScript -eq 'craft_ocean_hitch_smoke.gd') { 'craft-hitch' } elseif ($TestScript -eq 'held_tools_garden_smoke.gd') { 'held-tools-garden' } elseif ($TestScript -eq 'ocean_surface_preview.gd') { 'ocean-blue-' + $Renderer } elseif ($TestScript -eq 'underwater_reference_smoke.gd') { 'reef-reference-' + $Renderer } elseif ($TestScript -eq 'garden_cycle_smoke.gd') { 'garden-cycle' } elseif ($TestScript -eq 'salvage_power_net_smoke.gd') { 'salvage-power-net' } elseif ($TestScript -eq 'ocean_menu_preview.gd') { 'ocean-menu' } elseif ($TestScript -eq 'current_wind_build_smoke.gd') { 'current-wind-build' } elseif ($TestScript -eq 'meals_night_supplies_smoke.gd') { 'meals-night-supplies' } elseif ($TestScript -eq 'camp_fire_smoke.gd') { 'camp-fire' } elseif ($TestScript -eq 'mobile_bag_rain_smoke.gd') { 'mobile-bag-rain' } elseif ($TestScript -eq 'underwater_expansion_smoke.gd') { 'underwater' } elseif ($TestScript -eq 'night_sky_smoke.gd') { 'night-sky' } elseif ($TestScript -eq 'survival_tools_biomes_smoke.gd') { 'tools-biomes' } elseif ($TestScript -eq 'tumbler_smoke.gd') { 'tumbler' } elseif ($TestScript -eq 'realism_polish_smoke.gd') { 'realism' } elseif ($TestScript -eq 'food_action_smoke.gd') { 'food-action' } elseif ($TestScript -eq 'cinematic_native_preview.gd') { 'cinematic' } elseif ($TestScript -eq 'loading_performance_smoke.gd') { 'loading' } elseif ($TestScript -eq 'edit_tree_smoke.gd') { 'edit-tree' } elseif ($TestScript -eq 'stairs_sky_smoke.gd') { 'stairs-sky' } else { 'services' }
 if ($TestScript -eq 'torch_distance_smoke.gd') { $logPrefix = 'torch-distance' }
+if ($TestScript -eq 'survival_repairs_smoke.gd') { $logPrefix = 'survival-repairs' }
+if ($TestScript -eq 'hunting_boat_smoke.gd') { $logPrefix = 'hunting-boat' }
+if ($TestScript -eq 'boat_recovery_audio_smoke.gd') { $logPrefix = 'boat-update' }
+if ($TestScript -eq 'hunting_cargo_smoke.gd') { $logPrefix = 'hunting-cargo' }
+if ($TestScript -eq 'item_clarity_smoke.gd') { $logPrefix = 'item-clarity' }
+if ($TestScript -eq 'trip_skip_smoke.gd') { $logPrefix = 'trip-skip' }
+if ($TestScript -eq 'storm_predator_smoke.gd') { $logPrefix = 'storm-predator' }
+if ($TestScript -eq 'weather_render_smoke.gd') { $logPrefix = 'weather-render' }
+if ($TestScript -eq 'ocean_salvage_smoke.gd') { $logPrefix = 'ocean-salvage' }
 if ($TestScript -eq 'single_coconut_smoke.gd') { $logPrefix = 'single-coconut' }
 if ($TestScript -eq 'render_stability_smoke.gd') { $logPrefix = 'render-stability' }
 if ($TestScript -eq 'jump_smoke.gd') { $logPrefix = 'jump' }
@@ -26,6 +36,10 @@ $errorLog = Join-Path $projectRoot "build/$logPrefix-native-final-errors.log"
 $arguments = @('--path', ('"' + $stage + '"'), '--script', ('"' + (Join-Path $projectRoot ('tests/' + $TestScript)) + '"'), '--rendering-method', $Renderer, '--rendering-driver', $(if ($Renderer -eq 'gl_compatibility') { 'opengl3' } else { 'd3d12' }))
 if ($SilentAudio) { $arguments += @('--audio-driver','Dummy') }
 $arguments += @('--', '--preview', '--mobile-effects', '--profile-loading')
+if ($HudLayoutOnly) {
+    if ($TestScript -ne 'mobile_bag_rain_smoke.gd') { throw 'HudLayoutOnly requires the mobile bag/HUD fixture.' }
+    $arguments += '--hud-layout-only'
+}
 if ($SurfaceClearance) {
     if ($TestScript -ne 'underwater_reference_smoke.gd') { throw 'SurfaceClearance requires the underwater reference fixture.' }
     $arguments += '--clearance-preview'

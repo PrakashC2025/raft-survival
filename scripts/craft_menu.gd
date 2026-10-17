@@ -3,6 +3,7 @@ extends Control
 signal build_requested(item: String, quantity: int)
 signal closed
 const UI := preload("res://scripts/ocean_ui.gd")
+const GUIDE := preload("res://scripts/item_guide.gd")
 class ItemPicture extends Control:
 	var item := ""
 	func _draw() -> void:
@@ -10,7 +11,6 @@ class ItemPicture extends Control:
 var cards: Dictionary={}
 var selected := ""
 var quantity := 1
-var _labels: Dictionary={}
 var _sheet: PanelContainer
 var _columns: HBoxContainer
 var _list: ScrollContainer
@@ -24,9 +24,13 @@ var _material_labels: Dictionary={}
 var _quantity_label: Label
 var _status: Label
 var _detail_item := ""
+var _search: LineEdit
+var _category: OptionButton
+var _ready_only: Button
+var _results: Label
+var _card_status: Dictionary={}
 
 func setup(order: Array, labels: Dictionary) -> void:
-	_labels=labels
 	process_mode=Node.PROCESS_MODE_ALWAYS
 	theme=UI.theme()
 	_swipe=preload("res://scripts/menu_swipe.gd").new();add_child(_swipe)
@@ -41,15 +45,24 @@ func setup(order: Array, labels: Dictionary) -> void:
 	var heading:=_label("CRAFT",25);heading.size_flags_horizontal=Control.SIZE_EXPAND_FILL;header.add_child(heading)
 	var close:=Button.new();close.text="Close";close.custom_minimum_size=Vector2(76,48);header.add_child(close);close.pressed.connect(func():
 		if _swipe.tap_allowed():closed.emit())
-	column.add_child(_label("Make tools for your bag. Structures are in Build.",15,UI.MUTED))
+	column.add_child(_label("Find tools and camp projects. Select an item to see what it does.",15,UI.MUTED))
+	var filters:=HBoxContainer.new();filters.add_theme_constant_override("separation",8);column.add_child(filters)
+	_search=LineEdit.new();_search.name="RecipeSearch";_search.placeholder_text="Find an item...";_search.clear_button_enabled=true
+	_search.custom_minimum_size=Vector2(150,48);_search.size_flags_horizontal=Control.SIZE_EXPAND_FILL;filters.add_child(_search)
+	_search.text_changed.connect(func(_value: String):_refresh_cards())
+	_category=OptionButton.new();_category.custom_minimum_size=Vector2(145,48);filters.add_child(_category)
+	for group in ["All items","Tools","Survival","Camp & travel","Garden","Materials"]:_category.add_item(group)
+	_category.item_selected.connect(func(_index: int):_refresh_cards())
+	_ready_only=Button.new();_ready_only.text="Ready to make";_ready_only.toggle_mode=true;_ready_only.custom_minimum_size=Vector2(148,48);filters.add_child(_ready_only)
+	_ready_only.toggled.connect(func(_on: bool):_refresh_cards())
 	_columns=HBoxContainer.new();_columns.add_theme_constant_override("separation",16);_columns.size_flags_vertical=Control.SIZE_EXPAND_FILL;column.add_child(_columns)
 	_list=ScrollContainer.new();_list.name="RecipeScroll";_list.horizontal_scroll_mode=ScrollContainer.SCROLL_MODE_DISABLED
 	_list.size_flags_horizontal=Control.SIZE_EXPAND_FILL;_list.size_flags_stretch_ratio=1.0;_list.follow_focus=true;_list.scroll_deadzone=10;_columns.add_child(_list)
 	var recipes:=VBoxContainer.new();recipes.size_flags_horizontal=Control.SIZE_EXPAND_FILL;recipes.add_theme_constant_override("separation",8);_list.add_child(recipes)
-	recipes.add_child(_label("PRODUCTS  ·  Swipe or scroll",14,UI.MUTED))
+	_results=_label("PRODUCTS  ·  Swipe or scroll",14,UI.MUTED);recipes.add_child(_results)
 	for entry in order:
 		var item:=str(entry)
-		if not Inventory.ITEM_RECIPES.has(item):continue
+		if not Inventory.ITEM_RECIPES.has(item) and not Inventory.RECIPES.has(item):continue
 		var card:=Button.new();card.name="Recipe_"+item;card.custom_minimum_size=Vector2(0,80);card.tooltip_text=str(labels.get(item,item))
 		card.action_mode=BaseButton.ACTION_MODE_BUTTON_RELEASE
 		card.mouse_filter=Control.MOUSE_FILTER_PASS
@@ -57,8 +70,8 @@ func setup(order: Array, labels: Dictionary) -> void:
 		row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);row.offset_left=10;row.offset_right=-12;row.offset_top=8;row.offset_bottom=-8
 		row.add_child(_picture(item,60))
 		var text:=VBoxContainer.new();text.mouse_filter=Control.MOUSE_FILTER_IGNORE;text.size_flags_horizontal=Control.SIZE_EXPAND_FILL;row.add_child(text)
-		text.add_child(_label(str(labels.get(item,item)),18))
-		text.add_child(_label("Make and keep in your bag",13,UI.MUTED))
+		text.add_child(_label(GUIDE.label(item),18))
+		var availability:=_label("",13,UI.MUTED);text.add_child(availability);_card_status[item]=availability
 		recipes.add_child(card);cards[item]=card;card.pressed.connect(func():
 			if _swipe.tap_allowed():select_item(item))
 	_detail=VBoxContainer.new();_detail.size_flags_horizontal=Control.SIZE_EXPAND_FILL;_detail.size_flags_stretch_ratio=1.15;_detail.add_theme_constant_override("separation",12);_columns.add_child(_detail)
@@ -76,6 +89,33 @@ func setup(order: Array, labels: Dictionary) -> void:
 	Inventory.changed.connect(_refresh_detail)
 	resized.connect(_fit)
 	_refresh_detail();_fit();_fit.call_deferred()
+
+func _refresh_cards() -> void:
+	if _search==null:return
+	var query:=_search.text.strip_edges().to_lower()
+	var group:=_category.get_item_text(_category.selected)
+	var shown:=0
+	for entry in cards:
+		var item:=str(entry)
+		var unlocked: bool=Inventory.recipe_unlocked(item)
+		var costs: Dictionary=Inventory.ITEM_RECIPES.get(item,Inventory.RECIPES.get(item,{}))
+		var craft_ready: bool=Inventory.can_craft_item(item) if Inventory.ITEM_RECIPES.has(item) else Inventory.can_afford(item)
+		var status: Label=_card_status[item]
+		var missing:=PackedStringArray()
+		for ingredient in costs:
+			var shortfall:=int(costs[ingredient])-Inventory.total(ingredient)
+			if shortfall>0:missing.append("%d %s"%[shortfall,GUIDE.label(str(ingredient))])
+		if not unlocked:status.text="Unlock through your camp mission"
+		elif craft_ready:status.text="READY · Owned %d"%Inventory.total(item)
+		elif not missing.is_empty():status.text="Need "+", ".join(missing)
+		else:status.text="Free a bag slot to make this"
+		status.add_theme_color_override("font_color",UI.AQUA if craft_ready else UI.MUTED)
+		var searchable:=GUIDE.label(item)+" "+item+" "+GUIDE.purpose(item)+" "+" ".join(costs.keys())
+		var matches:=query.is_empty() or searchable.to_lower().contains(query)
+		var card: Button=cards[item]
+		card.visible=matches and (group=="All items" or GUIDE.category(item)==group) and (not _ready_only.button_pressed or craft_ready)
+		if card.visible:shown+=1
+	_results.text="%d ITEMS · Swipe or scroll"%shown if shown>0 else "No matches. Clear search or change filters."
 
 func _label(value: String, font_size: int=18, color: Color=UI.TEXT) -> Label:
 	var label:=Label.new();label.text=value;label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
@@ -107,6 +147,7 @@ func select_item(item: String) -> void:
 
 func _refresh_detail() -> void:
 	if _contents==null:return
+	_refresh_cards()
 	if _detail_item==selected and not selected.is_empty():_refresh_materials();return
 	_detail_item=selected;_material_labels.clear();_quantity_label=null
 	for child in _contents.get_children():_contents.remove_child(child);child.queue_free()
@@ -119,11 +160,11 @@ func _refresh_detail() -> void:
 		_contents.add_child(_label("MAKE YOUR NEXT SURVIVAL TOOL",23))
 		_contents.add_child(_label("Scroll through the products, then select one to see its ingredients and purpose.",18,UI.MUTED))
 		return
-	_contents.add_child(_label(str(_labels.get(selected,selected)),25))
+	_contents.add_child(_label(GUIDE.label(selected),25))
 	_contents.add_child(_picture(selected,144))
 	var hints: Dictionary={"WindGenerator":"Outdoor wind charges its battery. Walls and ceilings block its rotor. Equip Wire to connect nearby lights, pumps or radios.","Wire":"One Wire connects two metres of cable. Aim at a generator, use, then aim at the equipment and use again.","FishingNet":"Hang off a clear raft edge over the sea. Small fish collect in the weighted net. Aim at it to collect your catch.","Barrel":"Wooden staves, metal bands and rope. Used to build a rain collector.","Torch":"Light from a campfire or lit wall torch. Mount one, keep the next stick lit. Burns until dawn.","PlanterPot":"Root crops. Place on a foundation or roof.","TreePot":"Trees. Place on a foundation or roof."}
 	hints.SeedDryingTray="Spread wet fruit seeds on this wooden tray. Dry for two minutes, shelter from rain, then collect for your garden."
-	_contents.add_child(_label(str(hints.get(selected,"Build the selected quantity and keep it in your bag.")),16,UI.MUTED))
+	_contents.add_child(_label(str(hints.get(selected,GUIDE.purpose(selected))),16,UI.MUTED))
 	if Inventory.ITEM_RECIPES.has(selected):
 		var amounts:=HBoxContainer.new();amounts.add_theme_constant_override("separation",8);_contents.add_child(amounts)
 		for step in [-5,-1,0,1,5]:
@@ -134,7 +175,7 @@ func _refresh_detail() -> void:
 				button.pressed.connect(func():
 					if _swipe.tap_allowed():quantity=clampi(quantity+step,1,99);_refresh_materials())
 	_contents.add_child(_label("MATERIALS                 HAVE / NEED",14,UI.AQUA))
-	var costs: Dictionary=Inventory.ITEM_RECIPES.get(selected,{})
+	var costs: Dictionary=Inventory.ITEM_RECIPES.get(selected,Inventory.RECIPES.get(selected,{}))
 	for item in costs:
 		var row:=HBoxContainer.new();row.custom_minimum_size.y=38;_contents.add_child(row)
 		row.add_child(_picture(str(item),32));row.add_child(_label(str(item),17))
@@ -145,14 +186,17 @@ func _refresh_detail() -> void:
 func _refresh_materials() -> void:
 	if selected.is_empty():return
 	if _quantity_label!=null:_quantity_label.text="QUANTITY  %d"%quantity
-	var costs: Dictionary=Inventory.ITEM_RECIPES.get(selected,{})
+	var costs: Dictionary=Inventory.ITEM_RECIPES.get(selected,Inventory.RECIPES.get(selected,{}))
 	for item in _material_labels:
 		var have:=Inventory.total(item);var need:=int(costs[item])*quantity
 		var count:=_material_labels[item] as Label
 		count.text="%d / %d"%[have,need]
 		count.add_theme_color_override("font_color",UI.AQUA if have>=need else Color("ffad88"))
-	var can_build: bool=Inventory.can_craft_item(selected,quantity)
-	_build.text="Build ×%d"%quantity if quantity>1 else "Build"
+	var can_build: bool=Inventory.can_craft_item(selected,quantity) if Inventory.ITEM_RECIPES.has(selected) else Inventory.can_afford(selected)
+	if Inventory.RECIPES.has(selected):
+		_build.text="Place"
+	else:
+		_build.text="Make ×%d"%quantity if quantity>1 else "Make item"
 	_build.disabled=not can_build
 	_status.visible=not can_build
-	_status.text="Complete your current mission to unlock this." if not Inventory.recipe_unlocked(selected) else "Gather the missing materials or free space in your bag."
+	_status.text="Complete your current mission to unlock this." if not Inventory.recipe_unlocked(selected) else ("Gather the missing materials to place this." if Inventory.RECIPES.has(selected) else "Gather the missing materials or free space in your bag.")

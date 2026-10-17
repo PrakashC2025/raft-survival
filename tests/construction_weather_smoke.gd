@@ -136,7 +136,7 @@ func _run() -> void:
 	var ocean:=get_first_node_in_group("ocean")
 	check(ocean.mesh is ArrayMesh and ocean.get_node_or_null("FarWater")!=null,"Dense near-water geometry retains an unbroken far horizon")
 	ocean.call("_update_deck_displacement",1.0)
-	var material: ShaderMaterial=ocean.get_active_material(0)
+	var _material: ShaderMaterial=ocean.get_active_material(0)
 	var mask: Image=ocean._deck_coverage
 	check(mask.get_pixel(66,66).r>0.5 and mask.get_pixel(74,74).r<0.5,"Water displacement follows real foundation cells and leaves open ocean clear")
 	var low:=INF; var high:=-INF

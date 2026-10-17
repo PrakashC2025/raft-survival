@@ -121,7 +121,7 @@ func _run() -> void:
 	raft.get_node("ConstructionBatch").call("refresh")
 	check(raft.get_node("ConstructionBatch").get_child_count() <= 5,"63 foundations share at most five timber/rope/hardware draws")
 	var f1: Node3D = player._grid_occupancy[Vector2i(1,1)]
-	var f2: Node3D = player._grid_occupancy[Vector2i(2,1)]
+	var _f2: Node3D = player._grid_occupancy[Vector2i(2,1)]
 	for position in [Vector3(2,1.4,1),Vector3(4,1.4,1),Vector3(2,1.4,3),Vector3(4,1.4,3)]: fixture("Wall",position)
 	fixture("Wall",Vector3(1,1.4,2),PI/2)
 	var window := fixture("Window",Vector3(5,1.4,2),PI/2)

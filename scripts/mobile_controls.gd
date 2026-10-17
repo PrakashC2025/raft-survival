@@ -62,6 +62,8 @@ var _btn_rotate: Button
 var _btn_next: Button
 var _btn_remove: Button
 var _btn_help: Button
+var _btn_cam: Button
+var _btn_leave: Button
 var _all_buttons: Array[Button] = []
 
 # --- in-game help panel (the "?" button) ---
@@ -83,6 +85,7 @@ var _use_caption := ""
 var _moving := false
 var _rope_equipped := false
 var _bow_equipped := false
+var _boating:=false
 var _can_build := false
 var _can_climb := false     # swimming next to the raft — CLIMB button available
 
@@ -247,6 +250,12 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventScreenDrag:
 		if _button_touches.has(event.index):
 			var held: Button = _button_touches[event.index]
+			var actor:=_get_player()
+			if held==_btn_use and held.is_visible_in_tree() and actor!=null and actor.get("active_item") in ["Bow","Spear"]:
+				# A held SHOOT finger can aim by dragging, then release to fire.
+				_update_look(event.relative)
+				get_viewport().set_input_as_handled()
+				return
 			if not held.is_visible_in_tree() or not held.get_global_rect().grow(18.0).has_point(event.position):
 				_release_touch_button(event.index, false)
 			get_viewport().set_input_as_handled()
@@ -375,7 +384,7 @@ func _update_look(rel: Vector2) -> void:
 
 
 func _joy_radius() -> float:
-	return clampf(size.y * 0.16, 70.0, 150.0)
+	return clampf(size.y * 0.12, 62.0, 112.0)
 
 
 # ============================================================
@@ -427,10 +436,12 @@ func _build_buttons() -> void:
 	_btn_next = _make_button("next")
 	_btn_remove = _make_button("trash")
 	_btn_help = _make_button("help")
+	_btn_cam = _make_button("cam")
+	_btn_leave = _make_button("back")
 
 	_all_buttons = [_btn_jump, _btn_rope, _btn_recall, _btn_run, _btn_use, _btn_aim, _btn_dive,
 			_btn_climb, _btn_edit, _btn_build, _btn_place, _btn_rotate, _btn_next,
-			_btn_remove, _btn_help]
+			_btn_remove, _btn_help, _btn_cam, _btn_leave]
 
 	# Hold-style buttons: press the action on touch-down, release on touch-up.
 	_btn_jump.button_down.connect(_press_action.bind("jump"))
@@ -462,6 +473,10 @@ func _build_buttons() -> void:
 	_btn_edit.pressed.connect(_on_edit_pressed)
 	_btn_climb.pressed.connect(_on_climb_pressed)
 	_btn_help.pressed.connect(_toggle_help)
+	_btn_cam.pressed.connect(_on_cam_pressed)
+	_btn_leave.pressed.connect(func():
+		var actor:=_get_player()
+		if actor!=null and not _input_blocked() and is_instance_valid(actor.boat_vehicle):actor.boat_vehicle.disembark())
 
 	for b in _all_buttons:
 		add_child(b)
@@ -471,18 +486,24 @@ func _build_buttons() -> void:
 	_sync_mode()
 
 
+func _on_cam_pressed() -> void:
+	var p := _get_player()
+	if p != null and p.has_method("cycle_camera_mode"):
+		p.call("cycle_camera_mode")
+
+
 func _queue_redraw() -> void:
 	queue_redraw()
 
 func _on_cast_down() -> void:
 	var p := _get_player()
-	if visible and not _input_blocked() and p != null and p.get("rope_gun_selected") == true:
+	if visible and not _input_blocked() and p != null and p.get("rope_gun_selected") == true and p.get_node("RopeSystem").can_cast_from_raft():
 		_press_action("rope_throw")
 
 func _on_use_down() -> void:
 	_press_action("interact")
 	var p := _get_player()
-	if p != null and p.get("active_item") == "Bow" and visible and not _input_blocked():
+	if p != null and _bow_equipped and p.get("active_item") in ["Bow","Spear"] and not is_instance_valid(p.get("boat_vehicle")) and visible and not _input_blocked():
 		# Start the dedicated mobile draw at touch-down, even between physics
 		# ticks. begin_draw ignores the subsequent keyboard/action poll.
 		p.get_node("SurvivalEquipment").call("begin_draw")
@@ -556,10 +577,14 @@ func _sync_mode() -> void:
 	var editing: bool = p != null and p.get("_editing") != null
 	var building: bool = p != null and p.get("build_mode") == true
 	var swimming: bool = p != null and p.get("is_swimming") == true
+	var boating: bool=p!=null and is_instance_valid(p.get("boat_vehicle"))
+	var carrying: bool=p!=null and p.has_node("HuntingCargo") and is_instance_valid(p.get_node("HuntingCargo").held)
+	var cargo_busy: bool=p!=null and ((p.has_node("HuntingCargo") and p.get_node("HuntingCargo").busy()) or (p.has_node("OceanSalvage") and p.get_node("OceanSalvage").busy()))
 	var rope: Node = null
 	if p != null:
 		rope = p.get_node_or_null("RopeSystem")
 	var rope_busy: bool = rope != null and rope.has_method("is_active") and bool(rope.call("is_active"))
+	var rope_can_recall: bool = rope != null and rope.has_method("is_active") and bool(rope.call("is_active")) and int(rope.get("_state")) < 4
 
 	var mode := "edit" if editing else ("build" if building else "normal")
 	var can_edit := false
@@ -570,27 +595,30 @@ func _sync_mode() -> void:
 	var can_interact := false
 	if mode == "normal" and p != null and p.has_method("can_interact_now"):
 		can_interact = bool(p.call("can_interact_now"))
+	if cargo_busy:can_interact=false
 	var can_climb := false
 	if mode == "normal" and swimming and p != null and p.has_method("can_climb_out"):
 		can_climb = bool(p.call("can_climb_out"))
 
 	var use_caption := str(p.call("interaction_caption")) if p != null and p.has_method("interaction_caption") else "USE"
 	var moving := _move_id != -1
-	var rope_equipped: bool = p != null and p.get("rope_gun_selected") == true
-	var bow_equipped: bool = p != null and p.get("active_item") == "Bow"
+	var rope_equipped: bool = p != null and p.get("rope_gun_selected") == true and not boating and not carrying and not cargo_busy and rope != null and rope.can_cast_from_raft()
+	var bow_equipped: bool = p != null and p.get("active_item") in ["Bow","Spear"] and not boating and not carrying and not cargo_busy and use_caption not in ["CARRY / CUT","RECOVER CARGO"]
 	var can_build: bool = mode != "normal"
 	if p != null:
 		var raft := get_tree().get_first_node_in_group("raft") as Node3D
 		can_build = can_build or (raft != null and (p as Node3D).global_position.distance_to(raft.global_position) <= 9.0)
 		can_build = can_build or (can_edit and float(p.get("aim_distance")) <= 5.0)
+	if boating or carrying or cargo_busy:can_build=false;can_climb=false;can_edit=false
 	if mode == _mode and rope_busy == _rope_busy and swimming == _swimming \
 			and can_edit == _can_edit and can_interact == _can_interact and can_climb == _can_climb \
-			and moving == _moving and rope_equipped == _rope_equipped and bow_equipped == _bow_equipped and can_build == _can_build and use_caption == _use_caption:
+			and moving == _moving and rope_equipped == _rope_equipped and bow_equipped == _bow_equipped and can_build == _can_build and use_caption == _use_caption and boating==_boating:
 		return
 	_use_caption = use_caption
 	_moving = moving
 	_rope_equipped = rope_equipped
 	_bow_equipped = bow_equipped
+	_boating=boating
 	_can_build = can_build
 	_mode = mode
 	_rope_busy = rope_busy
@@ -600,8 +628,9 @@ func _sync_mode() -> void:
 	_can_climb = can_climb
 
 	var normal: bool = mode == "normal"
-	_btn_jump.visible = normal
-	_btn_run.visible = normal and moving
+	_btn_jump.visible = normal and not boating
+	_btn_leave.visible = normal and boating and use_caption!="LEAVE BOAT"
+	_btn_run.visible = normal and moving and not boating
 	# The HAND button only appears when the center crosshair is actually over
 	# an interactable (debris / door / usable piece) — same logic as the E key.
 	_btn_use.visible = normal and can_interact and not can_climb and use_caption not in ["GROWING","READY",""]
@@ -611,15 +640,16 @@ func _sync_mode() -> void:
 	# (same test as the E key) — never on land, never in open water.
 	_btn_climb.visible = normal and can_climb
 	_btn_rope.visible = normal and rope_equipped and not rope_busy
-	_btn_recall.visible = normal and rope_busy
+	_btn_recall.visible = normal and rope_can_recall
 	_btn_edit.visible = normal and can_edit
 	_btn_place.visible = mode != "normal"
 	_btn_rotate.visible = mode != "normal"
 	_btn_next.visible = mode == "build"
 	_btn_remove.visible = mode == "edit"
-	# Help is available in every mode.
+	# Help and camera view mode are available in every mode.
 	_btn_build.visible = can_build
 	_btn_help.visible = true
+	_btn_cam.visible = true
 	for index in _button_touches.keys():
 		var held: Button = _button_touches[index]
 		if not held.visible:
@@ -643,52 +673,62 @@ func _sync_mode() -> void:
 func _layout() -> void:
 	var vp := size
 	if vp.x <= 0.0 or vp.y <= 0.0: return
-	var scale_factor := clampf(vp.y / 720.0, 0.72, 1.35)
-	var margin := 24.0 * scale_factor
-	var gap := 16.0 * scale_factor
-	var primary := 112.0 * scale_factor
-	var secondary := 88.0 * scale_factor
-	var utility := 76.0 * scale_factor
+	var scale_factor := clampf(vp.y / 720.0, 0.80, 1.35)
+	var margin := 16.0 * scale_factor
+	var gap := 12.0 * scale_factor
+	var primary := 92.0 * scale_factor
+	var secondary := 76.0 * scale_factor
+	var utility := 60.0 * scale_factor
 	var right := vp.x - margin
 	var bottom := vp.y - margin
-	var action_top := bottom - primary - secondary - gap * 3.0
+	# Reserve a separate right-thumb row for RUN / FAST SWIM above JUMP.
+	var action_top := bottom - primary - secondary - utility - gap * 2.0
 	var action_x := right - primary
 	var inner_x := action_x - gap - primary
 	var jr := _joy_radius()
 	_dock = Vector2(margin + jr, bottom - jr)
-	# Main thumb actions sit above the quick slots, with a consistent jump
-	# position. Secondary actions have independent, non-overlapping targets.
-	_btn_jump.position = Vector2(right-secondary,bottom-secondary)
-	_btn_jump.size = Vector2.ONE*secondary
-	_btn_rope.position = Vector2(action_x,action_top)
-	_btn_rope.size = Vector2.ONE*primary
+	# Main thumb actions sit in an ergonomic thumb-arc cluster.
+	# Jump anchors the lower-right; Dive is adjacent when swimming;
+	# Rope (CAST/RETURN) anchors upper-right; Primary Interaction (USE/COLLECT/CLIMB)
+	# sits right beside Cast in the inner thumb slot so players can interact
+	# smoothly without taking their left thumb off the movement joystick.
+	_btn_jump.position = Vector2(right - secondary, bottom - secondary)
+	_btn_jump.size = Vector2.ONE * secondary
+	_btn_leave.position=_btn_jump.position;_btn_leave.size=_btn_jump.size
+	_btn_rope.position = Vector2(action_x, action_top)
+	_btn_rope.size = Vector2.ONE * primary
 	_btn_place.position = _btn_rope.position
 	_btn_place.size = _btn_rope.size
-	_btn_use.position = Vector2(margin+utility+gap,minf(vp.y*0.42,action_top))
-	_btn_use.size = Vector2.ONE*(primary+12.0*scale_factor)
+	_btn_use.position = Vector2(inner_x, action_top)
+	_btn_use.size = Vector2.ONE * primary
 	_btn_climb.position = _btn_use.position
 	_btn_climb.size = _btn_use.size
+	# CAST and RETURN are mutually exclusive states of the same action location.
 	_btn_recall.position = _btn_rope.position
 	_btn_recall.size = _btn_rope.size
-	_btn_aim.position = Vector2(inner_x,action_top-gap-secondary)
-	_btn_aim.size = Vector2.ONE*secondary
-	_btn_edit.position = Vector2(inner_x-gap-utility,action_top)
-	_btn_edit.size = Vector2.ONE*utility
-	_btn_dive.position = Vector2(right-secondary-gap-utility,bottom-utility)
-	_btn_dive.size = Vector2.ONE*utility
-	_btn_run.position = Vector2(margin,_dock.y-jr-gap-utility)
-	_btn_run.size = Vector2.ONE*utility
-	_btn_rotate.position = Vector2(inner_x,action_top)
-	_btn_rotate.size = Vector2.ONE*secondary
-	_btn_next.position = Vector2(inner_x,action_top+secondary+gap)
-	_btn_next.size = Vector2.ONE*secondary
-	_btn_remove.position = Vector2(right-secondary,bottom-secondary)
-	_btn_remove.size = Vector2.ONE*secondary
-	var utility_y := minf(vp.y*0.42,_btn_run.position.y-gap-utility)
-	_btn_build.position = Vector2(margin,utility_y)
-	_btn_build.size = Vector2.ONE*utility
-	_btn_help.position = Vector2(margin,utility_y-utility-gap)
-	_btn_help.size = Vector2.ONE*utility
+	_btn_aim.position = Vector2(inner_x, action_top - gap - secondary)
+	_btn_aim.size = Vector2.ONE * secondary
+	_btn_edit.position = Vector2(inner_x, action_top - gap - secondary)
+	_btn_edit.size = Vector2.ONE * utility
+	_btn_dive.position = Vector2(right - secondary - gap - utility, bottom - utility)
+	_btn_dive.size = Vector2.ONE * utility
+	_btn_run.position = Vector2(right - utility, bottom - secondary - gap - utility)
+	_btn_run.size = Vector2.ONE * utility
+	_btn_rotate.position = Vector2(inner_x, action_top)
+	_btn_rotate.size = Vector2.ONE * secondary
+	_btn_next.position = Vector2(inner_x, action_top - secondary - gap)
+	_btn_next.size = Vector2.ONE * secondary
+	_btn_remove.position = Vector2(right - secondary, bottom - secondary)
+	_btn_remove.size = Vector2.ONE * secondary
+	# Small utility row hugs the upper-right, above the edge shortcuts.
+	var utility_y := 152.0 * scale_factor
+	var utility_x := right - utility
+	_btn_build.position = Vector2(utility_x, utility_y)
+	_btn_build.size = Vector2.ONE * utility
+	_btn_help.position = Vector2(utility_x - utility - gap, utility_y)
+	_btn_help.size = Vector2.ONE * utility
+	_btn_cam.position = Vector2(utility_x - utility * 2.0 - gap * 2.0, utility_y)
+	_btn_cam.size = Vector2.ONE * utility
 	queue_redraw()
 
 
@@ -734,27 +774,51 @@ func _draw_action_button(b: Button) -> void:
 	var r := minf(rect.size.x, rect.size.y) * 0.5
 	var pressed := b.is_pressed() or b.has_focus()
 	var ring: Color = UI_SURFACE.BRASS
-	if b == _btn_rope and _rope_equipped:
-		ring = Color(0.53, 0.85, 0.76, 0.95)
-	if _button_icon_kind(b) == "hammer" and _mode == "normal":
-		ring = Color(0.55, 0.9, 0.5, 0.5)
-	elif _button_icon_kind(b) == "x":
-		ring = Color(0.95, 0.4, 0.35, 0.5)
-	elif _button_icon_kind(b) == "check":
-		ring = Color(0.4, 0.95, 0.6, 0.5)
-	elif _button_icon_kind(b) == "climb":
-		ring = Color(0.4, 0.85, 0.95, 0.6)
+	var kind := _button_icon_kind(b)
+
+	# Dynamic luminous halo for actionable / contextual buttons
+	if b == _btn_use:
+		var pulse := 0.25 + 0.15 * sin(Time.get_ticks_msec() * 0.006)
+		draw_circle(center, r * 1.04, Color(1.0, 0.85, 0.40, pulse))
+		ring = Color(1.0, 0.88, 0.45, 0.98)
+	elif b == _btn_climb:
+		var pulse := 0.28 + 0.16 * sin(Time.get_ticks_msec() * 0.007)
+		draw_circle(center, r * 1.15, Color(0.35, 0.85, 0.95, pulse))
+		ring = Color(0.40, 0.92, 1.0, 0.98)
+	elif b == _btn_rope and _rope_equipped:
+		draw_circle(center, r * 1.08, Color(0.30, 0.80, 0.85, 0.18))
+		ring = Color(0.45, 0.90, 0.88, 0.95)
+	elif kind == "hammer" and _mode == "normal":
+		ring = Color(0.50, 0.88, 0.60, 0.85)
+	elif kind == "x":
+		ring = Color(0.95, 0.40, 0.35, 0.90)
+	elif kind == "check":
+		draw_circle(center, r * 1.10, Color(0.35, 0.92, 0.55, 0.22))
+		ring = Color(0.38, 0.95, 0.60, 0.95)
+	elif kind == "trash":
+		ring = Color(0.95, 0.35, 0.30, 0.90)
+	elif b == _btn_run:
+		if pressed:
+			draw_circle(center, r * 1.08, Color(0.95, 0.75, 0.35, 0.25))
+			ring = Color(0.98, 0.82, 0.45, 0.98)
+		else:
+			ring = Color(0.70, 0.78, 0.70, 0.80)
+
 	UI_SURFACE.dial(self, center, r * 0.92, ring, pressed)
-	var col := Color(1, 1, 1, 0.92) if not pressed else Color(1, 1, 1, 1.0)
+	var col := Color(1, 1, 1, 0.94) if not pressed else Color(1, 1, 1, 1.0)
 	_draw_icon_glyph(b, center - Vector2(0, r * 0.09), r * 0.48, col)
 	var label := _button_caption(b)
 	var font := ThemeDB.fallback_font
-	var fs := int(clampf(r * 0.32, 12.0, 18.0))
+	var fs := int(clampf(r * 0.30, 11.0, 17.0))
 	var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-	draw_string(font, center + Vector2(-width * 0.5, r * 0.64), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+	var text_pos := center + Vector2(-width * 0.5, r * 0.64)
+	# Draw crisp text drop shadow for maximum outdoor readability
+	draw_string(font, text_pos + Vector2(1, 1), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0, 0, 0, 0.85))
+	draw_string(font, text_pos, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 
 func _button_caption(b: Button) -> String:
+	if b==_btn_leave:return "LEAVE BOAT"
 	if b == _btn_run and _swimming:
 		return "FAST SWIM"
 	if b == _btn_aim:
@@ -765,7 +829,7 @@ func _button_caption(b: Button) -> String:
 		var player := _get_player()
 		if player != null and player.has_method("interaction_caption"):
 			return str(player.call("interaction_caption"))
-	var captions := {"jump": "JUMP", "run": "RUN", "hand": "USE", "down": "DIVE", "hook": "CAST", "back": "RETURN", "climb": "CLIMB", "hammer": "BUILD", "x": "CANCEL", "check": "PLACE", "rot": "ROTATE", "next": "NEXT", "pencil": "EDIT", "trash": "REMOVE", "help": "HELP"}
+	var captions := {"jump": "JUMP", "run": "RUN", "hand": "USE", "down": "DIVE", "hook": "CAST", "back": "RETURN", "climb": "CLIMB", "hammer": "BUILD", "x": "CANCEL", "check": "PLACE", "rot": "ROTATE", "next": "NEXT", "pencil": "EDIT", "trash": "REMOVE", "help": "HELP", "cam": "VIEW"}
 	return str(captions.get(_button_icon_kind(b), "USE"))
 
 
@@ -773,6 +837,11 @@ func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
 	var w := clampf(r * 0.26, 3.0, 7.0)
 	var kind := _button_icon_kind(b)
 	match kind:
+		"cam":
+			draw_arc(center, r * 0.72, -PI * 0.35, PI * 0.35, 16, col, maxf(w * 0.45, 1.5), true)
+			draw_arc(center, r * 0.72, PI * 0.65, PI * 1.35, 16, col, maxf(w * 0.45, 1.5), true)
+			draw_circle(center, r * 0.34, col)
+			draw_circle(center + Vector2(r * 0.1, -r * 0.1), r * 0.12, Color(0.08, 0.12, 0.18))
 		"aim":
 			draw_arc(center, r * 0.65, 0.0, TAU, 24, col, maxf(w * 0.4, 1.0), true)
 			for direction in [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT]:
@@ -835,25 +904,33 @@ func _draw_icon_glyph(b: Button, center: Vector2, r: float, col: Color) -> void:
 
 
 # ============================================================
-# DEBUG DRAW — D-pad joystick: transparent base ring, four directional
-# arrows pointing toward the central thumbstick (reference style).
+# D-PAD JOYSTICK — modern frosted glass base with subtle directional glow
 # ============================================================
 func _draw_dpad(center: Vector2, radius: float, knob_pos: Vector2) -> void:
-	# Transparent base plate.
-	UI_SURFACE.dial(self, center, radius, Color(0.66, 0.63, 0.48, 0.45))
-	draw_arc(center, radius * 0.42, 0.0, TAU, 32, Color(1, 1, 1, 0.18), 1.5)
-	# Four directional arrows pointing toward the central thumbstick.
+	# Outer soft shadow
+	draw_circle(center + Vector2(0, 3.0), radius + 2.0, Color(0, 0, 0, 0.35))
+	# Base plate in frosted slate glass with subtle ocean tint
+	draw_circle(center, radius, Color(0.045, 0.065, 0.085, 0.78))
+	draw_arc(center, radius - 1.0, 0.0, TAU, 48, Color(0.35, 0.75, 0.85, 0.45), 1.5, true)
+	draw_arc(center, radius * 0.62, 0.0, TAU, 36, Color(1, 1, 1, 0.10), 1.0, true)
+	draw_arc(center, radius * 0.32, 0.0, TAU, 28, Color(1, 1, 1, 0.06), 1.0, true)
+
+	# Four directional chevrons that glow when displaced in that direction
 	var dirs: Array[Vector2] = [Vector2.UP, Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT]
+	var active_dir := _stick.normalized() if _move_id != -1 and _stick.length_squared() > 0.04 else Vector2.ZERO
 	for dir in dirs:
-		_draw_inward_arrow(center, dir, radius)
-	# Central thumbstick (moves with the touch).
+		var dot := active_dir.dot(dir)
+		var is_active := dot > 0.4
+		var chevron_col := Color(0.40, 0.90, 1.0, 0.85) if is_active else Color(1, 1, 1, 0.28)
+		_draw_inward_arrow(center, dir, radius, chevron_col)
+
+	# Central thumbstick knob (moves with touch)
 	var knob_r := clampf(radius * 0.34, 22.0, 44.0)
-	UI_SURFACE.dial(self, knob_pos, knob_r, UI_SURFACE.BRASS, _move_id != -1)
+	var knob_accent := UI_SURFACE.CYAN if _move_id != -1 else UI_SURFACE.BRASS
+	UI_SURFACE.dial(self, knob_pos, knob_r, knob_accent, _move_id != -1)
 
 
-## One directional chevron whose tip points IN toward the center (like the
-## reference D-pad, where the arrows converge on the thumbstick).
-func _draw_inward_arrow(center: Vector2, dir: Vector2, radius: float) -> void:
+func _draw_inward_arrow(center: Vector2, dir: Vector2, radius: float, col: Color = Color(1, 1, 1, 0.34)) -> void:
 	var perp := Vector2(-dir.y, dir.x)
 	var tip := center + dir * radius * 0.30
 	var back := center + dir * radius * 0.82
@@ -863,7 +940,7 @@ func _draw_inward_arrow(center: Vector2, dir: Vector2, radius: float) -> void:
 		back + perp * half_w,
 		back - perp * half_w,
 	])
-	draw_colored_polygon(pts, Color(1, 1, 1, 0.34))
+	draw_colored_polygon(pts, col)
 
 
 func _get_player() -> Node:
@@ -882,13 +959,13 @@ func _dock_center() -> Vector2:
 # ============================================================
 const HELP_CONTENT := "[center][b]GAME CONTROLS[/b][/center]\n\n" \
 	+ "[b]BIRD HUNTING[/b]\nCraft a Bow and Arrows in BAG → CRAFT. Move the Bow to a hotbar slot and select it; Arrows can stay in the bag. Tap AIM to zoom, drag the view to line up a bird, then hold SHOOT to draw and release to fire. Lead moving birds and aim slightly above distant ones. Tap UN-AIM to return to normal view. Collect the bird where it lands and cook Raw Bird on a bonfire.\n\n" \
-	+ "[b]MOVE[/b]\nJoystick (bottom-left) = walk. Big button = jump / swim up. Hold RUN to sprint; in water it becomes FAST SWIM (3.5 m/s). Release to swim normally. Fast swimming uses stamina.\n\n" \
-	+ "[b]DIVING[/b]\nCraft the Handmade Air Tank on the first CRAFT page, select it and tap EQUIP. It supplies 3 minutes of underwater air. Look up/down while moving forward to swim; hold DIVE to descend and JUMP to rise. Surface before breath runs out. With empty hands on dry ground or your raft, tap REFILL AIR and stay still for 6 seconds. Aim a spear at fish, crabs, turtles or rays and tap HUNT; the hit happens during the thrust. Aim at the seabed to collect sand, or use a shovel. Diving sites appear on MAP, where your cyan arrow shows your location and facing direction. Sharks only make rare attacks from level 6.\n\n" \
+	+ "[b]MOVE[/b]\nJoystick (bottom-left) = walk. Action buttons are on the right. Big button = jump / swim up. Hold RUN above JUMP to sprint; in water it becomes FAST SWIM (3.5 m/s). Release to swim normally. Fast swimming uses stamina.\n\n" \
+	+ "[b]DIVING[/b]\nCraft the Handmade Air Tank on the first CRAFT page, select it and tap EQUIP. It supplies 3 minutes of underwater air. Look up/down while moving forward to swim; hold DIVE to descend and JUMP to rise. Surface before breath runs out. With empty hands on dry ground or your raft, tap REFILL AIR and stay still for 6 seconds. Aim a spear at fish, crabs, turtles or rays and tap HUNT; the hit happens during the thrust. Aim at the seabed to collect sand, or use a shovel. Diving sites appear on MAP, where your cyan arrow shows your location and facing direction. Sharks sometimes circle swimmers before attacking. Return to your raft or use a spear to repel them.\n\n" \
 	+ "[b]USE / HAND[/b] (tap or hold)\nCollect debris and open doors. Farming: hold a potato, tomato, carrot, coconut or banana; aim at a suitable empty pot or dry island soil and tap PLANT. Aim away and tap EAT to eat it. Tap a ripe fruit to pick it. Hold on a potato to dig it, hold on a tree trunk to chop it, hold on a stump to remove it.\n\n" \
 	+ "[b]BUILD[/b]\nHammer button (left) = enter/exit build mode. NEXT = choose piece (Wall, Roof, ... PlanterPot, PlanterBox, TreePot). Big PLACE button = put the green piece down. ROT = turn it.\n\n" \
 	+ "[b]EDIT / REPAIR[/b]\nWhile aiming at your own piece, tap the pencil to lift it, then PLACE to set it down or the trash button to remove it (materials refunded).\n\n" \
 	+ "[b]FARMING QUICK START[/b]\n1) BAG → CRAFT → select Plant Pot, Plant Bed or Tree Pot. Review HAVE / NEED, choose a spot, then PLACE. Gather Soil on higher island land if needed. 2) Exit build mode. Tap a crop in the bag, then HOLD TO PLANT, or select it in the hotbar. 3) Aim at the empty pot or dry island sand/soil and tap PLANT. Coconut and banana need a Tree Pot on the raft. 4) Water soil and wait for maturity. 5) Hold HARVEST on root crops; tap ripe tree fruit to pick it. The harvested produce can be eaten with USE / EAT or planted again.\n\n" \
-	+ "[b]ROPE GUN[/b]\nSelect the gun in the first quick slot. Hold CAST to charge and release to launch. RETURN appears while the hook is out and brings back its catch. Empty casts also return automatically. Selecting another quick slot hides CAST. Your gun cannot be dropped, spent or lost; Rope stacks in the bag are crafting materials.\n\n" \
+	+ "[b]ROPE GUN[/b]\nStand on your raft and select the gun in the first quick slot. It cannot fire from islands, boats or the ocean. Hold CAST to charge and release to launch. RETURN appears while the hook is out and brings back its catch. Empty casts also return automatically. Selecting another quick slot hides CAST. Your gun cannot be dropped, spent or lost; Rope stacks in the bag are crafting materials.\n\n" \
 	+ "[b]BAG[/b]\nTap the BAG button to open your 30-slot inventory; drag items to move/swap/merge them. Tap a hotbar slot to select that item.\n\n" \
 	+ "[b]KEYBOARD (PC)[/b]\nWASD move · Space jump · Ctrl dive · E use · C craft · M map · B build · Tab next piece · P place · R/Y rotate · Delete remove · Q rope · F3 build overlay · F5 quick-save"
 

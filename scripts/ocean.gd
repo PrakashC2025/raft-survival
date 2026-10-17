@@ -56,6 +56,7 @@ var _mat: ShaderMaterial = null
 var _shore_zones := PackedVector4Array([Vector4.ZERO, Vector4.ZERO, Vector4.ZERO, Vector4.ZERO,Vector4.ZERO,Vector4.ZERO,Vector4.ZERO])
 static var _wave_normals: NoiseTexture2D
 var _raft_ref: Node3D
+var _boat_ref: Node3D
 var _deck_texture: ImageTexture
 var _deck_coverage: Image
 var _deck_refresh := 0.0
@@ -230,6 +231,8 @@ func _push_factors(night: float, twilight: float, moon_factor: float) -> void:
 	_mat.set_shader_parameter("night_factor", night)
 	_mat.set_shader_parameter("twilight_factor", twilight)
 	_mat.set_shader_parameter("moon_factor", moon_factor)
+	var rain := get_tree().get_first_node_in_group("rain_system")
+	_mat.set_shader_parameter("storm_amount",float(rain.call("sky_storm_strength")) if rain!=null else 0.0)
 	if _sun_light != null and is_instance_valid(_sun_light):
 		_mat.set_shader_parameter("sun_dir", _sun_light.global_transform.origin.normalized())
 		_mat.set_shader_parameter("sun_glint_color", _sun_light.light_color)
@@ -420,6 +423,11 @@ func _sample_wave(p: Vector2, tt: float) -> float:
 
 func _update_deck_displacement(delta: float) -> void:
 	if _mat == null: return
+	if not is_instance_valid(_boat_ref):_boat_ref=get_tree().get_first_node_in_group("player_boat") as Node3D
+	_mat.set_shader_parameter("boat_displacement",is_instance_valid(_boat_ref))
+	if is_instance_valid(_boat_ref):
+		_mat.set_shader_parameter("boat_cut",Vector4(_boat_ref.global_position.x,_boat_ref.global_position.z,cos(_boat_ref.rotation.y),sin(_boat_ref.rotation.y)))
+		_mat.set_shader_parameter("boat_waterline",_boat_ref.global_position.y)
 	if not is_instance_valid(_raft_ref):
 		_raft_ref = get_tree().get_first_node_in_group("raft") as Node3D
 	if _raft_ref == null: return

@@ -2,6 +2,7 @@ extends Node3D
 class_name RopeSystem
 
 const ROPE_VISUAL := preload("res://scripts/rope_launcher_visual.gd")
+const CONTACT_AUDIO := preload("res://scripts/contact_audio.gd")
 
 ## Ocean-survival hook + rope system.
 ## Q = charge & throw hook toward the crosshair. Right-click (rope_cancel) = recall.
@@ -73,6 +74,8 @@ var _charge_distance: float = 0.0
 var _catch_offset := Vector3.ZERO
 var _seen_catches: Dictionary = {}
 var _return_requested := false
+var _contact_audio: Array[AudioStreamPlayer3D]=[]
+var _contact_audio_index:=0
 
 
 # ============================================================
@@ -85,6 +88,16 @@ func _ready() -> void:
 	_create_rope_mesh()
 	_create_charge_bar()
 	_create_aim_ray()
+	for index in 3:
+		var audio:=AudioStreamPlayer3D.new();audio.name="RopeContactAudio%d"%index
+		audio.top_level=true;audio.unit_size=3.0;audio.max_distance=45.0;audio.volume_db=-12
+		add_child(audio);_contact_audio.append(audio)
+
+func _play_rope_sound(stream: AudioStream, at: Vector3, level_db: float=-12.0) -> void:
+	if stream==null or _contact_audio.is_empty():return
+	var audio:=_contact_audio[_contact_audio_index]
+	_contact_audio_index=(_contact_audio_index+1)%_contact_audio.size()
+	audio.global_position=at;audio.stream=stream;audio.volume_db=level_db;audio.play()
 
 
 func _ensure_actions() -> void:
@@ -207,6 +220,21 @@ func _is_editing_active() -> bool:
 	return player.get("_editing") != null
 
 
+func can_cast_from_raft() -> bool:
+	if not is_instance_valid(player) or player.get("is_swimming") == true or is_instance_valid(player.get("boat_vehicle")):
+		return false
+	var raft := get_tree().get_first_node_in_group("raft") as Node3D
+	if raft == null:
+		return false
+	# Check actual support, including constructed upper decks. Proximity to the
+	# raft also includes swimmers beside it and island ground, so is insufficient.
+	var query := PhysicsRayQueryParameters3D.create(player.global_position + Vector3.UP * 0.1,
+		player.global_position + Vector3.DOWN * 1.15, 1, [player.get_rid()])
+	var hit := player.get_world_3d().direct_space_state.intersect_ray(query)
+	var support := hit.get("collider") as Node
+	return support != null and (support == raft or raft.is_ancestor_of(support))
+
+
 # ============================================================
 # PHYSICS — main update
 # ============================================================
@@ -216,7 +244,10 @@ func _physics_process(delta: float) -> void:
 		return
 
 	# Block during build/edit
-	if _is_build_active() or _is_editing_active():
+	var cargo:=player.get_node_or_null("HuntingCargo")
+	var salvage:=player.get_node_or_null("OceanSalvage")
+	var cargo_owns_hands: bool=(cargo!=null and (is_instance_valid(cargo.held) or cargo.busy())) or (salvage!=null and salvage.busy())
+	if _is_build_active() or _is_editing_active() or not can_cast_from_raft() or cargo_owns_hands:
 		if _state != State.IDLE or _is_charging:
 			_force_cancel()
 		return
@@ -269,6 +300,9 @@ func get_launcher_kick() -> float:
 # STATE: IDLE
 # ============================================================
 func _handle_idle(delta: float) -> void:
+	if not can_cast_from_raft():
+		_cancel_charge()
+		return
 	if _take_return_request():
 		_cancel_charge()
 		return
@@ -335,6 +369,7 @@ func _finish_flight() -> void:
 	_snap_hook_to_water()
 	_check_debris()
 	if _hooked_debris.is_empty():
+		_play_rope_sound(CONTACT_AUDIO.pick_action("water"),_hook_world_pos,-16.0)
 		_state = State.EXTENDED
 	else:
 		_enter_hooked()
@@ -379,11 +414,13 @@ func _handle_hooked(delta: float) -> void:
 		_request_return()
 		return
 	if Input.is_action_just_pressed("rope_throw") or Input.is_action_just_pressed("rope_pull"):
+		_play_rope_sound(CONTACT_AUDIO.pick_action("reel"),_hand_pos(),-15.0)
 		_state = State.REELING
 		_state_timer = 0.0
 		return
 	# Settle at the actual contact, then tension the line; no forward scooping.
 	if _state_timer >= hook_pause_time:
+		_play_rope_sound(CONTACT_AUDIO.pick_action("reel"),_hand_pos(),-15.0)
 		_state = State.REELING
 		_state_timer = 0.0
 
@@ -461,6 +498,8 @@ func _handle_returning(delta: float) -> void:
 func _throw_hook() -> void:
 	_is_charging = false
 	_charge_bar.visible = false
+	if not can_cast_from_raft():
+		return
 	_update_hook_origin()
 
 	var aim_point := _get_aim_point()
@@ -500,6 +539,7 @@ func _throw_hook() -> void:
 	_hook.visible = true
 	_hook.global_position = hand
 	_rope_mesh.visible = true
+	_play_rope_sound(CONTACT_AUDIO.pick_action("swing"),hand,-15.0)
 	_state = State.THROWING
 
 
@@ -564,6 +604,7 @@ func _hook_debris(debris: RigidBody3D) -> void:
 	_hooked_debris.append(debris)
 	_catch_offset = debris.global_position - _hook_world_pos
 	_seen_catches[debris.get_instance_id()] = true
+	_play_rope_sound(CONTACT_AUDIO.pick("metal"),_hook_world_pos,-13.0)
 
 
 func _enter_hooked() -> void:
@@ -636,6 +677,7 @@ func _snap_hook_to_water() -> void:
 
 func _start_return() -> void:
 	_release_debris()
+	_play_rope_sound(CONTACT_AUDIO.pick_action("reel"),_hand_pos(),-15.0)
 	_state = State.RETURNING
 	_state_timer = 0.0
 
@@ -665,6 +707,7 @@ func is_active() -> bool:
 
 
 func _force_cancel() -> void:
+	for audio in _contact_audio:audio.stop()
 	_return_requested = false
 	_release_debris()
 	_hook.visible = false

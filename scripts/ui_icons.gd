@@ -255,6 +255,11 @@ static func item_color(item: String) -> Color:
 
 
 static func item_icon(c: CanvasItem, item: String, center: Vector2, r: float) -> void:
+	if item=="Cooking Foil" or item.begins_with("Wrapped "):
+		var rect:=Rect2(center-Vector2(r*.72,r*.48),Vector2(r*1.44,r*.96));c.draw_style_box(preload("res://scripts/ocean_ui.gd").box(Color("abb8bc"),Color("edf4f5"),4),rect)
+		for index in 4:c.draw_line(rect.position+Vector2(index*r*.35,0),rect.position+Vector2((index+.5)*r*.3,rect.size.y),Color(.9,.95,1,.7),1,true)
+		if item.begins_with("Wrapped "):item_icon(c,item.trim_prefix("Wrapped "),center,r*.40)
+		return
 	if item=="Burning Torch":item="Torch"
 	if item=="StorageBox":item="CargoCrate"
 	if item.trim_suffix(" Seed") in ["Potato","Carrot","Tomato","Coconut","Banana","Onion"]:item=item.trim_suffix(" Seed")

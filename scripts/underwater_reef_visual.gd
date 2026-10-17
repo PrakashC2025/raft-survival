@@ -60,6 +60,20 @@ static func mesh(kind: String) -> ArrayMesh:
 			for leaf in 7:
 				var a := leaf*2.4
 				_blade(s,Vector3.ZERO,Vector3(cos(a)*.22,.34+float(leaf%3)*.13,sin(a)*.22),.019)
+		"RibbonWeed":
+			for leaf in 9:
+				var a:=leaf*2.4
+				_blade(s,Vector3(cos(a)*.08,0,sin(a)*.08),Vector3(cos(a)*.55,.9+float(leaf%4)*.25,sin(a)*.55),.075)
+		"RedAlgae":
+			for stem in 7:
+				var a:=stem*2.4;var tip:=Vector3(cos(a)*.35,.4+float(stem%3)*.17,sin(a)*.35)
+				_branch(s,Vector3.ZERO,tip,.025,Color(.56,.20,.13))
+				for leaf in 4:_blade(s,tip*float(leaf+1)/5,Vector3(cos(a+leaf)*.24,.19,sin(a+leaf)*.24),.065)
+		"Anemone":
+			_sphere(s,Vector3(0,.12,0),Vector3(.24,.14,.22),Color(.48,.28,.23))
+			for arm in 18:
+				var a:=arm*2.4;var start:=Vector3(cos(a)*.13,.15,sin(a)*.13)
+				_branch(s,start,start+Vector3(cos(a)*.13,.25+float(arm%4)*.035,sin(a)*.13),.018,Color(.71,.46,.31))
 		"Driftwood":
 			_branch(s,Vector3(-.7,.15,-.08),Vector3(.8,.22,.10),.13,Color(.31,.25,.16))
 			_branch(s,Vector3(.2,.18,0),Vector3(.5,.28,.4),.06,Color(.30,.24,.15))

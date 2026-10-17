@@ -16,6 +16,7 @@ var _refresh := 0.0
 var _coral: ShaderMaterial
 var _plants: ShaderMaterial
 var _kelp: ShaderMaterial
+var _algae: ShaderMaterial
 var _far: ShaderMaterial
 var _player: Node3D
 
@@ -25,6 +26,7 @@ func _ready() -> void:
 	_plants=world._kelp_material
 	_kelp=_plants.duplicate() as ShaderMaterial
 	_kelp.set_shader_parameter("leaf_colour",Color(.64,.61,.31))
+	_algae=_plants.duplicate() as ShaderMaterial;_algae.set_shader_parameter("leaf_colour",Color(.78,.34,.24))
 	_far=world.get_node("OceanSandFloor").material_override
 	GameSettings.changed.connect(_quality_changed)
 	_quality_changed()
@@ -89,13 +91,13 @@ func _build_next() -> void:
 	await get_tree().process_frame
 	if not is_instance_valid(chunk) or chunk.is_queued_for_deletion():_busy=false;return
 	var rng := RandomNumberGenerator.new();rng.seed=tile.x*73856093^tile.y*19349663^68127
-	var budget: int = [18,12,26,36,48][GameSettings.quality]
+	var budget: int = [28,20,40,52,64][GameSettings.quality]
 	var reef_tile := (Vector2(tile)+Vector2.ONE*.5)*TERRAIN.TILE-Vector2(140,80)
-	# Six to nine draw calls per tile; plants have GPU sway, no plant scripts.
-	for kind in ["Grass","Kelp","Sponge","BranchCoral","FanCoral","BrainCoral","Urchin","Shell","Rock"]:
-		var count: int = budget if kind=="Grass" else (maxi(3,floori(float(budget)/3)) if kind=="Kelp" else (6 if kind=="Rock" else 3))
+	# Twelve shared batches per tile; denser plants retain GPU sway and no AI.
+	for kind in ["Grass","Kelp","RibbonWeed","RedAlgae","Anemone","Sponge","BranchCoral","FanCoral","BrainCoral","Urchin","Shell","Rock"]:
+		var count: int = budget*4 if kind=="Grass" else (budget*2 if kind=="RibbonWeed" else (maxi(6,floori(float(budget)/2)) if kind=="Kelp" else (8 if kind in ["Rock","RedAlgae"] else 4)))
 		if reef_tile.length_squared()<14400:
-			if kind=="Grass":count*=4
+			if kind=="Grass":count*=2
 			elif kind=="Kelp":count*=2
 		var batch := MultiMesh.new();batch.transform_format=MultiMesh.TRANSFORM_3D;batch.use_colors=true
 		batch.mesh=preload("res://scripts/island_landscape.gd")._rock_mesh() if kind=="Rock" else REEF.mesh(kind)
@@ -107,7 +109,7 @@ func _build_next() -> void:
 			var at_reef := point.distance_squared_to(Vector2(140,80))<8100
 			if at_reef and absf(channel)<4.0 and kind!="Shell":continue
 			var h := TERRAIN.surface_height(point)
-			if h < -58 and kind in ["Kelp","Grass","Sponge","FanCoral"]:continue
+			if h < -58 and kind in ["Kelp","Grass","RibbonWeed","RedAlgae","Anemone","Sponge","FanCoral"]:continue
 			var scale_value := rng.randf_range(.65,1.45)
 			var size := Vector3.ONE*scale_value
 			if kind=="Rock":size=Vector3(rng.randf_range(.8,3.8),rng.randf_range(.7,2.8),rng.randf_range(.8,3.0))
@@ -121,7 +123,7 @@ func _build_next() -> void:
 				if not is_instance_valid(chunk) or chunk.is_queued_for_deletion():_busy=false;return
 		batch.visible_instance_count=placed
 		var draw := MultiMeshInstance3D.new();draw.name=kind+"Batch";draw.multimesh=batch
-		draw.material_override=world._ruin_material if kind=="Rock" else (_kelp if kind=="Kelp" else (_plants if kind=="Grass" else _coral))
+		draw.material_override=world._ruin_material if kind=="Rock" else (_kelp if kind=="Kelp" else (_algae if kind=="RedAlgae" else (_plants if kind in ["Grass","RibbonWeed"] else _coral)))
 		draw.cast_shadow=GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		draw.visibility_range_end=110 if kind in ["Rock","Kelp"] else (55 if GameSettings.quality==1 else 85)
 		chunk.add_child(draw)
@@ -152,7 +154,7 @@ func _make_loot(chunk: Node3D, tile: Vector2i, rng: RandomNumberGenerator) -> vo
 	chunk.add_child(loot)
 
 func update_light(daylight: float) -> void:
-	_coral.set_shader_parameter("daylight",daylight);_kelp.set_shader_parameter("daylight",daylight)
+	_coral.set_shader_parameter("daylight",daylight);_kelp.set_shader_parameter("daylight",daylight);_algae.set_shader_parameter("daylight",daylight)
 
 func _exit_tree() -> void:
 	# Collision shapes live on the shared collectible floor, not their tile node.

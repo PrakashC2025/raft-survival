@@ -29,6 +29,7 @@ uniform vec3 water_haze_color = vec3(0.5, 0.66, 0.82);
 uniform float night_factor : hint_range(0.0, 1.0) = 0.0;
 uniform float twilight_factor : hint_range(0.0, 1.0) = 0.0;
 uniform float moon_factor : hint_range(0.0, 1.0) = 0.0;
+uniform float storm_amount : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 sun_dir = vec3(0.0, 1.0, 0.0);
 uniform vec3 moon_dir = vec3(0.0, -0.5, -0.8);
 uniform vec3 sun_glint_color = vec3(1.0, 0.95, 0.85);
@@ -73,6 +74,9 @@ uniform float wave_time = 0.0;
 uniform bool raft_displacement = false;
 uniform mat4 world_to_raft;
 uniform sampler2D raft_deck : filter_nearest, repeat_disable;
+uniform bool boat_displacement = false;
+uniform vec4 boat_cut = vec4(0.0);
+uniform float boat_waterline = 0.0;
 
 // Wave crest level (-1 trough .. +1 crest) interpolated to the fragment
 // so the surface can shade rolling wave bands + crest foam.
@@ -184,6 +188,16 @@ void vertex() {
 }
 
 void fragment() {
+	// The open boat contains air. Only its small, tapered interior cuts water.
+	if (boat_displacement) {
+		vec2 d = world_pos.xz - boat_cut.xy;
+		if (dot(d,d)<4.0 && abs(world_pos.y-boat_waterline)<0.65) {
+			vec2 p = vec2(boat_cut.z*d.x-boat_cut.w*d.y,boat_cut.w*d.x+boat_cut.z*d.y);
+			float t = clamp((p.y+1.72)/3.28,0.0,1.0);
+			float half_width = pow(max(sin(t*3.14159265),0.0),0.60)*0.34;
+			if (p.y>-1.64 && p.y<1.49 && abs(p.x)<half_width) discard;
+		}
+	}
 	// Solid deck volume displaces water; crests cannot flood through timber.
 	// This single compact mask also follows expansions, removal and raft yaw.
 	if (raft_displacement) {
@@ -335,6 +349,8 @@ void fragment() {
 	// Clear moonlit blue bounce at night: do not mirror a black cloud ceiling.
 	reflected_horizon = mix(reflected_horizon, vec3(0.065, 0.13, 0.20), night_factor);
 	reflected_zenith = mix(reflected_zenith, vec3(0.040, 0.085, 0.15), night_factor);
+	reflected_horizon = mix(reflected_horizon,mix(vec3(0.16,0.19,0.21),vec3(0.025,0.04,0.06),night_factor),storm_amount);
+	reflected_zenith = mix(reflected_zenith,mix(vec3(0.09,0.11,0.14),vec3(0.012,0.023,0.04),night_factor),storm_amount);
 	vec3 reflection = mix(reflected_horizon, reflected_zenith, smoothstep(0.02, 0.85, max(r.y, 0.0)));
 	float cloud = water_noise(r.xz / max(r.y + 0.4, 0.2) * 2.2 + vec2(t * 0.012, 0.0)).x;
 	reflection += smoothstep(0.48, 0.78, cloud) * vec3(0.14, 0.15, 0.14) * (1.0 - night_factor);
@@ -394,6 +410,7 @@ void fragment() {
 	float sun_sheen = pow(face_lit, 3.0) * crest_up * 0.05 * (1.0 - night_factor);
 	float moon_sheen = pow(max(dot(n, normalize(moon_dir)), 0.0), 8.0) * 0.10 * moon_factor;
 	light_add += sun_sheen * sun_glint_color + moon_sheen * moon_glint_color;
+	light_add *= 1.0-storm_amount*0.90;
 
 	// ---- Whitecaps: sparse, broken, only on genuinely steep micro-crest
 	// facets near the camera. No thresholded blobs, no far-field foam — chop
@@ -426,6 +443,8 @@ void fragment() {
 	// A small additive night fill retains wave/reflection contrast. A large
 	// channel-wise minimum flattened most night pixels to one solid blue.
 	vec3 col = max(base + light_add + vec3(0.002,0.004,0.009)*night_factor, vec3(0.001,0.002,0.004));
+	float storm_luma = dot(col,vec3(0.2126,0.7152,0.0722));
+	col = mix(col,vec3(storm_luma)*vec3(0.64,0.79,0.88),storm_amount*0.75);
 	// Sparse plankton follows moving wave crests, fading beyond the near water.
 	vec2 plankton_cell = floor(world_pos.xz * 1.8);
 	float plankton_seed = fract(sin(dot(plankton_cell,vec2(127.1,311.7)))*43758.5453);

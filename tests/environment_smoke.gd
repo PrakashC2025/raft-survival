@@ -180,11 +180,11 @@ func _run() -> void:
 	tree_pot.queue_free()
 	root.get_node("GameSettings").call("update_setting", "quality", 0)
 	performance.call("_set_render_scale", 0.72)
-	for sample in range(20):
+	for sample in range(25):
 		performance.call("_update_quality", 0.01)
 	check(performance.get("_cumulus_reduced") == true,
 		"Mobile Auto recovery never silently enables expensive volumetric clouds")
-	check(is_equal_approx(float(performance.get("_render_scale")), 0.82), "Phone Auto recovers within its stable resolution ceiling")
+	check(is_equal_approx(float(performance.get("_render_scale")), 0.90), "Phone Auto recovers within its current 0.90 resolution ceiling")
 	ambience.call("stop_environment")
 	change_scene_to_file("res://scenes/main_menu.tscn")
 	await scene_changed

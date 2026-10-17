@@ -23,22 +23,27 @@ void vertex() {
 }
 
 void fragment() {
-	// Fine cross-veins, waxy highlights and light through thin frond surfaces.
+	// Fine cross-veins, waxy cuticle sheen, and rich sunlight transmission through frond surfaces.
 	float radius = length(leaf_position.xz);
-	float veins = sin(radius * 155.0 + leaf_position.y * 19.0);
-	float mottling = sin(leaf_position.x * 17.0) * sin(leaf_position.z * 23.0);
+	float veins = sin(radius * 165.0 + leaf_position.y * 22.0);
+	float mottling = sin(leaf_position.x * 19.0) * sin(leaf_position.z * 25.0);
 	if (use_albedo_texture) {
 		vec4 tex = texture(albedo_texture, UV);
 		if (tex.a < alpha_scissor_threshold) {
 			discard;
 		}
-		ALBEDO = tex.rgb * vec3(0.78, 0.84, 0.70);
+		// Natural tropical vibrancy with subtle sun-warmed highlights
+		ALBEDO = tex.rgb * vec3(0.88, 0.96, 0.82);
 	} else {
-		ALBEDO = mix(leaf_color, leaf_tip_color, leaf_tip * 0.42);
-		ALBEDO *= 0.94 + 0.04 * veins + 0.04 * mottling;
+		ALBEDO = mix(leaf_color, leaf_tip_color, leaf_tip * 0.45);
+		ALBEDO *= 0.94 + 0.04 * veins + 0.03 * mottling;
 	}
-	NORMAL = FRONT_FACING ? NORMAL : -NORMAL;
-	ROUGHNESS = 0.78;
-	SPECULAR = 0.22;
-	BACKLIGHT = ALBEDO * 0.22;
+	// Micro-grooved leaf veins catching sunlight
+	vec3 vein_normal = vec3(veins * 0.08, 1.0, mottling * 0.06);
+	NORMAL = FRONT_FACING ? normalize(NORMAL + vein_normal * 0.25) : -NORMAL;
+	// Waxy tropical leaf sheen with higher specular glint on sunlit angles
+	ROUGHNESS = mix(0.40, 0.65, leaf_tip * 0.7);
+	SPECULAR = 0.42;
+	// Radiant subsurface chlorophyll transmission when backlit by the sky/sun
+	BACKLIGHT = ALBEDO * 0.48;
 }

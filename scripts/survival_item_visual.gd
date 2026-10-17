@@ -3,6 +3,7 @@ static var _bowl_mesh: CylinderMesh
 static var _bowl_material: StandardMaterial3D
 static var _pan_meshes: Dictionary={}
 static func create(item: String) -> Node3D:
+	if item=="Cooking Foil" or item.begins_with("Wrapped "):return foil(item)
 	if preload("res://scripts/garden_items.gd").icon_cell(item).y>=0 and item!="Tomato" or not preload("res://scripts/garden_items.gd").box_crop(item).is_empty():return preload("res://scripts/garden_visual.gd").produce(item)
 	if item=="Repair Kit":return preload("res://scripts/electronics_visual.gd").repair_kit()
 	if item.ends_with("Tumbler"):return _tumbler(item)
@@ -53,6 +54,15 @@ static func create(item: String) -> Node3D:
 		var top:=MeshInstance3D.new();var disc:=CylinderMesh.new();disc.top_radius=.068 if item.ends_with("Can") else .108;disc.bottom_radius=disc.top_radius;disc.height=.005;disc.radial_segments=16
 		top.mesh=disc;top.position.y=.09 if item.ends_with("Can") else .042
 		var fill:=StandardMaterial3D.new();fill.albedo_color=Color(.28,.50,.63) if item=="Clean Water Can" else (Color(.29,.25,.12) if item=="Dirty Water Can" else Color(.66,.34,.12));top.material_override=fill;root.add_child(top)
+	return root
+
+static func foil(item: String) -> Node3D:
+	var root:=Node3D.new();root.name="SilverFoilMeal" if item.begins_with("Wrapped ") else "CookingFoil"
+	var silver:=StandardMaterial3D.new();silver.albedo_color=Color(.72,.79,.82);silver.metallic=.92;silver.roughness=.30
+	var body:=BoxMesh.new();body.size=Vector3(.27,.08 if item.begins_with("Wrapped ") else .015,.19)
+	var parcel:=MeshInstance3D.new();parcel.mesh=body;parcel.material_override=silver;root.add_child(parcel)
+	for index in 9:
+		var fold:=BoxMesh.new();fold.size=Vector3(.012,.006,.18);var ridge:=MeshInstance3D.new();ridge.mesh=fold;ridge.material_override=silver;ridge.position=Vector3(-.12+index*.03,body.size.y*.5,0);ridge.rotation.y=sin(index*1.7)*.22;root.add_child(ridge)
 	return root
 
 static func _tumbler(item: String) -> Node3D:

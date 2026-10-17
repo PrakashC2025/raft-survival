@@ -100,8 +100,8 @@ func _run() -> void:
 	check(inventory.call("total","Potato")==count_before-1 and root.get_node("Stats").hunger>hunger_before,"Bag USE consumes one potato and restores hunger")
 	check(hud.RESOURCE_PILL_ITEMS.is_empty() and hud.STATS[1][0]=="thirst","Survival percentages replace resource counters at the top")
 	var controls:=player.get_node("CanvasLayer/MobileControls")
-	controls.call("_layout")
-	check(controls._btn_use.size.x>=123.9 and controls._btn_use.size.x>controls._btn_run.size.x and controls._btn_use.position.x<640 and not (controls._btn_use.visible and controls._btn_climb.visible),"Large left Use target shares its position only with mutually exclusive Climb")
+	var action_scale:=clampf(controls.size.y/720.0,.80,1.35)
+	check(is_equal_approx(controls._btn_use.size.x,92*action_scale) and controls._btn_use.size.x>controls._btn_run.size.x and controls._btn_use.position.is_equal_approx(controls._btn_climb.position) and not (controls._btn_use.visible and controls._btn_climb.visible),"Ergonomic Use action target shares its position only with mutually exclusive Climb")
 	if preview:
 		hud._toast=""
 		player.get_node("SurvivalAction").call("stop")

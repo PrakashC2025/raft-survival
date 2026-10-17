@@ -126,7 +126,11 @@ func _run() -> void:
 	performance._last_quality = -1
 	performance._apply_profile()
 	if settings.mobile_effects_profile():
-		check(root.msaa_3d == Viewport.MSAA_DISABLED and is_equal_approx(performance._render_scale,.72), "Mobile Auto starts with a lighter render budget")
+		check(root.msaa_3d == Viewport.MSAA_DISABLED and is_equal_approx(performance._render_scale,.82), "Mobile Auto starts at a clearer bounded render scale")
+		check(root.screen_space_aa==Viewport.SCREEN_SPACE_AA_FXAA and root.scaling_3d_mode==Viewport.SCALING_3D_MODE_BILINEAR,"Mobile Auto smooths low-resolution edges instead of exposing raw jagged pixels")
+		for window in 30:performance._update_quality(.09)
+		check(performance._render_scale>=.65,"Sustained slow frames keep Auto above its clearer resolution floor")
+		performance._last_quality=-1;performance._apply_profile()
 		check(Engine.physics_ticks_per_second==30,"A 30 FPS phone uses 30 physics ticks rather than simulating twice per frame")
 		var spawner := world.get_node("DebrisSpawner")
 		check(spawner.max_debris<=48 and spawner.prewarm_count<=24,"Desktop mobile profiling uses the real phone debris limits")

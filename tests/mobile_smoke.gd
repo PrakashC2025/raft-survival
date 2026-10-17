@@ -101,6 +101,13 @@ func _run() -> void:
 	controls.call("_sync_mode")
 	var fast_swim: Button = controls.get("_btn_run")
 	check(fast_swim.visible and controls.call("_button_caption",fast_swim)=="FAST SWIM", "Moving underwater exposes the fast-swim button")
+	var fast_rect := fast_swim.get_global_rect()
+	check(dock.x < controls.size.x * .5 and fast_rect.position.x > controls.size.x * .5,"Joystick stays left while RUN and FAST SWIM sit on the right")
+	var clear_run: bool = not hud.call("claims_touch",fast_rect.get_center())
+	for button in controls.get("_all_buttons"):
+		if button != fast_swim and button.visible and fast_rect.intersects(button.get_global_rect()):clear_run=false
+	check(clear_run,"Right-thumb speed button does not overlap the inventory or another visible action")
+	check((controls.get("_all_buttons") as Array).all(func(button):return button.position.x > controls.size.x * .5),"All action and utility buttons leave the left side clear for the joystick")
 	touch(controls, 25, fast_swim.get_global_rect().get_center(), true)
 	check(Input.is_action_pressed("sprint") and Input.is_action_pressed("move_forward"), "Fast swim has its own finger while the joystick stays held")
 	var progress: Node = player.get_node("SurvivalProgression")

@@ -14,8 +14,8 @@ void vertex(){
 	float world_scale = max(length(MODEL_MATRIX[0].xyz), 0.001);
 	float projected_width = torch_flame_size.x * world_scale * abs(PROJECTION_MATRIX[0][0]) * VIEWPORT_SIZE.x / (2.0 * depth);
 	float projected_height = torch_flame_size.y * world_scale * abs(PROJECTION_MATRIX[1][1]) * VIEWPORT_SIZE.y / (2.0 * depth);
-	float width_boost = clamp(10.0 / max(projected_width, 0.001), 1.0, 64.0);
-	float height_boost = clamp(14.0 / max(projected_height, 0.001), 1.0, 48.0);
+	float width_boost = clamp(3.0 / max(projected_width, 0.001), 1.0, 24.0);
+	float height_boost = clamp(5.0 / max(projected_height, 0.001), 1.0, 12.0);
 	POSITION = PROJECTION_MATRIX * MODELVIEW_MATRIX * vec4(VERTEX,1.0);
 	vec4 anchor_view = MODELVIEW_MATRIX * vec4(0.0,0.0,0.0,1.0);
 	flame_anchor = PROJECTION_MATRIX * anchor_view;
@@ -59,7 +59,7 @@ void fragment(){
 	vec3 orange=mix(vec3(.84,.055,.003),vec3(1.0,.43,.04),core);
 	orange=mix(orange,vec3(1.0,.83,.40),smoothstep(.6,.95,core));
 	ALBEDO=orange*(1.0+core*.7);
-	EMISSION=orange*torch_readability*3.2;
+	EMISSION=orange*torch_readability*2.0;
 	float opacity=mix(.40+detail*.42,.78+detail*.20,torch_readability);
 	ALPHA=body*height_fade*smoothstep(0.0,.07,h)*opacity;
 	if(ALPHA < 0.02){discard;}

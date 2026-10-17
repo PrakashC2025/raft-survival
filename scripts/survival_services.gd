@@ -27,11 +27,23 @@ func _ready() -> void:
 	ui=preload("res://scripts/survival_service_ui.gd").new();ui.service=self;add_child(ui)
 	call_deferred("_restore_drops")
 func is_modal() -> bool:
+	var salvage:=player.get_node_or_null("OceanSalvage")
+	if salvage!=null and salvage.menu_open:return true
+	var cargo:=player.get_node_or_null("HuntingCargo")
+	if cargo!=null and cargo.menu_open:return true
+	var boats:=player.get_node_or_null("BoatBuilding")
+	if boats!=null and boats.menu_open:return true
 	var garden:=player.get_node_or_null("GardenPrep")
 	if garden!=null and garden.menu_open:return true
 	var repairs:=player.get_node_or_null("EquipmentRepairs")
 	return menu_open or (repairs!=null and repairs.menu_open)
 func busy() -> bool:
+	var salvage:=player.get_node_or_null("OceanSalvage")
+	if salvage!=null and salvage.busy():return true
+	var cargo:=player.get_node_or_null("HuntingCargo")
+	if cargo!=null and cargo.busy():return true
+	var boats:=player.get_node_or_null("BoatBuilding")
+	if boats!=null and boats.building:return true
 	var garden:=player.get_node_or_null("GardenPrep")
 	if garden!=null and garden.busy():return true
 	var fire_actions:=player.get_node_or_null("FireActions")
@@ -86,6 +98,7 @@ func use_item(item: String) -> bool:
 		var drinking:=RULES.is_drink(item)
 		player.get_node("SurvivalAction").call("play","drink" if drinking else "eat",2.8 if drinking else 1.75,Vector3.ZERO,item)
 		if item=="Ocean Water Tumbler":player.call("_hud_toast","RAW SEAWATER · -8 HEALTH · BOIL YOUR NEXT CUP")
+		elif item in ["Fish","Raw Meat","Raw Crab","Raw Bird"]:player.call("_hud_toast","RAW FOOD · %d HEALTH · COOK YOUR NEXT MEAL"%int(values[2]))
 		player.call("_queue_save")
 		return true
 	return false
@@ -146,11 +159,21 @@ func open_filter(target: Node3D) -> void:
 	station=target;_open_menu();ui.show_filter()
 func open_storage(target: Node3D) -> void:
 	if _blocked() or busy() or not _near(target) or not target.is_in_group("storage_box"):return
-	storage=target;_open_menu();ui.show_storage()
+	storage=target
+	if target.has_method("animate_unlock"):target.call("animate_unlock")
+	_open_menu();ui.show_storage()
 func _open_menu() -> void:
 	menu_open=true
 	GameSettings.release_gameplay_input();Input.mouse_mode=Input.MOUSE_MODE_VISIBLE
 func close_menu() -> void:
+	var salvage:=player.get_node_or_null("OceanSalvage")
+	if salvage!=null and salvage.menu_open:salvage.close_journal();return
+	var cargo:=player.get_node_or_null("HuntingCargo")
+	if cargo!=null and cargo.menu_open:cargo.close()
+	var boats:=player.get_node_or_null("BoatBuilding")
+	if boats!=null and boats.menu_open:boats.close()
+	if is_instance_valid(storage) and not bool(storage.get("loot_bag")) and storage.has_method("animate_close"):
+		storage.call("animate_close")
 	var garden:=player.get_node_or_null("GardenPrep")
 	if garden!=null and garden.menu_open:garden.close()
 	var repairs:=player.get_node_or_null("EquipmentRepairs")
@@ -158,6 +181,14 @@ func close_menu() -> void:
 	menu_open=false;storage=null;station=null;ui.close()
 	GameSettings.release_gameplay_input()
 	if not _blocked():Input.mouse_mode=Input.MOUSE_MODE_CAPTURED
+func toggle_storage_lock() -> void:
+	if not menu_open or not is_instance_valid(storage) or bool(storage.get("loot_bag")):return
+	var box:=storage
+	var next_locked:=not bool(box.get("locked"))
+	box.call("set_locked",next_locked)
+	player.call("_queue_save")
+	if next_locked:close_menu()
+	else:ui.refresh_storage()
 func toggle_station_fire() -> void:
 	var target:=station
 	if not is_fire(target):return
@@ -254,30 +285,44 @@ func transfer(from_box: bool,source: int,to_box: bool,destination: int) -> bool:
 	Inventory.slots=bag;storage.contents=chest;Inventory.call("_recompute");Inventory.changed.emit();storage.contents_changed.emit()
 	player.call("_queue_save");ui.refresh_storage();return true
 
-func drop_items(items: Array,at: Vector3) -> Node3D:
-	var bag:=BOX.new();bag.name="LostBackpack";bag.loot_bag=true;bag.capacity=30
+func drop_items(items: Array,at: Vector3,species: String="") -> Node3D:
+	if not species.is_empty() and get_tree().get_nodes_in_group("animal_carcass").size()>=24:species=""
+	var bag: StaticBody3D=BOX.new() if species.is_empty() else preload("res://scripts/animal_carcass.gd").new()
+	if not species.is_empty():bag.species=species
+	bag.name="LostBackpack" if species.is_empty() else "Hunted"+species;bag.loot_bag=true;bag.capacity=30
 	get_tree().current_scene.add_child(bag)
 	bag.global_position=at
 	var ocean:=get_tree().get_first_node_in_group("ocean")
 	if ocean!=null:bag.global_position.y=maxf(at.y,float(ocean.call("get_height",at))+.35)
 	bag.restore_survival_state({"contents":items})
+	if not species.is_empty():
+		var water_y: float=float(ocean.call("get_height",at)) if ocean!=null else 0.0
+		var ground:=player.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(at+Vector3.UP*.5,at+Vector3.DOWN*1.2,1))
+		bag.floating=ground.is_empty() or Vector3(ground.position).y<water_y+.02
 	_drops.append(bag)
 	return bag
 func on_death() -> void:
+	player.get_node("HuntingCargo").on_death()
+	player.get_node("BoatBuilding").cancel_build()
+	player.get_node("BoatBuilding").close()
 	cancel_action();close_menu()
-	var lost: Array=Inventory.slots.duplicate(true)
-	var any:=false
-	for entry in lost:
-		if not entry.is_empty():any=true;break
-	if any:drop_items(lost,player.global_position)
-	for index in Inventory.SLOT_COUNT:Inventory.slots[index]={}
-	Inventory.call("_recompute");Inventory.changed.emit();player.call("_queue_save")
+	player.get_node("SurvivalAction").stop()
+	# Recovery keeps the exact slot layout, including full stacks and hotbar.
+	# Existing world loot and chest contents remain available in older saves.
+	player.get_node("BoatBuilding").return_home()
+	var raft:=get_tree().get_first_node_in_group("raft") as Node3D
+	if raft!=null:player.global_position=raft.global_position+Vector3(0,1.4,0)
+	player.velocity=Vector3.ZERO;player.is_swimming=false
+	player.call("_queue_save")
 func save_state() -> Dictionary:
 	var drops: Array=[]
 	for bag in _drops:
 		if not is_instance_valid(bag) or bag.empty():continue
 		var at:=bag.global_position
-		drops.append({"p":[at.x,at.y,at.z],"contents":bag.contents.duplicate(true)})
+		var entry: Dictionary={"p":[at.x,at.y,at.z],"contents":bag.contents.duplicate(true)}
+		if bag.is_in_group("animal_carcass"):
+			entry["species"]=bag.species;entry["floating"]=bag.floating;entry["carried"]=bag.carried;entry["yaw"]=bag.global_rotation.y;entry.merge(bag.support_record())
+		drops.append(entry)
 	return {"version":1,"drops":drops}
 func _restore_drops() -> void:
 	var data: Variant=Inventory.loaded_meta.get("survival_services",{})
@@ -290,7 +335,13 @@ func _restore_drops() -> void:
 		if not numeric:continue
 		var at:=Vector3(float(entry.p[0]),float(entry.p[1]),float(entry.p[2]))
 		if not at.is_finite() or at.length()>200000:continue
-		drop_items(entry.contents,at)
+		var species: String=str(entry.get("species",""))
+		if not species.is_empty() and not preload("res://scripts/animal_carcass.gd").MODELS.has(species):continue
+		var bag:=drop_items(entry.contents,at,species)
+		if not species.is_empty():
+			bag.global_position=at;bag.global_rotation.y=float(entry.get("yaw",0));bag.floating=bool(entry.get("floating",false))
+			if entry.get("carried",false)==true:player.get_node("HuntingCargo").restore_carried.call_deferred(bag)
+			elif entry.get("support","") in ["boat","raft"]:player.get_node("HuntingCargo").restore_support.call_deferred(bag,entry)
 
 func _process(delta: float) -> void:
 	advance_action(delta)

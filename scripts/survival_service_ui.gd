@@ -55,9 +55,22 @@ func _ready() -> void:
 	_progress_root.hide();_overlay.hide()
 	Inventory.changed.connect(_inventory_changed)
 	for index in 4:
-		var popup:=Label.new();popup.add_theme_font_size_override("font_size",18);popup.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP);popup.offset_left=-160;popup.offset_right=160;popup.offset_top=130+index*23;popup.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;popup.mouse_filter=Control.MOUSE_FILTER_IGNORE;popup.hide();add_child(popup);_popups.append(popup)
+		var popup:=Label.new();popup.add_theme_font_size_override("font_size",14);popup.horizontal_alignment=HORIZONTAL_ALIGNMENT_LEFT;popup.mouse_filter=Control.MOUSE_FILTER_IGNORE;popup.hide();add_child(popup);_popups.append(popup)
+	_fit_edge_feedback();get_viewport().size_changed.connect(_fit_edge_feedback)
 	Stats.stat_delta.connect(_stat_delta)
 	_prepare_cooking.call_deferred()
+func _fit_edge_feedback() -> void:
+	var view:=get_viewport().get_visible_rect().size
+	var scale_factor:=clampf(view.y/720.0,.8,1.35)
+	_progress_root.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	_progress_root.position=Vector2(16,400)*scale_factor;_progress_root.size=Vector2(260,46)*scale_factor
+	_progress.custom_minimum_size=Vector2(260*scale_factor,8*scale_factor)
+	_progress_title.add_theme_font_size_override("font_size",roundi(14*scale_factor))
+	_progress_title.horizontal_alignment=HORIZONTAL_ALIGNMENT_LEFT
+	for index in _popups.size():
+		_popups[index].position=Vector2(16,88+index*18)*scale_factor
+		_popups[index].size=Vector2(260,18)*scale_factor
+		_popups[index].add_theme_font_size_override("font_size",roundi(14*scale_factor))
 func _prepare_cooking() -> void:
 	if service.menu_open or not _cook_widgets.is_empty():return
 	# Prepare the reusable kitchen while loading; no player menu is opened.
@@ -179,7 +192,11 @@ func _build_cooking_recipes(list: GridContainer, rows: Array[Dictionary]) -> voi
 		var button:=Button.new();button.name="CookRecipe";button.text="COOK · %ds"%int(recipe.seconds);button.custom_minimum_size.y=48;button.pressed.connect(_cook_recipe.bind(dish));content.add_child(button)
 		button.disabled=true
 		card.visible=_cook_category=="ALL" or RULES.category(dish)==_cook_category
-		rows.append({"dish":dish,"ingredients":ingredients,"button":button,"card":card})
+		var wrap_button:=Button.new();wrap_button.text="WRAP COOKED MEAL · 1 COOKING FOIL";wrap_button.custom_minimum_size.y=44;content.add_child(wrap_button)
+		wrap_button.pressed.connect(func():
+			if _recipe_dragging or Time.get_ticks_msec()<_recipe_suppress_until:return
+			service.close_menu();service.player.get_node("HuntingCargo").wrap_meal(dish))
+		rows.append({"dish":dish,"ingredients":ingredients,"button":button,"card":card,"wrap":wrap_button})
 		_forward_recipe_swipes(card)
 		_refresh_cooking_rows([rows[-1]])
 		batch+=1
@@ -236,6 +253,7 @@ func _refresh_cooking_rows(rows: Array[Dictionary]) -> void:
 			text_value+="[color="+("#8dd49c" if have>=need else "#f28b7f")+"]"+item+"  %d / %d"%[have,need]+"[/color]   "
 		if row.ingredients.text!=text_value:row.ingredients.text=text_value
 		row.button.disabled=not service.can_cook(row.dish)
+		if row.has("wrap"):row.wrap.disabled=not Inventory.can_exchange({str(row.dish):1,"Cooking Foil":1},{"Wrapped "+str(row.dish):1})
 func show_filter() -> void:
 	_begin("FILTER WATER CAN","filter")
 	var text_label:=Label.new();text_label.text="Insert one Dirty Water Can. Filtering takes 5 seconds.\nThe cleaned can returns to your bag; drink it or use it in cooking.";text_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;_body.add_child(text_label)
@@ -243,6 +261,8 @@ func show_filter() -> void:
 func show_storage() -> void:
 	_begin("LOST BACKPACK" if service.storage.loot_bag else "STORAGE BOX · SAFE ON DEATH","storage")
 	var hint:=Label.new();hint.text="Drag between slots, or tap an item to move its stack into a free slot.";_body.add_child(hint)
+	if not service.storage.loot_bag:
+		var lock_button:=Button.new();lock_button.text="LOCK BOX";lock_button.custom_minimum_size=Vector2(120,40);lock_button.size_flags_horizontal=Control.SIZE_SHRINK_END;lock_button.pressed.connect(service.toggle_storage_lock);_body.add_child(lock_button)
 	var columns:=HBoxContainer.new();columns.add_theme_constant_override("separation",18);columns.size_flags_vertical=Control.SIZE_EXPAND_FILL;_body.add_child(columns)
 	for is_box in [false,true]:
 		var column:=VBoxContainer.new();column.size_flags_horizontal=Control.SIZE_EXPAND_FILL;columns.add_child(column)

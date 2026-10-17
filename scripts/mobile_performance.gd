@@ -4,9 +4,9 @@ extends Node
 ## and recovers quality when there is headroom. The 30/60 FPS setting determines
 ## the frame budget. Canvas rendering remains clear at every quality level.
 
-const MIN_RENDER_SCALE := 0.55
+const MIN_RENDER_SCALE := 0.65
 const MAX_RENDER_SCALE := 1.0
-const MOBILE_AUTO_MAX_RENDER_SCALE := 0.82
+const MOBILE_AUTO_MAX_RENDER_SCALE := 0.90
 const SCALE_STEP_DOWN := 0.08
 const SCALE_STEP_UP := 0.04
 const SAMPLE_WINDOW_SECONDS := 0.75
@@ -63,6 +63,10 @@ func _apply_profile() -> void:
 	_foliage_reduced = false
 	refresh_foliage()
 	_viewport.msaa_3d = Viewport.MSAA_DISABLED if GameSettings.quality == 1 or (_mobile and GameSettings.quality == 0) else Viewport.MSAA_2X
+	# Smooth silhouettes and alpha-cut foliage even when Auto reduces the 3D buffer.
+	_viewport.scaling_3d_mode=Viewport.SCALING_3D_MODE_BILINEAR
+	_viewport.screen_space_aa=Viewport.SCREEN_SPACE_AA_FXAA if _viewport.msaa_3d==Viewport.MSAA_DISABLED and RenderingServer.get_current_rendering_method()!="gl_compatibility" else Viewport.SCREEN_SPACE_AA_DISABLED
+	_viewport.texture_mipmap_bias=.25 if _viewport.screen_space_aa==Viewport.SCREEN_SPACE_AA_FXAA else 0.0
 	_sample_seconds = 0.0
 	_frame_seconds = 0.0
 	_frame_count = 0
@@ -74,7 +78,7 @@ func _apply_profile() -> void:
 		_set_render_scale(1.0)
 		_set_cumulus_visible(true)
 		return
-	var initial_scale: float = [0.72, 0.65, 0.82, 1.0, 1.0][GameSettings.quality]
+	var initial_scale: float = [0.82, 0.65, 0.82, 1.0, 1.0][GameSettings.quality]
 	_set_render_scale(initial_scale)
 	_set_cumulus_visible(GameSettings.quality >= 3)
 	var scene := get_tree().current_scene

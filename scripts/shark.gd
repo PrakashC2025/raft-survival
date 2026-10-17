@@ -22,6 +22,7 @@ var _hit_flash := 0.0
 var _encounter := 0.0
 var _encounter_cooldown := 240.0
 var _swimmer_time := 0.0
+var _warning_time := 0.0
 var _rng := RandomNumberGenerator.new()
 static var _skin: ShaderMaterial
 
@@ -33,13 +34,21 @@ func _ready() -> void:
 	health = max_health
 	_home = global_position
 	_ocean = get_tree().get_first_node_in_group("ocean") as Ocean
-	_rng.seed = 91831 + get_index() * 391
-	_encounter_cooldown = _rng.randf_range(210,360)
+	_rng.randomize()
+	_encounter_cooldown = _rng.randf_range(35,65)
 	_build_visual()
 
 
 func _physics_process(delta: float) -> void:
 	_time += delta
+	var player := get_tree().get_first_node_in_group("player") as Node3D
+	if not is_instance_valid(player) or Stats.health <= 0 or GameSettings.is_open:
+		velocity = Vector3.ZERO
+		return
+	var hud := player.get_node_or_null("CanvasLayer/SurvivalHUD")
+	if hud != null and hud.call("gameplay_input_blocked"):
+		velocity = Vector3.ZERO
+		return
 	_encounter = maxf(0.0, _encounter - delta)
 	_encounter_cooldown = maxf(0.0, _encounter_cooldown - delta)
 	_bite_timer = maxf(0.0, _bite_timer - delta)
@@ -51,32 +60,37 @@ func _physics_process(delta: float) -> void:
 	if _tail_fin != null:
 		_tail_fin.rotation.y = sin(_time * 7.0) * 0.24
 
-	var player := get_tree().get_first_node_in_group("player") as Node3D
 	var chasing := false
 	var target := _home + Vector3(sin(_time * 0.17) * 14.0, 0.0, cos(_time * 0.13) * 14.0)
 	var speed := patrol_speed
 	if player != null and player.get("is_swimming") == true:
 		_swimmer_time += delta
 		var distance := global_position.distance_to(player.global_position)
-		if _encounter_cooldown <= 0 and _swimmer_time > 25 and distance < detect_range:
-			_encounter_cooldown = 30.0
-			var progress := player.get_node_or_null("SurvivalProgression")
-			if progress != null and int(progress.level) >= 6 and _rng.randf() < 0.08 and get_parent().has_method("allow_encounter") and get_parent().call("allow_encounter",self):
-				_encounter = 9.0
-				_encounter_cooldown = _rng.randf_range(210,360)
+		if _encounter <= 0 and _encounter_cooldown <= 0 and _swimmer_time > 20 and distance < detect_range:
+			if get_parent().has_method("allow_encounter") and get_parent().call("allow_encounter",self):
+				_encounter = 42.0
+				_warning_time = 4.0
+				_encounter_cooldown = _rng.randf_range(110,170)
+				player.call("_hud_toast","SHARK CIRCLING · RETURN TO THE RAFT OR READY YOUR SPEAR",4.0)
+		_warning_time = maxf(0.0,_warning_time-delta)
 		if _encounter > 0 and can_attack(player) and distance < detect_range:
 			target = player.global_position
 			speed = chase_speed
 			chasing = true
-			if distance <= bite_range and _bite_timer <= 0.0:
+			if distance <= bite_range and _bite_timer <= 0.0 and _warning_time <= 0.0 and _clear_bite(player):
 				_bite_player(player)
 				_bite_timer = 6.0
 				_encounter = 0.0
-		elif distance < 42.0:
+		elif _encounter > 0:
+			# Circle visibly during the warning before committing to the swimmer.
+			var away := (global_position-player.global_position).normalized()
+			target = player.global_position + away * 8.0 + Vector3(-away.z,0,away.x)*5.0
+		elif distance < 32.0:
 			target = global_position + (global_position-player.global_position).normalized()*25.0
 	else:
 		_swimmer_time = 0.0
 		_encounter = 0.0
+		_warning_time = 0.0
 
 	var flat_to_target := Vector3(target.x - global_position.x, 0.0, target.z - global_position.z)
 	var direction := flat_to_target.normalized() if flat_to_target.length_squared() > 0.04 else Vector3.ZERO
@@ -99,10 +113,17 @@ func take_damage(amount: float, attacker: Node = null) -> void:
 	if amount <= 0.0 or not is_inside_tree():
 		return
 	health = maxf(0.0, health - amount)
+	if is_instance_valid(attacker) and attacker.has_method("play_world_sfx"):
+		attacker.call("play_world_sfx",preload("res://scripts/contact_audio.gd").pick_action("water"),-5.0,global_position)
 	_hit_flash = 0.22
+	_encounter = 0.0
+	_encounter_cooldown = maxf(_encounter_cooldown,60.0)
 	if health > 0.0:
 		return
 	if attacker != null and is_instance_valid(attacker):
+		var service:=attacker.get_node_or_null("SurvivalServices")
+		if service!=null:
+			service.drop_items([{"item":"Fish","count":1}],global_position,"Shark");attacker._queue_save();queue_free();return
 		var overflow := Inventory.add("Fish", 1)
 		if overflow > 0:
 			_drop_fish()
@@ -137,8 +158,11 @@ func _bite_player(player: Node3D) -> void:
 		Stats.change_health(-bite_damage)
 
 func can_attack(player: Node3D) -> bool:
-	var progress := player.get_node_or_null("SurvivalProgression")
-	return progress != null and int(progress.level) >= 6 and player.get("is_swimming") == true and _encounter > 0 and Stats.health > 0
+	return is_instance_valid(player) and player.get("is_swimming") == true and not is_instance_valid(player.get("boat_vehicle")) and _encounter > 0 and _warning_time <= 0 and Stats.health > 0
+
+func _clear_bite(player: Node3D) -> bool:
+	var query := PhysicsRayQueryParameters3D.create(global_position,player.global_position,1,[get_rid(),player.get_rid()])
+	return get_world_3d().direct_space_state.intersect_ray(query).is_empty()
 
 
 func _build_visual() -> void:

@@ -87,39 +87,124 @@ func export_model(root_node: Node3D, file: String) -> void:
 	if error != OK:
 		quit(1)
 
+func tex_mat(file_path: String, color: Color = Color.WHITE, roughness: float = 0.5, metallic: float = 0.0) -> StandardMaterial3D:
+	var result := StandardMaterial3D.new()
+	result.albedo_color = color
+	result.roughness = roughness
+	result.metallic = metallic
+	var full_path := file_path if file_path.is_absolute_path() else ("C:/GodotProjects/raft-survival/" + file_path)
+	if FileAccess.file_exists(full_path):
+		var img := Image.load_from_file(full_path)
+		if img != null:
+			result.albedo_texture = ImageTexture.create_from_image(img)
+	return result
+
+func membrane_uv(parent: Node3D, vertices: Array[Vector3], uvs: Array[Vector2], material: Material, label: String) -> void:
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for index in range(1, vertices.size() - 1):
+		for i in [0, index, index + 1]:
+			if i < uvs.size():
+				surface.set_uv(uvs[i])
+			surface.add_vertex(vertices[i])
+	surface.generate_normals()
+	var two_sided := material.duplicate() as StandardMaterial3D
+	two_sided.cull_mode = BaseMaterial3D.CULL_DISABLED
+	part(parent, surface.commit(), two_sided, Vector3.ZERO, Vector3.ONE, label)
+
 func _run() -> void:
 	var fish := Node3D.new()
 	fish.name = "CoastalFish"
-	var silver := mat(Color(0.48, 0.62, 0.65), 0.34, 0.32)
-	var dark := mat(Color(0.05, 0.11, 0.13), 0.45)
-	oval(fish, Vector3(0.02, 0, 0), Vector3(0.23, 0.052, 0.039), silver, "FishBody")
-	oval(fish, Vector3(0.21, 0, 0), Vector3(0.055, 0.039, 0.033), silver, "Head")
+	var fish_body_mat := tex_mat("textures/underwater/coastal_fish_atlas.jpg", Color(0.96, 0.98, 1.0), 0.28, 0.38)
+	var fish_fin_mat := tex_mat("textures/underwater/coastal_fish_atlas.jpg", Color(0.90, 0.95, 1.0), 0.24, 0.15)
+	var fish_eye_mat := tex_mat("textures/underwater/coastal_fish_atlas.jpg", Color(1.0, 0.95, 0.85), 0.12, 0.05)
+	var fish_gill_mat := tex_mat("textures/underwater/coastal_fish_atlas.jpg", Color(0.88, 0.72, 0.50), 0.36, 0.65)
+	var dark_mouth := mat(Color(0.08, 0.14, 0.16), 0.5)
+
+	# Realistic streamlined fusiform body with iridescent scales
+	oval(fish, Vector3(0.01, 0.005, 0), Vector3(0.22, 0.056, 0.038), fish_body_mat, "FishBody")
+	oval(fish, Vector3(0.20, 0.002, 0), Vector3(0.065, 0.042, 0.032), fish_body_mat, "Head")
+	oval(fish, Vector3(0.255, -0.010, 0), Vector3(0.016, 0.008, 0.020), dark_mouth, "Mouth")
+
+	# Operculum (gill covers) and glassy 3D golden eyes
 	for side in [-1.0, 1.0]:
-		oval(fish, Vector3(0.23, 0.011, side * 0.031), Vector3(0.004, 0.004, 0.002), dark, "Eye" + str(side))
-		membrane(fish, [Vector3(0.08, -0.01, side * 0.033), Vector3(-0.02, -0.07, side * 0.08), Vector3(-0.065, -0.025, side * 0.03)], silver, "Pectoral" + str(side))
-	membrane(fish, [Vector3(0.07, 0.036, 0), Vector3(0.02, 0.073, 0), Vector3(-0.055, 0.060, 0), Vector3(-0.15, 0.025, 0)], silver, "DorsalFin")
-	membrane(fish, [Vector3(-0.18, 0, 0), Vector3(-0.31, 0.065, 0), Vector3(-0.29, 0.015, 0), Vector3(-0.265, 0, 0), Vector3(-0.29, -0.015, 0), Vector3(-0.31, -0.065, 0)], silver, "TailFin")
+		oval(fish, Vector3(0.17, 0.002, side * 0.032), Vector3(0.018, 0.032, 0.005), fish_gill_mat, "Gill" + str(side))
+		oval(fish, Vector3(0.225, 0.012, side * 0.030), Vector3(0.006, 0.006, 0.004), fish_eye_mat, "Eye" + str(side))
+		membrane_uv(fish, [
+			Vector3(0.10, -0.012, side * 0.032),
+			Vector3(-0.01, -0.075, side * 0.082),
+			Vector3(-0.062, -0.028, side * 0.031)
+		], [Vector2(0.02, 0.52), Vector2(0.48, 0.72), Vector2(0.22, 0.74)], fish_fin_mat, "Pectoral" + str(side))
+
+	# Realistic arched dorsal fin and forked caudal (tail) fin
+	membrane_uv(fish, [
+		Vector3(0.08, 0.038, 0),
+		Vector3(0.02, 0.082, 0),
+		Vector3(-0.06, 0.068, 0),
+		Vector3(-0.16, 0.028, 0)
+	], [Vector2(0.05, 0.05), Vector2(0.25, 0.02), Vector2(0.65, 0.06), Vector2(0.95, 0.12)], fish_fin_mat, "DorsalFin")
+
+	membrane_uv(fish, [
+		Vector3(-0.17, 0, 0),
+		Vector3(-0.32, 0.075, 0),
+		Vector3(-0.29, 0.018, 0),
+		Vector3(-0.26, 0, 0),
+		Vector3(-0.29, -0.018, 0),
+		Vector3(-0.32, -0.075, 0)
+	], [Vector2(0.02, 0.75), Vector2(0.05, 0.98), Vector2(0.22, 0.88), Vector2(0.38, 0.85), Vector2(0.22, 0.82), Vector2(0.05, 0.72)], fish_fin_mat, "TailFin")
+
 	for ray_index in range(6):
-		var end_y := lerpf(-0.059, 0.059, float(ray_index) / 5.0)
-		tube(fish, Vector3(-0.19, 0, 0.001), Vector3(-0.305, end_y, 0.001), 0.0009, mat(Color(0.36, 0.44, 0.43)), "FinRay%d" % ray_index)
-	oval(fish, Vector3(0.256, -0.012, 0), Vector3(0.012, 0.007, 0.024), dark, "Mouth")
+		var end_y := lerpf(-0.062, 0.062, float(ray_index) / 5.0)
+		tube(fish, Vector3(-0.18, 0, 0.001), Vector3(-0.31, end_y, 0.001), 0.0009, mat(Color(0.45, 0.55, 0.58), 0.3, 0.2), "FinRay%d" % ray_index)
+
 	export_model(fish, "coastal_fish")
+
+	# Coastal Gull: Realistic plumage, yellow bill with red gonys dot, flight feathers
 	var gull := Node3D.new()
 	gull.name = "CoastalGull"
-	var feather := mat(Color(0.76, 0.79, 0.76), 0.92)
-	var white := mat(Color(0.87, 0.88, 0.82), 0.9)
-	oval(gull, Vector3.ZERO, Vector3(0.10, 0.13, 0.25), white, "GullBody")
-	oval(gull, Vector3(0, 0.085, -0.235), Vector3(0.075, 0.09, 0.12), white, "GullHead")
-	oval(gull, Vector3(0, 0.065, -0.355), Vector3(0.022, 0.020, 0.085), mat(Color(0.61, 0.46, 0.17)), "Beak")
+	var gull_body_mat := tex_mat("textures/island/coastal_gull_atlas.jpg", Color(0.98, 0.98, 0.98), 0.75, 0.0)
+	var gull_wing_mat := tex_mat("textures/island/coastal_gull_atlas.jpg", Color(0.92, 0.94, 0.96), 0.72, 0.0)
+	var gull_beak_mat := tex_mat("textures/island/coastal_gull_atlas.jpg", Color(1.0, 0.88, 0.25), 0.45, 0.0)
+	var gull_eye_mat := tex_mat("textures/island/coastal_gull_atlas.jpg", Color(1.0, 0.95, 0.6), 0.25, 0.0)
+	var red_spot_mat := mat(Color(0.92, 0.20, 0.12), 0.55, 0.0)
+
+	oval(gull, Vector3.ZERO, Vector3(0.10, 0.13, 0.25), gull_body_mat, "GullBody")
+	oval(gull, Vector3(0, 0.085, -0.235), Vector3(0.075, 0.09, 0.12), gull_body_mat, "GullHead")
+	oval(gull, Vector3(0, 0.065, -0.355), Vector3(0.022, 0.020, 0.085), gull_beak_mat, "Beak")
+	# Iconic red spot on lower mandible tip
+	oval(gull, Vector3(0, 0.055, -0.378), Vector3(0.009, 0.008, 0.014), red_spot_mat, "GonysSpot")
+
 	for side in [-1.0, 1.0]:
-		oval(gull, Vector3(side * 0.068, 0.11, -0.28), Vector3(0.006, 0.006, 0.006), dark, "GullEye" + str(side))
+		oval(gull, Vector3(side * 0.068, 0.11, -0.28), Vector3(0.007, 0.007, 0.006), gull_eye_mat, "GullEye" + str(side))
 		var wing := Node3D.new()
 		wing.name = "WingLeft" if side < 0 else "WingRight"
 		gull.add_child(wing)
-		membrane(wing, [Vector3(side * 0.07, 0.03, -0.09), Vector3(side * 0.35, 0.04, -0.11), Vector3(side * 0.69, -0.015, 0.02), Vector3(side * 0.61, -0.01, 0.17), Vector3(side * 0.47, 0.01, 0.11), Vector3(side * 0.28, 0.03, 0.15), Vector3(side * 0.07, 0.03, 0.15)], feather, "FlightFeathers")
-		membrane(wing, [Vector3(side * 0.50, 0.001, 0.045), Vector3(side * 0.70, -0.017, 0.02), Vector3(side * 0.61, -0.012, 0.17)], dark, "WingTip")
-	membrane(gull, [Vector3(-0.06, 0, 0.18), Vector3(-0.10, 0, 0.37), Vector3(0.10, 0, 0.37), Vector3(0.06, 0, 0.18)], white, "Tail")
+		membrane_uv(wing, [
+			Vector3(side * 0.07, 0.03, -0.09),
+			Vector3(side * 0.35, 0.04, -0.11),
+			Vector3(side * 0.69, -0.015, 0.02),
+			Vector3(side * 0.61, -0.01, 0.17),
+			Vector3(side * 0.47, 0.01, 0.11),
+			Vector3(side * 0.28, 0.03, 0.15),
+			Vector3(side * 0.07, 0.03, 0.15)
+		], [
+			Vector2(0.38, 0.05), Vector2(0.65, 0.05), Vector2(0.95, 0.25),
+			Vector2(0.85, 0.45), Vector2(0.65, 0.42), Vector2(0.45, 0.45), Vector2(0.38, 0.42)
+		], gull_wing_mat, "FlightFeathers")
+		membrane_uv(wing, [
+			Vector3(side * 0.50, 0.001, 0.045),
+			Vector3(side * 0.72, -0.017, 0.02),
+			Vector3(side * 0.61, -0.012, 0.17)
+		], [Vector2(0.48, 0.48), Vector2(0.95, 0.48), Vector2(0.92, 0.95)], gull_wing_mat, "WingTip")
+
+	membrane_uv(gull, [
+		Vector3(-0.06, 0, 0.18),
+		Vector3(-0.10, 0, 0.38),
+		Vector3(0.10, 0, 0.38),
+		Vector3(0.06, 0, 0.18)
+	], [Vector2(0.05, 0.05), Vector2(0.05, 0.40), Vector2(0.32, 0.40), Vector2(0.32, 0.05)], gull_body_mat, "Tail")
 	export_model(gull, "coastal_gull")
+
 	var hand := Node3D.new()
 	hand.name = "HumanHand"
 	var skin := mat(Color(0.56, 0.34, 0.22), 0.7)
@@ -134,16 +219,34 @@ func _run() -> void:
 	tube(hand, Vector3(0.046, 0, -0.015), Vector3(0.073, -0.021, -0.065), 0.014, skin, "ThumbBase")
 	tube(hand, Vector3(0.073, -0.021, -0.065), Vector3(0.055, -0.045, -0.10), 0.011, skin, "ThumbTip")
 	export_model(hand, "human_hand")
+
+	# Survival Bow: Ash wood limbs, stitched leather grip, recurve tips, bowstring
 	var bow := Node3D.new()
 	bow.name = "SurvivalBow"
-	var wood := mat(Color(0.30, 0.18, 0.085))
+	var bow_wood := tex_mat("textures/salvage/motor_machinery_atlas.jpg", Color(0.78, 0.65, 0.45), 0.65, 0.0)
+	var bow_leather := tex_mat("textures/salvage/motor_machinery_atlas.jpg", Color(0.68, 0.42, 0.26), 0.82, 0.0)
+	var bow_string := mat(Color(0.84, 0.80, 0.70), 0.55, 0.05)
+	var nock_bone := mat(Color(0.88, 0.85, 0.76), 0.45, 0.0)
+
 	for index in range(24):
-		var y1 := -0.5 + float(index) / 24.0
-		var y2 := -0.5 + float(index + 1) / 24.0
-		tube(bow, Vector3(0, y1, 0.17 * cos(y1 * PI)), Vector3(0, y2, 0.17 * cos(y2 * PI)), 0.013, wood, "Limb%d" % index)
-	tube(bow, Vector3(0, -0.5, 0), Vector3(0, 0, -0.16), 0.0017, mat(Color(0.64, 0.55, 0.40)), "LowerString")
-	tube(bow, Vector3(0, 0, -0.16), Vector3(0, 0.5, 0), 0.0017, mat(Color(0.64, 0.55, 0.40)), "UpperString")
+		var y1 := -0.52 + float(index) / 24.0 * 1.04
+		var y2 := -0.52 + float(index + 1) / 24.0 * 1.04
+		var mid_y := (y1 + y2) * 0.5
+		var is_grip := absf(mid_y) < 0.07
+		var use_material := bow_leather if is_grip else bow_wood
+		var stave_radius: float = 0.016 if is_grip else 0.012 * (1.0 - absf(mid_y) * 0.35)
+		tube(bow, Vector3(0, y1, 0.17 * cos(y1 * PI * 0.95)), Vector3(0, y2, 0.17 * cos(y2 * PI * 0.95)), stave_radius, use_material, "Limb%d" % index)
+
+	# Carved antler/horn limb nocks
+	oval(bow, Vector3(0, -0.52, 0.02), Vector3(0.012, 0.022, 0.014), nock_bone, "NockLower")
+	oval(bow, Vector3(0, 0.52, 0.02), Vector3(0.012, 0.022, 0.014), nock_bone, "NockUpper")
+
+	# Braided bowstring with serving thread
+	tube(bow, Vector3(0, -0.51, 0), Vector3(0, 0, -0.16), 0.0018, bow_string, "LowerString")
+	tube(bow, Vector3(0, 0, -0.16), Vector3(0, 0.51, 0), 0.0018, bow_string, "UpperString")
+	tube(bow, Vector3(0, -0.03, -0.16), Vector3(0, 0.03, -0.16), 0.0035, mat(Color(0.25, 0.22, 0.18), 0.7), "ServingWrap")
 	export_model(bow, "survival_bow")
+
 	var ridge := Node3D.new()
 	ridge.name = "CoastalRidge"
 	var surface := SurfaceTool.new()

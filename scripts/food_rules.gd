@@ -49,6 +49,9 @@ static func method(dish: String) -> String:
 	if category(dish)=="SOUPS & STEWS":return "Slice ingredients, add clean water and simmer."
 	return "Prepare and turn over the embers until cooked."
 static func effects(item: String) -> Array:
+	if item.begins_with("Wrapped "):
+		item=item.trim_prefix("Wrapped ")
+		if not RECIPES.has(item):return []
 	if not preload("res://scripts/garden_items.gd").sliced_crop(item).is_empty():item=preload("res://scripts/garden_items.gd").sliced_crop(item)
 	if item=="Baked Potato":item="Cooked Potato" # legacy meals remain usable
 	if RAW.has(item):return RAW[item]

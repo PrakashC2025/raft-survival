@@ -50,6 +50,7 @@ func _process(_delta: float) -> void:
 		if action!=null:
 			var pose: Dictionary=action.call("sample_pose")
 			orientation=orientation*Basis.from_euler(pose.view_rot)
+		if str(player.get("active_item"))=="Bow":orientation=(player.get("camera") as Camera3D).global_basis.orthonormalized()
 	var palm := hand.origin+hand.basis*Vector3(0,0.00085,0)
 	palm-=hand.basis.z.normalized()*palm_clearance
 	# Place the centre of the pistol grip in the palm rather than its receiver.
